@@ -8,32 +8,32 @@ const HYBRID_FLOW = [
   {
     key: "analyst_baseline",
     phase: "analyst_baseline",
-    title: "Baseline analyst pass",
-    detail: "A first scoring draft is generated without live web search.",
+    title: "Analyst LLM baseline pass",
+    detail: "Creates the first scoring draft from prompt context and model memory only.",
   },
   {
     key: "analyst_web",
     phase: "analyst_web",
-    title: "Web-assisted analyst pass",
-    detail: "The same use case is researched again with live web evidence.",
+    title: "Web-search LLM pass",
+    detail: "Runs a second analyst draft using live web-search tools and current evidence.",
   },
   {
     key: "analyst_reconcile",
     phase: "analyst_reconcile",
     title: "Reliability reconcile",
-    detail: "Both analyst drafts are merged into one evidence-balanced version.",
+    detail: "Compares baseline and web drafts, then keeps the strongest evidence-backed points.",
   },
   {
     key: "critic",
     phase: "critic",
-    title: "Independent critic review",
-    detail: "A skeptical reviewer challenges scores and assumptions.",
+    title: "Critic LLM review",
+    detail: "A skeptical model challenges scores, assumptions, and market realism.",
   },
   {
     key: "finalizing",
     phase: "finalizing",
-    title: "Analyst final response",
-    detail: "Scores and reasoning are updated after debate.",
+    title: "Analyst LLM final response",
+    detail: "Resolves critique, updates score cards, and prepares final per-dimension rationale.",
   },
   {
     key: "complete",
@@ -53,19 +53,19 @@ const STANDARD_FLOW = [
   {
     key: "analyst",
     phase: "analyst",
-    title: "Analyst research pass",
+    title: "Analyst LLM pass",
     detail: "Initial scores and rationale are generated for all dimensions.",
   },
   {
     key: "critic",
     phase: "critic",
-    title: "Independent critic review",
-    detail: "A skeptical reviewer challenges scores and assumptions.",
+    title: "Critic LLM review",
+    detail: "A skeptical model challenges scores and assumptions.",
   },
   {
     key: "finalizing",
     phase: "finalizing",
-    title: "Analyst final response",
+    title: "Analyst LLM final response",
     detail: "Scores and reasoning are updated after debate.",
   },
   {
@@ -86,19 +86,19 @@ const LIVE_FLOW = [
   {
     key: "analyst",
     phase: "analyst",
-    title: "Analyst live research pass",
-    detail: "Scores are generated with live web search where needed.",
+    title: "Analyst + web-search LLM pass",
+    detail: "Scores are generated with live web-search support where evidence is needed.",
   },
   {
     key: "critic",
     phase: "critic",
-    title: "Independent critic review",
-    detail: "A skeptical reviewer challenges scores and assumptions.",
+    title: "Critic LLM review",
+    detail: "A skeptical model challenges scores and assumptions.",
   },
   {
     key: "finalizing",
     phase: "finalizing",
-    title: "Analyst final response",
+    title: "Analyst LLM final response",
     detail: "Scores and reasoning are updated after debate.",
   },
   {
@@ -162,12 +162,12 @@ export default function ProgressTab({ uc }) {
   const currentIdx = rank[uc.phase] ?? 0;
 
   return (
-    <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 12, padding: "14px 16px" }}>
+    <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 12, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 8 }}>
         Research Progress
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
-        This tab shows what is currently happening under the hood and what has already completed.
+        Live view of the pipeline under the hood: Analyst LLM, optional web-search LLM passes, Critic LLM review, and final score reconciliation.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -207,6 +207,22 @@ export default function ProgressTab({ uc }) {
             </div>
           );
         })}
+      </div>
+
+      <div style={{
+        marginTop: 12,
+        padding: "10px 12px",
+        borderRadius: 10,
+        border: "1px solid #b8e8d0",
+        background: "#ebf8f0",
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#0f7a55", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+          💬 Interactive Challenge Loop
+        </div>
+        <div style={{ fontSize: 12, color: "#17583f", lineHeight: 1.5 }}>
+          In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
+          The Analyst LLM responds in-thread and can update the score with explicit reasoning and sources.
+        </div>
       </div>
 
       {uc.status === "error" && (

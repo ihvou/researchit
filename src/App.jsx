@@ -321,39 +321,64 @@ export default function App() {
             <ul style={{ listStyle: "none", margin: 0, padding: 0, color: "var(--ck-text)", fontSize: 13, lineHeight: 1.6, display: "grid", gap: 8 }}>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🧠</span>
-                <span><strong>Analyst role:</strong> builds the first assessment with per-dimension scores and reasoning.</span>
+                <span><strong>Analyst LLM:</strong> builds the first draft with attributes, per-dimension scores, and rationale.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🛡️</span>
-                <span><strong>Critic role:</strong> pressure-tests assumptions and challenges weak or inflated scoring.</span>
+                <span><strong>Critic LLM:</strong> pressure-tests assumptions and challenges weak or inflated scoring.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">💬</span>
-                <span><strong>Your challenge feature:</strong> you can challenge any dimension and get an updated response and score.</span>
-              </li>
-              <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">🔎</span>
-                <span><strong>Data sources:</strong> uses model knowledge and optional live web search, with visible sources per dimension.</span>
+                <span aria-hidden="true">🌐</span>
+                <span><strong>Evidence layer:</strong> combines model memory with optional web-search LLM passes, then shows sources per dimension.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">📈</span>
-                <span><strong>Prioritization:</strong> scores 11 weighted dimensions, then calculates a normalized portfolio priority score.</span>
+                <span><strong>Prioritization:</strong> computes a weighted score across 11 dimensions and normalizes it into a portfolio-ready priority score.</span>
               </li>
             </ul>
+            <div style={{
+              marginTop: 12,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid #b8e8d0",
+              background: "#ebf8f0",
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#0f7a55", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+                💬 Interactive Challenge Loop
+              </div>
+              <div style={{ fontSize: 12, color: "#17583f", lineHeight: 1.55 }}>
+                In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections for any dimension.
+                The Analyst LLM replies in-thread, can revise the score, and keeps the updated reasoning and sources visible.
+              </div>
+            </div>
             <div style={{ marginTop: 14, fontSize: 13, color: "var(--ck-muted)" }}>
-              Click <strong style={{ color: "var(--ck-blue)" }}>+ Add Use Case</strong> to start.
+              <button
+                type="button"
+                onClick={() => setShowInputPanel(true)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--ck-blue)",
+                  fontWeight: 800,
+                  fontSize: 13,
+                  padding: 0,
+                  textDecoration: "underline",
+                }}>
+                + Add Use Case
+              </button>{" "}
+              to start.
             </div>
           </div>
         ) : (
           <div style={{ overflowX: "auto", border: "1px solid var(--ck-line)", borderRadius: 12, background: "var(--ck-surface)" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 940 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "var(--ck-surface-soft)", borderBottom: "2px solid var(--ck-line)" }}>
-                  <th style={{ textAlign: "left", padding: "10px 14px", color: "var(--ck-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, minWidth: 200 }}>
+                  <th style={{ textAlign: "left", padding: "10px 14px", color: "var(--ck-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>
                     Use Case
                   </th>
                   {activeDims.map(d => (
-                    <th key={d.id} style={{ textAlign: "center", padding: "8px 4px", color: "var(--ck-muted)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap", minWidth: 66 }}>
+                    <th key={d.id} style={{ textAlign: "center", padding: "8px 4px", color: "var(--ck-muted)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" }}>
                       {d.label
                         .replace("Applicability", "App.")
                         .replace("Readiness", "Ready")
@@ -365,7 +390,7 @@ export default function App() {
                       <span style={{ color: "var(--ck-muted-soft)", fontWeight: 400 }}>{d.weight}%</span>
                     </th>
                   ))}
-                  <th style={{ textAlign: "center", padding: "10px 14px", color: "var(--ck-blue)", fontSize: 11, fontWeight: 700, textTransform: "uppercase", minWidth: 90 }}>
+                  <th style={{ textAlign: "center", padding: "10px 14px", color: "var(--ck-blue)", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>
                     Score
                   </th>
                   <th style={{ width: 28 }} />

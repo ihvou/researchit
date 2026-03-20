@@ -257,6 +257,7 @@ function section(label, body, className = "") {
 
 function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const mode = options.mode || "html";
+  const summaryCols = mode === "pdf" ? 3 : 4;
   const briefWordCap = mode === "pdf" ? 10 : 12;
   const summaryWordCap = mode === "pdf" ? 22 : 28;
   const conclusionWordCap = mode === "pdf" ? 26 : 30;
@@ -265,7 +266,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const weighted = calcWeightedScore(uc, dims);
   const tier = scoreTier(weighted);
   const scoreColor = weighted ? totalScoreColor(weighted) : "#64748b";
-  const dimCards = dims.map((d) => {
+  const baseCards = dims.map((d) => {
     const view = getDimensionView(uc, d.id);
     const score = view.effectiveScore;
     const color = score != null ? dimScoreColor(Number(score)) : "#64748b";
@@ -282,6 +283,17 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       </div>
     `;
   }).join("");
+  const remainder = dims.length % summaryCols;
+  const fillerMissing = remainder ? (summaryCols - remainder) : 0;
+  const fillerCard = fillerMissing
+    ? `
+      <div class="dim-card dim-card-filler" style="grid-column: span ${fillerMissing};">
+        <div class="dim-filler-title">🔎 Deep-Dive Slides</div>
+        <div class="dim-filler-text">Dimension pages include full analysis, debate details, and compact source links.</div>
+      </div>
+    `
+    : "";
+  const dimCards = `${baseCards}${fillerCard}`;
 
   const summaryMeta = `
     <div class="meta-grid">
@@ -509,6 +521,25 @@ function reportCss(mode = "html") {
       border-radius: 10px;
       padding: 7px 8px;
       background: #fcfdff;
+    }
+    .dim-card-filler {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-style: dashed;
+      background: #f8fbff;
+    }
+    .dim-filler-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #1d4ed8;
+      margin-bottom: 4px;
+    }
+    .dim-filler-text {
+      font-size: 10px;
+      color: #334155;
+      line-height: 1.35;
+      font-weight: 600;
     }
     .dim-head {
       display: flex;

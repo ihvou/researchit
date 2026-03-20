@@ -22,9 +22,15 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
     setTab("progress");
   }, [uc.id]);
 
+  useEffect(() => {
+    if (uc.status === "complete") {
+      setTab("overview");
+    }
+  }, [uc.status]);
+
   return (
-    <div style={{ borderTop: "2px solid var(--ck-line-strong)" }}>
-      <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", padding: "0 16px", flexWrap: "wrap" }}>
+    <div style={{ borderTop: "2px solid var(--ck-line-strong)", maxWidth: "100%", overflowX: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", padding: "0 16px", flexWrap: "wrap", rowGap: 4 }}>
         {[
           { id: "overview", label: "Overview" },
           { id: "dimensions", label: "Dimensions" },
@@ -44,31 +50,14 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
             {t.label}
           </button>
         ))}
-        <div style={{ marginLeft: "auto", fontSize: 10, padding: "6px 8px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ marginLeft: "auto", fontSize: 10, padding: "6px 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
           {uc.status === "analyzing"
             ? <span style={{ color: "var(--ck-blue)", display: "flex", alignItems: "center", gap: 6 }}>
                 <Spinner size={10} /> {PHASE_LABELS[uc.phase] || "Processing..."}
               </span>
-            : <span style={{ color: "var(--ck-muted)" }}>
-                Analyst: OpenAI GPT-5.4 mini | Critic: OpenAI GPT-5.4 | Sources may include model memory and live web - verify before use
-                {uc.analysisMeta?.analysisMode && (
-                  <span style={{ marginLeft: 6 }}>
-                    | Mode: {uc.analysisMeta.analysisMode === "hybrid" ? "hybrid reliability" : uc.analysisMeta.analysisMode}
-                  </span>
-                )}
-                {uc.analysisMeta?.liveSearchRequested && (
-                  <span style={{ marginLeft: 6, color: "var(--ck-blue)" }}>
-                    | Live search {uc.analysisMeta?.liveSearchUsed ? `on (${uc.analysisMeta?.webSearchCalls || 0} calls)` : "fallback"}
-                  </span>
-                )}
-                {uc.analysisMeta?.hybridStats && (
-                  <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
-                    | Hybrid delta: {uc.analysisMeta.hybridStats.changedFromBaseline} dims
-                  </span>
-                )}
-              </span>}
+            : null}
           {uc.status !== "analyzing" && (
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
               <button
                 type="button"
                 onClick={(e) => {
@@ -124,6 +113,28 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
           )}
         </div>
       </div>
+      {uc.status !== "analyzing" && (
+        <div style={{ padding: "7px 16px", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", minWidth: 0 }}>
+          <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+            Analyst LLM + Critic LLM pipeline | Sources can come from model memory and optional live web-search passes
+            {uc.analysisMeta?.analysisMode && (
+              <span style={{ marginLeft: 6 }}>
+                | Mode: {uc.analysisMeta.analysisMode === "hybrid" ? "hybrid reliability" : uc.analysisMeta.analysisMode}
+              </span>
+            )}
+            {uc.analysisMeta?.liveSearchRequested && (
+              <span style={{ marginLeft: 6, color: "var(--ck-blue)" }}>
+                | Live search {uc.analysisMeta?.liveSearchUsed ? `on (${uc.analysisMeta?.webSearchCalls || 0} calls)` : "fallback"}
+              </span>
+            )}
+            {uc.analysisMeta?.hybridStats && (
+              <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
+                | Hybrid delta: {uc.analysisMeta.hybridStats.changedFromBaseline} dims
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: 16, background: "var(--ck-bg)" }}>
         {uc.status === "error" && (
