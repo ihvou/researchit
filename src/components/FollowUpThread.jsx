@@ -13,8 +13,8 @@ export default function FollowUpThread({ thread, inputVal, onInputChange, onSubm
             onClick={() => setCollapsed(v => !v)}
             style={{ background: "none", border: "none", color: "#4b5563", fontSize: 11, padding: "0 0 6px", cursor: "pointer" }}>
             {collapsed
-              ? `\u25b6 ${thread.length} follow-up message${thread.length > 1 ? "s" : ""} \u2014 expand`
-              : "\u25bc Follow-up thread"}
+              ? `> ${thread.length} follow-up message${thread.length > 1 ? "s" : ""} - expand`
+              : "v Follow-up thread"}
           </button>
           {!collapsed && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -27,10 +27,10 @@ export default function FollowUpThread({ thread, inputVal, onInputChange, onSubm
                     borderRadius: 8, padding: "8px 12px",
                   }}>
                     <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: isPM ? "#93c5fd" : "#86efac" }}>
-                      {isPM ? "\ud83d\ude4b Your Challenge" : "\ud83d\udd0d Analyst Response"}
+                      {isPM ? "Your Challenge" : "Analyst Response"}
                       {!isPM && msg.scoreAdjusted && msg.newScore != null &&
                         <span style={{ color: "#fbbf24", marginLeft: 8, fontWeight: 400 }}>
-                          \u00b7 Score revised to {msg.newScore}/5
+                          - Score revised to {msg.newScore}/5
                         </span>}
                     </div>
                     <p style={{ fontSize: 12, color: isPM ? "#bfdbfe" : "#bbf7d0", margin: "0 0 4px", lineHeight: 1.65 }}>
@@ -48,7 +48,7 @@ export default function FollowUpThread({ thread, inputVal, onInputChange, onSubm
         <textarea
           value={inputVal}
           onChange={e => onInputChange(e.target.value)}
-          placeholder={'Challenge this score\u2026 e.g. "Salesforce already does this \u2014 does that change the score?" (\u2318+Enter to send)'}
+          placeholder={'Challenge this score... e.g. "Salesforce already does this - does that change the score?" (Cmd/Ctrl+Enter to send)'}
           onKeyDown={e => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && inputVal?.trim() && !loading) onSubmit();
           }}
@@ -68,7 +68,7 @@ export default function FollowUpThread({ thread, inputVal, onInputChange, onSubm
             padding: "8px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600,
             flexShrink: 0, display: "flex", alignItems: "center", gap: 5,
           }}>
-          {loading ? <><Spinner size={10} color="#a855f7" /><span style={{ color: "#a855f7" }}>\u2026</span></> : "Send \u2197"}
+          {loading ? <><Spinner size={10} color="#a855f7" /><span style={{ color: "#a855f7" }}>...</span></> : "Send ->"}
         </button>
       </div>
     </div>

@@ -3,7 +3,7 @@ import { totalScoreColor } from "../lib/scoring";
 export default function TotalPill({ score }) {
   const c = totalScoreColor(score);
   const n = parseFloat(score);
-  const tier = n >= 80 ? "\u2605\u2605\u2605" : n >= 65 ? "\u2605\u2605" : n >= 50 ? "\u2605" : "\u2013";
+  const tier = n >= 80 ? "T3" : n >= 65 ? "T2" : n >= 50 ? "T1" : "--";
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 6,

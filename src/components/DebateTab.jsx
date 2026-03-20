@@ -16,7 +16,7 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
         {phaseInitial && (
           <div style={{ background: "#0c1828", border: "1px solid #1a3455", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>{"\ud83d\udd0d"} ANALYST (Claude Sonnet 4.6) {"\u2014"} INITIAL ASSESSMENT</div>
+            <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>ANALYST (OpenAI GPT-5.4 mini) - INITIAL ASSESSMENT</div>
             <p style={{ fontSize: 12, color: "#93c5fd", margin: 0, lineHeight: 1.55 }}>
               Scored all {dims.length} dimensions based on market knowledge. See Dimensions tab for per-dimension evidence and full analysis.
             </p>
@@ -24,14 +24,14 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
         )}
         {phaseCritique?.content?.overallFeedback && (
           <div style={{ background: "#120f00", border: "1px solid #504000", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "#fbbf24", fontWeight: 700, marginBottom: 4 }}>{"\ud83e\uddd0"} CRITIC (OpenAI o3) {"\u2014"} PEER REVIEW</div>
+            <div style={{ fontSize: 10, color: "#fbbf24", fontWeight: 700, marginBottom: 4 }}>CRITIC (OpenAI GPT-5.4) - PEER REVIEW</div>
             <p style={{ fontSize: 12, color: "#fde68a", margin: 0, lineHeight: 1.55 }}>{phaseCritique.content.overallFeedback}</p>
             <SourcesList sources={phaseCritique.content?.sources} />
           </div>
         )}
         {phaseResponse?.content?.analystResponse && (
           <div style={{ background: "#0c1828", border: "1px solid #1a3455", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>{"\u2696\ufe0f"} ANALYST (Claude Sonnet 4.6) {"\u2014"} FINAL RESPONSE</div>
+            <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>ANALYST (OpenAI GPT-5.4 mini) - FINAL RESPONSE</div>
             <p style={{ fontSize: 12, color: "#93c5fd", margin: 0, lineHeight: 1.55 }}>{phaseResponse.content.analystResponse}</p>
             <SourcesList sources={phaseResponse.content?.sources} />
           </div>
@@ -61,13 +61,13 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
                   <ScorePill score={initScore} />
                   {fin?.finalScore != null && fin.finalScore !== initScore && (
                     <>
-                      <span style={{ color: "#374151", fontSize: 11 }}>{"\u2192"}</span>
+                      <span style={{ color: "#374151", fontSize: 11 }}>-&gt;</span>
                       <ScorePill score={fin.finalScore} revised={true} />
                     </>
                   )}
                   {pmAdjustedScore != null && (
                     <>
-                      <span style={{ color: "#374151", fontSize: 11 }}>{"\u2192"}</span>
+                      <span style={{ color: "#374151", fontSize: 11 }}>-&gt;</span>
                       <ScorePill score={pmAdjustedScore} revised={true} />
                       <span style={{ fontSize: 10, color: "#fbbf24", fontWeight: 700 }}>PM-REVISED</span>
                     </>
@@ -78,7 +78,7 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
               {crit && (
                 <div style={{ padding: "10px 14px", borderTop: "1px solid #1a2030", background: "#110d00" }}>
                   <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 4 }}>
-                    {"\ud83e\uddd0"} CRITIC {!crit.scoreJustified ? `\u00b7 suggests ${crit.suggestedScore}/5` : "\u00b7 score justified"}
+                    CRITIC {!crit.scoreJustified ? `- suggests ${crit.suggestedScore}/5` : "- score justified"}
                   </div>
                   <p style={{ fontSize: 12, color: "#fde68a", margin: 0, lineHeight: 1.6 }}>{crit.critique}</p>
                   <SourcesList sources={crit.sources} />
@@ -87,7 +87,7 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
 
               {fin && (
                 <div style={{ padding: "10px 14px", borderTop: "1px solid #1a2030", background: "#0c1828" }}>
-                  <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>{"\u2696\ufe0f"} ANALYST</div>
+                  <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, marginBottom: 4 }}>ANALYST</div>
                   <p style={{ fontSize: 12, color: "#93c5fd", margin: 0, lineHeight: 1.6 }}>{fin.response}</p>
                   <SourcesList sources={fin.sources} />
                 </div>

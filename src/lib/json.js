@@ -14,7 +14,7 @@ export function safeParseJSON(raw) {
     try { return JSON.parse(clean.slice(start, end + 1)); } catch (_) { /* fall through to repair */ }
   }
 
-  // Response was truncated mid-JSON — attempt structural repair
+  // Response was truncated mid-JSON - attempt structural repair
   let s = clean.slice(start);
   const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
   if (quoteCount % 2 !== 0) s += '"';

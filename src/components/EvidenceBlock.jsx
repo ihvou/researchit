@@ -11,7 +11,7 @@ export default function EvidenceBlock({ brief, full, sources, risks }) {
           <button
             onClick={() => setExpanded(v => !v)}
             style={{ background: "none", border: "none", color: "#7c3aed", fontSize: 11, padding: 0, cursor: "pointer", marginBottom: expanded ? 10 : 0 }}>
-            {expanded ? "\u25b2 Collapse full analysis" : "\u25bc Full analysis & sources"}
+            {expanded ? "^ Collapse full analysis" : "v Full analysis & sources"}
           </button>
           {expanded && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1f2937" }}>

@@ -1,6 +1,6 @@
 # AI Use Case Prioritizer
 
-Internal tool for an AI outsourcing company's product & GTM team. Takes a vague problem or solution statement, runs a 3-phase AI analyst ↔ critic debate, and outputs a scored, evidence-backed prioritization across 11 dimensions relevant to custom AI delivery.
+Internal tool for an AI outsourcing company's product & GTM team. Takes a vague problem or solution statement, runs a 3-phase AI analyst / critic debate, and outputs a scored, evidence-backed prioritization across 11 dimensions relevant to custom AI delivery.
 
 ## What it does
 
@@ -9,14 +9,17 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 3. **Phase 2 — Critic** challenges overconfident scores, names real SaaS incumbents and counter-evidence
 4. **Phase 3 — Analyst responds** per dimension — concedes with revised score or defends with new evidence
 5. PM sees a scored table with expandable detail and can **challenge any dimension directly** via a follow-up thread, triggering a new Analyst response
+6. PM can enable **Live search** for Phase 1 and export results to **Summary CSV** and **Detail CSV**
 
 ## Key design decisions
 
 - **Outsourcing delivery context throughout** — not a SaaS product builder tool. Every dimension is framed around "does a custom delivery project exist here?"
 - **Build vs. Buy Pressure** replaces generic "Competitive Space" — score 5 = no SaaS, client must commission custom build; score 1 = commodity SaaS covers it, no project opportunity
 - **Evidence-first scoring** — Analyst is instructed to cite named companies with specific metrics and real URLs. Scores without evidence are invalid
-- **Multi-LLM debate** — Analyst and Critic currently both use Claude Sonnet 4.6. Architecture supports swapping Critic to GPT-4o for genuine model diversity (see TASKS)
+- **Multi-LLM debate** — Analyst uses OpenAI GPT-5.4 mini, Critic uses OpenAI GPT-5.4. Architecture supports swapping to other models via the API route layer
+- **Live-search with fallback** — Analyst route attempts OpenAI Responses API web search (`web_search` / `web_search_preview`) and falls back to standard completion if unavailable
 - **Per-dimension follow-up threads** — PM can challenge any individual dimension score in a collapsible thread; score revisions propagate to the weighted total
+- **Layered exports** — Summary CSV for fast scanning and Detail CSV for full per-dimension reasoning, critique, sources, and thread history
 
 ## 11 Scoring Dimensions
 
@@ -38,23 +41,79 @@ Each dimension has a 5-level rubric with named examples baked into both the LLM 
 
 ## Tech stack
 
-- **Frontend**: React (single JSX file, no build step required in Claude.ai sandbox)
-- **AI**: Anthropic API — `claude-sonnet-4-20250514` for all 3 phases currently
-- **API calls**: Made directly from the frontend (works in Claude.ai sandbox which injects auth). For external hosting, requires a backend proxy to protect API keys
-- **Styling**: Inline styles only, dark theme (`#07090f` base)
+- **Frontend**: Vite + React, modular component architecture
+- **AI (Analyst)**: OpenAI GPT-5.4 mini via `/api/analyst.js` serverless function
+- **AI (Critic)**: OpenAI GPT-5.4 via `/api/critic.js` serverless function
+- **API routes**: Vercel serverless functions in `api/` — keys stay server-side
+- **Optional live web**: OpenAI Responses API tools for analyst Phase 1 (opt-in)
+- **Styling**: Inline styles, dark theme (`#07090f` base)
 - **Storage**: In-memory React state only — no persistence between sessions yet
 
-## Running locally (once scaffolded)
+## Project structure
 
-```bash
-npm create vite@latest prioritizer -- --template react
-cd prioritizer
-# replace src/App.jsx with ai-use-case-prioritizer.jsx contents
-npm install
-npm run dev
+```
+ai-use-case-prioritizer/
+  api/
+    analyst.js          # Analyst LLM serverless route (OpenAI GPT-5.4 mini)
+    critic.js           # Critic LLM serverless route (OpenAI GPT-5.4)
+  src/
+    App.jsx             # Main app shell
+    main.jsx            # Entry point
+    index.css           # Global styles
+    components/
+      DebateTab.jsx     # Phase 2-3 debate view
+      DimRubricToggle.jsx
+      DimensionsTab.jsx # Scored dimension table
+      EvidenceBlock.jsx
+      ExpandedRow.jsx
+      FollowUpThread.jsx
+      OverviewTab.jsx
+      ScorePill.jsx
+      SourcesList.jsx
+      Spinner.jsx
+      TotalPill.jsx
+    constants/
+      dimensions.js     # 11 dimensions with rubrics & weights
+    hooks/
+      useAnalysis.js    # 3-phase analysis orchestration
+      useFollowUp.js    # Per-dimension follow-up
+    lib/
+      api.js            # API call helpers
+      dimensionView.js  # Derives latest per-dimension view (initial + debate + follow-up)
+      export.js         # Summary/detail CSV export helpers
+      json.js           # JSON parse + repair utilities
+      scoring.js        # Score calculation helpers
+    prompts/
+      system.js         # System prompts for all LLM phases
+  index.html
+  vite.config.js
+  vercel.json
+  .env.local.example
 ```
 
-For external hosting, add a `/api/analyze` proxy route (Vercel serverless function or Express) that holds `ANTHROPIC_API_KEY` in env and forwards requests to `https://api.anthropic.com/v1/messages`.
+## Running locally
+
+```bash
+npm install
+npx vercel dev
+```
+
+The app runs at `http://localhost:3000`. Vercel CLI serves both the Vite frontend and the serverless API routes.
+
+### Environment variables
+
+Copy `.env.local.example` to `.env.local` and fill in your keys:
+
+```
+OPENAI_API_KEY=sk-...           # For OpenAI-based analyst & critic
+```
+
+## Deploying to Vercel
+
+1. Push to GitHub
+2. Import the repo in [Vercel](https://vercel.com)
+3. Add `OPENAI_API_KEY` (and `ANTHROPIC_API_KEY` when needed) in Vercel project settings > Environment Variables
+4. Deploy — Vercel auto-detects the Vite framework and `api/` routes
 
 ## Source documents
 
@@ -63,6 +122,7 @@ The `docs/` folder contains the research report this tool was designed around:
 
 ## Known issues
 
-- Phase 1 can timeout or truncate on long responses — patched with 12k token ceiling + JSON repair + condensed retry fallback (see TASKS for remaining edge cases)
+- Phase 1 can timeout or truncate on long responses — patched with 12k token ceiling + JSON repair + condensed retry fallback
 - No session persistence — refreshing loses all use cases
-- Sources are training-knowledge-based, not live-fetched — web search integration pending
+- Live search can increase variance in scores depending on source freshness/availability
+- Live search may fall back to non-search mode when web tool path is unavailable

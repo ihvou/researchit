@@ -8,7 +8,7 @@ export default function DimRubricToggle({ dim }) {
       <button
         onClick={e => { e.stopPropagation(); setOpen(v => !v); }}
         style={{ background: "none", border: "none", color: "#6d28d9", fontSize: 11, padding: 0, cursor: "pointer" }}>
-        {open ? "\u25b2 hide rubric" : "\u25bc scoring rubric"}
+        {open ? "^ hide rubric" : "v scoring rubric"}
       </button>
       {open && (
         <pre style={{

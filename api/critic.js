@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "o3",
+        model: "gpt-5.4",
         max_completion_tokens: maxTokens,
         messages: openaiMessages,
       }),

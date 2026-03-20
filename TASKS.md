@@ -20,26 +20,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ### [ ] T-03: Timeout UX
 **Problem**: 2+ minute analyses show no progress feedback other than a spinner and phase label.
-**Fix**: Add a per-phase elapsed timer ("🔍 Researching… 0:42") so PM knows it's working. Add a soft timeout warning at 90s ("Taking longer than usual — API may be under load").
+**Fix**: Add a per-phase elapsed timer ("Researching… 0:42") so PM knows it's working. Add a soft timeout warning at 90s ("Taking longer than usual — API may be under load").
 
 ---
 
 ## P1 — Core feature gaps
 
-### [ ] T-04: Web search integration for Phase 1
+### [~] T-04: Web search integration for Phase 1
 **What**: Enable the Analyst to fetch live market data before scoring — vendor pages, press releases, recent case studies, pricing pages.
-**How**: Add `tools: [{ type: "web_search_20250305", name: "web_search" }]` to Phase 1 API call. Handle multi-turn tool-use loop: check `stop_reason === "tool_use"`, extract `web_search` tool blocks, send results back as `tool_result` content, continue until `stop_reason === "end_turn"`.
+**What's done**:
+- [x] Added opt-in "Live search" checkbox in UI
+- [x] Wired `liveSearch` through analysis flow into analyst API
+- [x] Added analyst Responses API path with `web_search` / `web_search_preview`
+- [x] Added safe fallback to standard completion if web tool path fails
+- [x] Added per-use-case metadata (`liveSearchRequested`, `liveSearchUsed`, `webSearchCalls`) in UI + CSV export
 **Impact**: Sources become verifiable real URLs instead of training-knowledge-based citations. Scores reflect current market (new entrants, recent acquisitions, pricing changes).
-**Notes**: Will increase Phase 1 latency by 20-40s but dramatically improves evidence quality. Should be opt-in toggle in UI ("🔍 Live search" checkbox).
+**Remaining**:
+- [ ] Add stronger reliability guardrails (hybrid baseline + web reconciliation pass, delta thresholds)
+- [ ] Add recency/source quality badges per citation
+- [ ] Decide whether Critic/Follow-up phases should optionally use live search too
 
-### [ ] T-05: GPT-4o as Critic option
-**What**: Route Phase 2 (Critic) to OpenAI GPT-4o instead of Claude Sonnet for genuine model diversity.
-**How**:
-- Add `OPENAI_API_KEY` to backend proxy env
-- Add `criticModel` selector in UI: "Claude Sonnet" / "GPT-4o" (default to Claude until backend proxy is set up)
-- For GPT-4o call: `POST https://api.openai.com/v1/chat/completions`, model `gpt-4o`, same JSON schema, parse `choices[0].message.content`
-- Response format is identical — same `safeParseJSON` works
-**Why**: GPT-4o has different training priors on market data and vendor landscape. Critic disagreements become more meaningful.
+### [~] T-05: Multi-model LLM support
+**What**: Support different LLM providers for Analyst and Critic roles.
+**What's done**: Separated API routes — `api/analyst.js` and `api/critic.js`. Currently both use OpenAI (`gpt-5.4-mini` for analyst, `gpt-5.4` for critic). Architecture supports swapping either to Claude or other providers by changing the route implementation.
+**Target config**: Analyst = Claude Sonnet 4.6 (`claude-sonnet-4-6-20250514`), Critic = ChatGPT 5.4. Requires topping up Anthropic API balance for Claude.
+**Remaining**:
+- [ ] Restore Analyst to Claude Sonnet 4.6 when Anthropic balance is available
+- [ ] Update Critic to ChatGPT 5.4 when model is available
+- [ ] Add model selector UI to let PM choose which models to use
 
 ### [ ] T-06: Session persistence (localStorage)
 **What**: Use cases survive page refresh.
@@ -47,7 +55,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 **Notes**: Keep a max of 20 use cases. Serialize only completed/error states — skip in-progress analyses (they can't be resumed).
 
 ### [ ] T-07: Delete and re-analyze per row
-**What**: Each row in the table needs a delete button (×) and a re-analyze button (↺).
+**What**: Each row in the table needs a delete button and a re-analyze button.
 **Re-analyze**: Resets the use case to blank and reruns all 3 phases with the same `rawInput`. Useful after changing dimension weights.
 **Delete**: Removes from state and localStorage.
 
@@ -59,10 +67,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ## P2 — Output & sharing
 
-### [ ] T-09: Export to PDF / shareable report
+### [~] T-09: Export to PDF / shareable report
 **What**: Export the full analysis of one use case as a clean PDF — title, attributes, dimension scores with evidence, debate summary, conclusion.
+**What's done**:
+- [x] Added CSV export buttons in UI
+- [x] Implemented summary CSV (portfolio scan)
+- [x] Implemented detail CSV (per-dimension deep dive: reasoning, debate, sources, thread history)
 **How**: Use `@react-pdf/renderer` or generate an HTML page and call `window.print()` with a print stylesheet. The HTML approach is simpler and requires no new dependency.
 **Format**: 2-3 page document. Cover: title, score, tier, vertical, buyer persona. Body: one section per dimension with score, brief, key evidence, risks. Back: debate summary and conclusion.
+**Remaining**:
+- [ ] Add PDF export with readable sectioned layout
+- [ ] Add optional slides/images export per dimension for stakeholder decks
 
 ### [ ] T-10: Compare view (side-by-side 2-3 use cases)
 **What**: Select 2-3 use cases and view their dimension scores side-by-side for go/no-go decision making.
@@ -85,39 +100,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ---
 
-## Infrastructure (do when moving out of Claude.ai sandbox)
-
-### [ ] T-14: Backend proxy for API keys
-**What**: Vercel serverless function at `/api/analyze` that proxies requests to Anthropic (and optionally OpenAI) with keys in env vars. Frontend calls `/api/analyze` instead of `api.anthropic.com` directly.
-**Files needed**: `api/analyze.js`, `api/critique.js` (if separating Critic endpoint), `.env.local` template.
-
-### [ ] T-15: Vite project scaffold
-**What**: Proper project structure for local dev and Vercel deployment.
-```
-prioritizer/
-  src/
-    App.jsx
-    components/
-      ScorePill.jsx
-      EvidenceBlock.jsx
-      FollowUpThread.jsx
-      DimRubricToggle.jsx
-    hooks/
-      useAnalysis.js
-      useFollowUp.js
-    prompts/
-      analyst.js
-      critic.js
-      followup.js
-    constants/
-      dimensions.js
-  api/
-    analyze.js
-  public/
-  index.html
-  vite.config.js
-  .env.local (gitignored)
-```
+## Infrastructure
 
 ### [ ] T-16: GitHub Actions CI
 **What**: On push to main — lint (ESLint), build check (`vite build`), deploy preview to Vercel.
@@ -133,3 +116,7 @@ prioritizer/
 - [x] Per-dimension follow-up challenge threads with score revision
 - [x] Citations required in all 3 LLM phases
 - [x] Phase 1 token ceiling raised to 12k + JSON repair + condensed retry fallback
+- [x] T-14: Backend proxy for API keys — Vercel serverless functions (`api/analyst.js`, `api/critic.js`)
+- [x] T-15: Vite project scaffold — modular components, hooks, constants, lib, prompts
+- [x] T-05 (partial): Multi-model support — separated analyst/critic API routes, both on OpenAI temporarily
+- [x] Summary + detail CSV export

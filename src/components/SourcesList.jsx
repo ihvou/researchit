@@ -19,7 +19,7 @@ export default function SourcesList({ sources }) {
                 {s.name}
               </a>
             : <span style={{ color: "#60a5fa" }}>{s.name}</span>}
-          {s.quote && <span style={{ color: "#374151" }}>\u00b7 {s.quote}</span>}
+          {s.quote && <span style={{ color: "#374151" }}>- {s.quote}</span>}
         </span>
       ))}
     </div>

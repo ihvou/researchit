@@ -2,8 +2,10 @@ import { callAnalystAPI, callCriticAPI } from "../lib/api";
 import { safeParseJSON, buildDimRubrics } from "../lib/json";
 import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/system";
 
-export async function runAnalysis(desc, dims, updateUC, id) {
-  const dimJsonTemplate = dims.map(d =>
+export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
+  const liveSearch = !!options.liveSearch;
+
+  const dimJsonTemplate = dims.map((d) =>
     `"${d.id}": {
       "score": <integer 1-5 based on rubric>,
       "brief": "<single sentence summary, max 25 words>",
@@ -15,14 +17,20 @@ export async function runAnalysis(desc, dims, updateUC, id) {
     }`
   ).join(",\n    ");
 
+  const liveSearchBlock = liveSearch
+    ? `\nLIVE SEARCH MODE:
+- Use web search to verify high-confidence claims.
+- Prefer current sources (last 24 months) where possible.
+- Include real URLs for each dimension when available.\n`
+    : "";
+
   const phase1Prompt = `Analyze this AI use case for an outsourcing company that builds CUSTOM AI solutions for enterprise clients:
 
 "${desc}"
 
-SCORING DIMENSIONS \u2014 use the rubric below to score each one 1-5:
-${buildDimRubrics(dims)}
-
-Return ONLY this exact JSON structure, fully populated for ALL 11 dimension IDs (${dims.map(d => d.id).join(", ")}):
+SCORING DIMENSIONS - use the rubric below to score each one 1-5:
+${buildDimRubrics(dims)}${liveSearchBlock}
+Return ONLY this exact JSON structure, fully populated for ALL 11 dimension IDs (${dims.map((d) => d.id).join(", ")}):
 
 {
   "attributes": {
@@ -40,16 +48,39 @@ Return ONLY this exact JSON structure, fully populated for ALL 11 dimension IDs 
 }`;
 
   const debate = [];
+  const analysisMeta = {
+    liveSearchRequested: liveSearch,
+    liveSearchUsed: false,
+    webSearchCalls: 0,
+    liveSearchFallbackReason: null,
+  };
 
-  // \u2500 Phase 1: Analyst \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  updateUC(id, u => ({ ...u, phase: "analyst" }));
-  let r1, p1;
+  const absorbMeta = (meta) => {
+    if (!meta) return;
+    if (meta.liveSearchUsed) analysisMeta.liveSearchUsed = true;
+    analysisMeta.webSearchCalls += Number(meta.webSearchCalls || 0);
+    if (!analysisMeta.liveSearchFallbackReason && meta.liveSearchFallbackReason) {
+      analysisMeta.liveSearchFallbackReason = meta.liveSearchFallbackReason;
+    }
+  };
+
+  // Phase 1: Analyst
+  updateUC(id, (u) => ({ ...u, phase: "analyst" }));
+  let r1;
+  let p1;
   try {
-    r1 = await callAnalystAPI([{ role: "user", content: phase1Prompt }], SYS_ANALYST, 12000);
+    const phase1Res = await callAnalystAPI(
+      [{ role: "user", content: phase1Prompt }],
+      SYS_ANALYST,
+      12000,
+      { liveSearch, includeMeta: true }
+    );
+    absorbMeta(phase1Res.meta);
+    r1 = phase1Res.text;
     p1 = safeParseJSON(r1);
   } catch (parseErr) {
     console.warn("Phase 1 parse failed, retrying with condensed prompt:", parseErr.message);
-    const condensedDimTemplate = dims.map(d =>
+    const condensedDimTemplate = dims.map((d) =>
       `"${d.id}": {"score": <1-5>, "brief": "<max 20 words>", "full": "<1 paragraph, max 80 words, cite 1-2 named companies>", "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}], "risks": "<max 20 words>"}`
     ).join(",\n    ");
     const condensedPrompt = `Analyze this AI use case for an outsourcing company building CUSTOM AI solutions:
@@ -57,34 +88,47 @@ Return ONLY this exact JSON structure, fully populated for ALL 11 dimension IDs 
 "${desc}"
 
 SCORING DIMENSIONS (score each 1-5 using these rubrics):
-${buildDimRubrics(dims)}
-
-Return ONLY this JSON (ALL 11 dimension IDs: ${dims.map(d => d.id).join(", ")}):
+${buildDimRubrics(dims)}${liveSearchBlock}
+Return ONLY this JSON (ALL 11 dimension IDs: ${dims.map((d) => d.id).join(", ")}):
 {
   "attributes": {"title": "<max 8 words>", "expandedDescription": "<2 sentences>", "vertical": "<industry>", "buyerPersona": "<role>", "aiSolutionType": "<AI/ML type>", "typicalTimeline": "<estimate>", "deliveryModel": "<engagement type>"},
   "dimensions": {
     ${condensedDimTemplate}
   }
 }`;
-    r1 = await callAnalystAPI([{ role: "user", content: condensedPrompt }], SYS_ANALYST, 8000);
+    const condensedRes = await callAnalystAPI(
+      [{ role: "user", content: condensedPrompt }],
+      SYS_ANALYST,
+      8000,
+      { liveSearch, includeMeta: true }
+    );
+    absorbMeta(condensedRes.meta);
+    r1 = condensedRes.text;
     p1 = safeParseJSON(r1);
   }
 
   debate.push({ phase: "initial", content: p1 });
-  updateUC(id, u => ({ ...u, attributes: p1.attributes, dimScores: p1.dimensions, phase: "critic", debate: [...debate] }));
+  updateUC(id, (u) => ({
+    ...u,
+    attributes: p1.attributes,
+    dimScores: p1.dimensions,
+    phase: "critic",
+    debate: [...debate],
+    analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+  }));
 
-  // \u2500 Phase 2: Critic (OpenAI o3) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // Phase 2: Critic
   const phase2Prompt = `Review this analyst assessment of the AI use case: "${p1.attributes?.title || desc}"
 
 Analyst scores (outsourcing delivery context):
-${dims.map(d => `\u2022 ${d.label} [${d.id}]: ${p1.dimensions?.[d.id]?.score}/5 \u2014 ${p1.dimensions?.[d.id]?.brief || ""}`).join("\n")}
+${dims.map((d) => `- ${d.label} [${d.id}]: ${p1.dimensions?.[d.id]?.score}/5 - ${p1.dimensions?.[d.id]?.brief || ""}`).join("\n")}
 
 Return ONLY this JSON:
 {
-  "overallFeedback": "<2-3 sentence overall critique \u2014 what is the analyst getting right and wrong?>",
+  "overallFeedback": "<2-3 sentence overall critique - what is the analyst getting right and wrong?>",
   "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}],
   "dimensions": {
-    ${dims.map(d => `"${d.id}": {
+    ${dims.map((d) => `"${d.id}": {
       "scoreJustified": <true if score is defensible, false if over/under-stated>,
       "suggestedScore": <your suggested score 1-5>,
       "critique": "<2-3 sentences: specific challenge with named incumbent vendors, SaaS products, or counter-evidence>",
@@ -97,20 +141,20 @@ Return ONLY this JSON:
   const p2 = safeParseJSON(r2);
 
   debate.push({ phase: "critique", content: p2 });
-  updateUC(id, u => ({ ...u, critique: p2, phase: "finalizing", debate: [...debate] }));
+  updateUC(id, (u) => ({ ...u, critique: p2, phase: "finalizing", debate: [...debate] }));
 
-  // \u2500 Phase 3: Analyst responds \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // Phase 3: Analyst responds
   const phase3Prompt = `You are the analyst who assessed "${p1.attributes?.title || desc}".
 
 Your original scores:
-${dims.map(d => `\u2022 ${d.label}: ${p1.dimensions?.[d.id]?.score}/5`).join("\n")}
+${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5`).join("\n")}
 
 Critic's overall feedback: ${p2.overallFeedback || ""}
 
 Per-dimension critiques:
-${dims.map(d => {
+${dims.map((d) => {
   const c = p2.dimensions?.[d.id];
-  return `\u2022 ${d.label}: ${c?.scoreJustified ? "Score justified" : `Critic suggests ${c?.suggestedScore}/5`} \u2014 ${c?.critique || "no specific challenge"}`;
+  return `- ${d.label}: ${c?.scoreJustified ? "Score justified" : `Critic suggests ${c?.suggestedScore}/5`} - ${c?.critique || "no specific challenge"}`;
 }).join("\n")}
 
 Respond per dimension: defend your score with NEW evidence not previously cited, OR concede and revise with clear reasoning.
@@ -120,8 +164,8 @@ Return ONLY this JSON:
   "analystResponse": "<2-3 sentence overall response to the critique>",
   "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}],
   "dimensions": {
-    ${dims.map(d => `"${d.id}": {
-      "finalScore": <your final score 1-5 \u2014 may differ from original>,
+    ${dims.map((d) => `"${d.id}": {
+      "finalScore": <your final score 1-5 - may differ from original>,
       "scoreChanged": <true if you revised the score>,
       "response": "<3-4 sentences: concede or defend with new specific evidence>",
       "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
@@ -134,5 +178,5 @@ Return ONLY this JSON:
   const p3 = safeParseJSON(r3);
 
   debate.push({ phase: "response", content: p3 });
-  updateUC(id, u => ({ ...u, finalScores: p3, status: "complete", phase: "complete", debate: [...debate] }));
+  updateUC(id, (u) => ({ ...u, finalScores: p3, status: "complete", phase: "complete", debate: [...debate] }));
 }

@@ -1,6 +1,7 @@
 import ScorePill from "./ScorePill";
 import TotalPill from "./TotalPill";
-import { getEffectiveScore, calcWeightedScore } from "../lib/scoring";
+import { calcWeightedScore } from "../lib/scoring";
+import { getDimensionView } from "../lib/dimensionView";
 
 export default function OverviewTab({ uc, dims }) {
   const a = uc.attributes;
@@ -32,7 +33,7 @@ export default function OverviewTab({ uc, dims }) {
             )}
           </>
         ) : (
-          <span style={{ color: "#374151", fontSize: 12 }}>Analyzing\u2026</span>
+          <span style={{ color: "#374151", fontSize: 12 }}>Analyzing...</span>
         )}
       </div>
 
@@ -41,16 +42,15 @@ export default function OverviewTab({ uc, dims }) {
           Score Summary
         </div>
         {dims.map(d => {
-          const sc = getEffectiveScore(uc, d.id);
-          const initScore = uc.dimScores?.[d.id]?.score;
-          const finalScore = uc.finalScores?.dimensions?.[d.id]?.finalScore;
-          const revised = finalScore != null && initScore != null && finalScore !== initScore;
+          const view = getDimensionView(uc, d.id);
+          const initScore = view.initial?.score;
+          const revised = view.effectiveScore != null && initScore != null && view.effectiveScore !== initScore;
           return (
             <div key={d.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8, opacity: d.enabled ? 1 : 0.35 }}>
               <div style={{ minWidth: 52 }}>
-                {sc != null
-                  ? <ScorePill score={sc} revised={revised} />
-                  : <span style={{ color: "#2d3748", fontSize: 12 }}>\u2013</span>}
+                {view.effectiveScore != null
+                  ? <ScorePill score={view.effectiveScore} revised={revised} />
+                  : <span style={{ color: "#2d3748", fontSize: 12 }}>-</span>}
               </div>
               <div>
                 <div style={{ fontSize: 12, color: d.enabled ? "#e2e8f0" : "#4b5563", fontWeight: 600, lineHeight: 1.3 }}>
@@ -58,10 +58,13 @@ export default function OverviewTab({ uc, dims }) {
                   <span style={{ color: "#374151", fontWeight: 400, fontSize: 10, marginLeft: 4 }}>{d.weight}%</span>
                   {!d.enabled && <span style={{ color: "#374151", fontSize: 10, marginLeft: 4 }}>(excluded)</span>}
                 </div>
-                {uc.dimScores?.[d.id]?.brief && (
+                {view.brief && (
                   <div style={{ fontSize: 11, color: "#4b5563", marginTop: 1, lineHeight: 1.4 }}>
-                    {uc.dimScores[d.id].brief}
+                    {view.brief}
                   </div>
+                )}
+                {view.stage !== "initial" && (
+                  <div style={{ fontSize: 10, color: "#60a5fa", marginTop: 1 }}>{view.stageLabel}</div>
                 )}
               </div>
             </div>

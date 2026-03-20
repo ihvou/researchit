@@ -1,16 +1,15 @@
 import ScorePill from "./ScorePill";
 import DimRubricToggle from "./DimRubricToggle";
 import EvidenceBlock from "./EvidenceBlock";
-import { getEffectiveScore } from "../lib/scoring";
+import { getDimensionView } from "../lib/dimensionView";
 
 export default function DimensionsTab({ uc, dims }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {dims.map(d => {
-        const initData = uc.dimScores?.[d.id];
-        const finalData = uc.finalScores?.dimensions?.[d.id];
-        const effScore = getEffectiveScore(uc, d.id);
-        const revised = finalData?.finalScore != null && initData?.score != null && finalData.finalScore !== initData.score;
+        const view = getDimensionView(uc, d.id);
+        const initData = view.initial;
+        const revised = view.effectiveScore != null && initData?.score != null && view.effectiveScore !== initData.score;
 
         if (!initData) {
           return (
@@ -30,19 +29,22 @@ export default function DimensionsTab({ uc, dims }) {
                 {revised && (
                   <>
                     <ScorePill score={initData.score} />
-                    <span style={{ color: "#374151", fontSize: 11 }}>\u2192</span>
+                    <span style={{ color: "#374151", fontSize: 11 }}>-&gt;</span>
                   </>
                 )}
-                {effScore != null && <ScorePill score={effScore} revised={revised} />}
+                {view.effectiveScore != null && <ScorePill score={view.effectiveScore} revised={revised} />}
                 {revised && <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>REVISED</span>}
+                {view.stage !== "initial" && (
+                  <span style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700 }}>{view.stageLabel.toUpperCase()}</span>
+                )}
               </div>
             </div>
             <DimRubricToggle dim={d} />
             <EvidenceBlock
-              brief={initData.brief}
-              full={initData.full}
-              sources={initData.sources}
-              risks={initData.risks}
+              brief={view.brief}
+              full={view.full}
+              sources={view.sources}
+              risks={view.risks}
             />
           </div>
         );

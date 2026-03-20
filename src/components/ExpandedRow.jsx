@@ -5,9 +5,9 @@ import DimensionsTab from "./DimensionsTab";
 import DebateTab from "./DebateTab";
 
 const PHASE_LABELS = {
-  analyst: "\ud83d\udd0d Analyst researching\u2026",
-  critic: "\ud83e\uddd0 Critic reviewing\u2026",
-  finalizing: "\u2696\ufe0f Analyst responding\u2026",
+  analyst: "Analyst researching...",
+  critic: "Critic reviewing...",
+  finalizing: "Analyst responding...",
 };
 
 export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoading, onFollowUp }) {
@@ -17,9 +17,9 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
     <div style={{ borderTop: "2px solid #5b21b633" }}>
       <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid #1e2a3a", background: "#0f1420", padding: "0 16px" }}>
         {[
-          { id: "overview", label: "\ud83d\udccb Overview" },
-          { id: "dimensions", label: "\ud83d\udcca Dimensions" },
-          { id: "debate", label: "\ud83d\udcac Debate & Challenges" },
+          { id: "overview", label: "Overview" },
+          { id: "dimensions", label: "Dimensions" },
+          { id: "debate", label: "Debate & Challenges" },
         ].map(t => (
           <button
             key={t.id}
@@ -37,10 +37,15 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
         <div style={{ marginLeft: "auto", fontSize: 10, padding: "0 8px" }}>
           {uc.status === "analyzing"
             ? <span style={{ color: "#a855f7", display: "flex", alignItems: "center", gap: 6 }}>
-                <Spinner size={10} /> {PHASE_LABELS[uc.phase] || "Processing\u2026"}
+                <Spinner size={10} /> {PHASE_LABELS[uc.phase] || "Processing..."}
               </span>
             : <span style={{ color: "#2d3748" }}>
-                Analyst: Claude Sonnet 4.6 \u00b7 Critic: OpenAI o3 \u00b7 Sources are training-based \u2014 verify before use
+                Analyst: OpenAI GPT-5.4 mini | Critic: OpenAI GPT-5.4 | Sources may include model memory and live web - verify before use
+                {uc.analysisMeta?.liveSearchRequested && (
+                  <span style={{ marginLeft: 6, color: "#60a5fa" }}>
+                    | Live search {uc.analysisMeta?.liveSearchUsed ? `on (${uc.analysisMeta?.webSearchCalls || 0} calls)` : "fallback"}
+                  </span>
+                )}
               </span>}
         </div>
       </div>
@@ -48,7 +53,7 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
       <div style={{ padding: 16, background: "#080b14" }}>
         {uc.status === "error" && (
           <div style={{ background: "#450a0a", border: "1px solid #7f1d1d", borderRadius: 8, padding: "10px 14px", color: "#fca5a5", fontSize: 13, marginBottom: 14 }}>
-            {"\u26a0\ufe0f"} {uc.errorMsg}
+            Warning: {uc.errorMsg}
           </div>
         )}
         {tab === "overview" && <OverviewTab uc={uc} dims={dims} />}

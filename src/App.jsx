@@ -3,6 +3,7 @@ import { DEFAULT_DIMS } from "./constants/dimensions";
 import { getEffectiveScore, calcWeightedScore } from "./lib/scoring";
 import { runAnalysis } from "./hooks/useAnalysis";
 import { handleFollowUp } from "./hooks/useFollowUp";
+import { exportSummaryCsv, exportDetailCsv } from "./lib/export";
 import Spinner from "./components/Spinner";
 import ScorePill from "./components/ScorePill";
 import TotalPill from "./components/TotalPill";
@@ -17,6 +18,7 @@ export default function App() {
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [globalAnalyzing, setGlobalAnalyzing] = useState(false);
+  const [liveSearch, setLiveSearch] = useState(true);
   const [fuInputs, setFuInputs] = useState({});
   const [fuLoading, setFuLoading] = useState({});
 
@@ -40,6 +42,12 @@ export default function App() {
       id, rawInput: desc, status: "analyzing", phase: "analyst",
       attributes: null, dimScores: null, critique: null, finalScores: null,
       debate: [], followUps: {}, errorMsg: null,
+      analysisMeta: {
+        liveSearchRequested: liveSearch,
+        liveSearchUsed: false,
+        webSearchCalls: 0,
+        liveSearchFallbackReason: null,
+      },
     };
 
     setUseCases(prev => [...prev, blankUC]);
@@ -49,7 +57,7 @@ export default function App() {
     setGlobalAnalyzing(true);
 
     try {
-      await runAnalysis(desc, dims, updateUC, id);
+      await runAnalysis(desc, dims, updateUC, id, { liveSearch });
     } catch (err) {
       console.error("Analysis error:", err);
       updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: err.message }));
@@ -92,9 +100,9 @@ export default function App() {
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
 
   const PHASE_LABEL_SHORT = {
-    analyst: "\ud83d\udd0d Research\u2026",
-    critic: "\ud83e\uddd0 Critique\u2026",
-    finalizing: "\u2696\ufe0f Debate\u2026",
+    analyst: "Research...",
+    critic: "Critique...",
+    finalizing: "Debate...",
   };
 
   return (
@@ -108,10 +116,40 @@ export default function App() {
         <div>
           <span style={{ fontWeight: 800, fontSize: 15, color: "#a855f7" }}>AI Use Case Prioritizer</span>
           <span style={{ color: "#2d3748", fontSize: 12, marginLeft: 10 }}>
-            11 dimensions {"\u00b7"} analyst {"\u2194"} critic debate {"\u00b7"} per-dimension challenges {"\u00b7"} outsourcing delivery focus
+            {"11 dimensions | analyst <-> critic debate | per-dimension challenges | outsourcing delivery focus"}
           </span>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button
+            onClick={() => exportSummaryCsv(useCases, dims)}
+            disabled={!useCases.length}
+            style={{
+              background: "#0f1520",
+              border: "1px solid #2d3748",
+              color: useCases.length ? "#60a5fa" : "#374151",
+              padding: "6px 12px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              opacity: useCases.length ? 1 : 0.5,
+            }}>
+            Export Summary CSV
+          </button>
+          <button
+            onClick={() => exportDetailCsv(useCases, dims)}
+            disabled={!useCases.length}
+            style={{
+              background: "#0f1520",
+              border: "1px solid #2d3748",
+              color: useCases.length ? "#93c5fd" : "#374151",
+              padding: "6px 12px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              opacity: useCases.length ? 1 : 0.5,
+            }}>
+            Export Detail CSV
+          </button>
           <button
             onClick={() => setShowDimsPanel(v => !v)}
             style={{
@@ -119,7 +157,7 @@ export default function App() {
               border: "1px solid #2d3748", color: "#c084fc",
               padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
             }}>
-            {"\u2699"} Dimensions {showDimsPanel ? "\u25b2" : "\u25bc"}
+            Dimensions {showDimsPanel ? "^" : "v"}
           </button>
           <button
             onClick={() => setShowInputPanel(v => !v)}
@@ -133,7 +171,7 @@ export default function App() {
       {showDimsPanel && (
         <div style={{ background: "#0a0d17", borderBottom: "1px solid #141a28", padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#a855f7", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
-            Scoring Dimensions & Weights {"\u2014"} toggle to exclude from weighted score
+            Scoring Dimensions & Weights - toggle to exclude from weighted score
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 10, marginBottom: 12 }}>
             {dims.map(d => (
@@ -160,7 +198,7 @@ export default function App() {
           </div>
           <div style={{ fontSize: 11, color: "#374151" }}>
             Total weight: <span style={{ color: "#a855f7", fontWeight: 700 }}>{totalWeight}%</span>
-            <span style={{ marginLeft: 8 }}>{"\u2014"} scores auto-normalize, only relative weights matter</span>
+            <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
           </div>
         </div>
       )}
@@ -169,7 +207,7 @@ export default function App() {
       {showInputPanel && (
         <div style={{ background: "#0a0d17", borderBottom: "1px solid #141a28", padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#a855f7", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
-            New Use Case {"\u2014"} describe the problem or solution
+            New Use Case - describe the problem or solution
           </div>
           <textarea
             autoFocus
@@ -193,9 +231,18 @@ export default function App() {
                 opacity: !inputText.trim() || globalAnalyzing ? 0.5 : 1,
                 display: "flex", alignItems: "center", gap: 6,
               }}>
-              {globalAnalyzing ? <><Spinner size={11} color="#fff" /> Analyzing{"\u2026"}</> : "\u26a1 Analyze \u2014 3-phase debate"}
+              {globalAnalyzing ? <><Spinner size={11} color="#fff" /> Analyzing...</> : "Analyze - 3-phase debate"}
             </button>
-            <span style={{ fontSize: 11, color: "#2d3748" }}>{"\u2318"}/Ctrl+Enter to submit</span>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#94a3b8" }}>
+              <input
+                type="checkbox"
+                checked={liveSearch}
+                onChange={(e) => setLiveSearch(e.target.checked)}
+                style={{ accentColor: "#7c3aed", width: 14, height: 14 }}
+              />
+              Live search (slower, better evidence)
+            </label>
+            <span style={{ fontSize: 11, color: "#2d3748" }}>Cmd/Ctrl+Enter to submit</span>
             <button
               onClick={() => setShowInputPanel(false)}
               style={{ marginLeft: "auto", background: "transparent", border: "1px solid #2d3748", color: "#6b7280", padding: "7px 14px", borderRadius: 8, fontSize: 12 }}>
@@ -209,10 +256,9 @@ export default function App() {
       <div style={{ padding: 20 }}>
         {useCases.length === 0 ? (
           <div style={{ textAlign: "center", padding: "80px 20px" }}>
-            <div style={{ fontSize: 44, marginBottom: 14 }}>{"\ud83e\udd16"}</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#2d3748", marginBottom: 8 }}>No use cases yet</div>
             <div style={{ fontSize: 13, color: "#1f2937" }}>
-              Click <strong style={{ color: "#a855f7" }}>+ Add Use Case</strong> to start the 3-phase analyst {"\u2194"} critic analysis
+              Click <strong style={{ color: "#a855f7" }}>+ Add Use Case</strong> {`to start the 3-phase analyst <-> critic analysis`}
             </div>
           </div>
         ) : (
@@ -259,13 +305,24 @@ export default function App() {
                       onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = "transparent"; }}>
                       <td style={{ padding: "12px 14px" }}>
                         <div style={{ fontWeight: 600, color: "#e2e8f0", marginBottom: 4, lineHeight: 1.3 }}>
-                          {uc.attributes?.title || (uc.rawInput.length > 55 ? uc.rawInput.slice(0, 55) + "\u2026" : uc.rawInput)}
+                          {uc.attributes?.title || (uc.rawInput.length > 55 ? `${uc.rawInput.slice(0, 55)}...` : uc.rawInput)}
                         </div>
-                        {uc.attributes?.vertical && (
-                          <span style={{ fontSize: 11, color: "#4b5563", background: "#0f1520", padding: "1px 7px", borderRadius: 4 }}>
-                            {uc.attributes.vertical}
-                          </span>
-                        )}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {uc.attributes?.vertical && (
+                            <span style={{ fontSize: 11, color: "#4b5563", background: "#0f1520", padding: "1px 7px", borderRadius: 4 }}>
+                              {uc.attributes.vertical}
+                            </span>
+                          )}
+                          {uc.analysisMeta?.liveSearchRequested && (
+                            <span
+                              title={uc.analysisMeta?.liveSearchUsed
+                                ? `Live search used (${uc.analysisMeta?.webSearchCalls || 0} calls)`
+                                : "Live search requested, fallback path used"}
+                              style={{ fontSize: 11, color: "#60a5fa", background: "#0a1628", padding: "1px 7px", borderRadius: 4 }}>
+                              live
+                            </span>
+                          )}
+                        </div>
                       </td>
                       {activeDims.map(d => {
                         const sc = getEffectiveScore(uc, d.id);
@@ -278,7 +335,7 @@ export default function App() {
                               ? <ScorePill score={sc} revised={revised} />
                               : uc.status === "analyzing"
                                 ? <Spinner size={10} />
-                                : <span style={{ color: "#2d3748" }}>{"\u2013"}</span>}
+                                : <span style={{ color: "#2d3748" }}>-</span>}
                           </td>
                         );
                       })}
@@ -288,11 +345,11 @@ export default function App() {
                           : uc.status === "error"
                             ? <span style={{ color: "#ef4444", fontSize: 11 }}>Error</span>
                             : uc.status === "analyzing"
-                              ? <span style={{ color: "#4b5563", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "\u2026"}</span>
-                              : "\u2013"}
+                              ? <span style={{ color: "#4b5563", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "..."}</span>
+                              : "-"}
                       </td>
                       <td style={{ textAlign: "center", color: "#374151", fontSize: 12 }}>
-                        {isExpanded ? "\u25b2" : "\u25bc"}
+                        {isExpanded ? "^" : "v"}
                       </td>
                     </tr>,
                     isExpanded && (
