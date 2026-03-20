@@ -4,31 +4,192 @@ export function buildDimRubrics(dims) {
   ).join("\n\n");
 }
 
+function stripMarkdownFences(raw) {
+  return raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+}
+
+function extractFirstJsonObject(input) {
+  const start = input.indexOf("{");
+  if (start === -1) return "";
+
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = start; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return input.slice(start, i + 1);
+    }
+  }
+
+  return input.slice(start);
+}
+
+function removeTrailingCommas(input) {
+  let prev = input;
+  let next = input;
+  do {
+    prev = next;
+    next = prev.replace(/,\s*([}\]])/g, "$1");
+  } while (next !== prev);
+  return next;
+}
+
+function normalizeStringLiterals(input) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+
+    if (!inString) {
+      if (ch === "\"") {
+        inString = true;
+      }
+      out += ch;
+      continue;
+    }
+
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === "\n") {
+      out += "\\n";
+      continue;
+    }
+    if (ch === "\r") {
+      continue;
+    }
+    if (ch === "\t") {
+      out += "\\t";
+      continue;
+    }
+
+    if (ch === "\"") {
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j])) j += 1;
+      const next = input[j];
+      const isTerminator = next == null || next === "," || next === "}" || next === "]" || next === ":";
+      if (isTerminator) {
+        inString = false;
+        out += "\"";
+      } else {
+        out += "\\\"";
+      }
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function balanceBrackets(input) {
+  let out = input;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") braceDepth += 1;
+    else if (ch === "}") braceDepth -= 1;
+    else if (ch === "[") bracketDepth += 1;
+    else if (ch === "]") bracketDepth -= 1;
+  }
+
+  if (inString) out += "\"";
+  if (bracketDepth > 0) out += "]".repeat(bracketDepth);
+  if (braceDepth > 0) out += "}".repeat(braceDepth);
+  return out;
+}
+
+function parseErrorSnippet(text, message) {
+  const match = message.match(/position (\d+)/i);
+  if (!match) return "";
+  const pos = Number(match[1]);
+  if (!Number.isFinite(pos)) return "";
+  const from = Math.max(0, pos - 120);
+  const to = Math.min(text.length, pos + 120);
+  return text.slice(from, to);
+}
+
 export function safeParseJSON(raw) {
-  const clean = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-  const start = clean.indexOf("{");
-  if (start === -1) throw new Error("No JSON object found in response");
-
-  const end = clean.lastIndexOf("}");
-  if (end !== -1) {
-    try { return JSON.parse(clean.slice(start, end + 1)); } catch (_) { /* fall through to repair */ }
+  if (typeof raw !== "string") {
+    throw new Error("Model response is not a string");
   }
 
-  // Response was truncated mid-JSON - attempt structural repair
-  let s = clean.slice(start);
-  const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
-  if (quoteCount % 2 !== 0) s += '"';
+  const clean = stripMarkdownFences(raw);
+  const candidate = extractFirstJsonObject(clean);
+  if (!candidate) throw new Error("No JSON object found in response");
 
-  let opens = 0, openArr = 0;
-  for (const ch of s) {
-    if (ch === "{") opens++;
-    else if (ch === "}") opens--;
-    else if (ch === "[") openArr++;
-    else if (ch === "]") openArr--;
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    // Continue to structural repair attempts.
   }
-  s += "]".repeat(Math.max(0, openArr));
-  s += "}".repeat(Math.max(0, opens));
 
-  try { return JSON.parse(s); }
-  catch (e) { throw new Error(`JSON parse failed even after repair attempt: ${e.message}`); }
+  let repaired = candidate
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/\u00a0/g, " ");
+  repaired = normalizeStringLiterals(repaired);
+  repaired = removeTrailingCommas(repaired);
+  repaired = balanceBrackets(repaired);
+
+  try {
+    return JSON.parse(repaired);
+  } catch (e) {
+    const snippet = parseErrorSnippet(repaired, e.message);
+    const extra = snippet ? ` near: ${snippet}` : "";
+    throw new Error(`JSON parse failed even after repair attempt: ${e.message}${extra}`);
+  }
 }

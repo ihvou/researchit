@@ -8,7 +8,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ### [~] T-01: JSON parse resilience for Phase 1 truncation
 **Problem**: Phase 1 requests ~11k tokens of structured JSON. If response truncates mid-object, the parser throws and the whole analysis fails.
-**What's done**: Raised max_tokens to 12,000. Added structural JSON repair (closes unclosed strings/arrays/objects). Added condensed retry fallback prompt.
+**What's done**: Raised max_tokens to 12,000. Added structural JSON repair (closes unclosed strings/arrays/objects). Added condensed retry fallback prompt. Improved parser repair for malformed string literals/trailing commas and added parse diagnostics.
 **Remaining**:
 - [ ] Add a visible "Retrying with condensed prompt…" status message in the UI when fallback triggers
 - [ ] Log which dimensions came back with truncated `full` fields (length < 100 chars) and flag them in UI with a "⚠ condensed" badge
@@ -21,6 +21,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 ### [ ] T-03: Timeout UX
 **Problem**: 2+ minute analyses show no progress feedback other than a spinner and phase label.
 **Fix**: Add a per-phase elapsed timer ("Researching… 0:42") so PM knows it's working. Add a soft timeout warning at 90s ("Taking longer than usual — API may be under load").
+
+### [x] T-17: Debug log capture for parse failures
+**What**: Capture JSON parse failures with prompt/response excerpts and store logs for investigation.
+**Done**:
+- [x] Added analysis-run debug capture (`src/lib/debug.js`) with event timeline + raw response excerpts
+- [x] Added automatic JSON file download after each analysis run (success or failure)
+- [x] Added debate/final parse-failure diagnostics with phase + retry attempt context
 
 ---
 

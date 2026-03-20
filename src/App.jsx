@@ -23,6 +23,7 @@ export default function App() {
   const [fuLoading, setFuLoading] = useState({});
 
   const ucRef = useRef(useCases);
+  const exportMenuRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
 
   function updateUC(id, fn) {
@@ -126,66 +127,67 @@ export default function App() {
           </span>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button
-            onClick={() => exportAnalysisHtml(useCases, dims)}
-            disabled={!useCases.length}
-            style={{
+          <details ref={exportMenuRef} style={{ position: "relative" }}>
+            <summary
+              onClick={(e) => {
+                if (!useCases.length) e.preventDefault();
+              }}
+              style={{
+                background: "#0f1520",
+                border: "1px solid #2d3748",
+                color: useCases.length ? "#93c5fd" : "#374151",
+                padding: "6px 12px",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                opacity: useCases.length ? 1 : 0.5,
+                listStyle: "none",
+                cursor: useCases.length ? "pointer" : "not-allowed",
+                userSelect: "none",
+              }}>
+              Export v
+            </summary>
+            <div style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 6px)",
               background: "#0f1520",
               border: "1px solid #2d3748",
-              color: useCases.length ? "#7dd3fc" : "#374151",
-              padding: "6px 12px",
               borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              opacity: useCases.length ? 1 : 0.5,
+              minWidth: 185,
+              padding: 6,
+              display: "grid",
+              gap: 4,
+              zIndex: 30,
             }}>
-            Export HTML Report
-          </button>
-          <button
-            onClick={() => exportAnalysisPdf(useCases, dims)}
-            disabled={!useCases.length}
-            style={{
-              background: "#0f1520",
-              border: "1px solid #2d3748",
-              color: useCases.length ? "#93c5fd" : "#374151",
-              padding: "6px 12px",
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              opacity: useCases.length ? 1 : 0.5,
-            }}>
-            Export PDF Report
-          </button>
-          <button
-            onClick={() => exportSummaryCsv(useCases, dims)}
-            disabled={!useCases.length}
-            style={{
-              background: "#0f1520",
-              border: "1px solid #2d3748",
-              color: useCases.length ? "#60a5fa" : "#374151",
-              padding: "6px 12px",
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              opacity: useCases.length ? 1 : 0.5,
-            }}>
-            Export Summary CSV
-          </button>
-          <button
-            onClick={() => exportDetailCsv(useCases, dims)}
-            disabled={!useCases.length}
-            style={{
-              background: "#0f1520",
-              border: "1px solid #2d3748",
-              color: useCases.length ? "#93c5fd" : "#374151",
-              padding: "6px 12px",
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 600,
-              opacity: useCases.length ? 1 : 0.5,
-            }}>
-            Export Detail CSV
-          </button>
+              {[
+                { label: "HTML Report", action: () => exportAnalysisHtml(useCases, dims) },
+                { label: "PDF Report", action: () => exportAnalysisPdf(useCases, dims) },
+                { label: "Summary CSV", action: () => exportSummaryCsv(useCases, dims) },
+                { label: "Detail CSV", action: () => exportDetailCsv(useCases, dims) },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => {
+                    item.action();
+                    exportMenuRef.current?.removeAttribute("open");
+                  }}
+                  style={{
+                    background: "#0a0d17",
+                    border: "1px solid #1f2937",
+                    color: "#cbd5e1",
+                    textAlign: "left",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    padding: "6px 8px",
+                    cursor: "pointer",
+                  }}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </details>
           <button
             onClick={() => setShowDimsPanel(v => !v)}
             style={{

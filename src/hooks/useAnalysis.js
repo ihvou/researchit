@@ -1,5 +1,10 @@
 import { callAnalystAPI, callCriticAPI } from "../lib/api";
 import { safeParseJSON, buildDimRubrics } from "../lib/json";
+import {
+  createAnalysisDebugSession,
+  appendAnalysisDebugEvent,
+  downloadAnalysisDebugSession,
+} from "../lib/debug";
 import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/system";
 
 function buildDimJsonTemplate(dims, condensed = false) {
@@ -63,6 +68,36 @@ function clip(text, max = 260) {
   if (!text) return "";
   if (text.length <= max) return text;
   return `${text.slice(0, max - 3)}...`;
+}
+
+function shortText(value, max = 1800) {
+  if (!value) return "";
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}... [trimmed]`;
+}
+
+function parseWithDiagnostics(rawText, context, debugSession) {
+  try {
+    return safeParseJSON(rawText);
+  } catch (err) {
+    const snippetMatch = err.message.match(/ near: ([\s\S]*)$/);
+    const parseNear = snippetMatch ? snippetMatch[1] : "";
+    appendAnalysisDebugEvent(debugSession, {
+      type: "json_parse_failure",
+      phase: context.phase,
+      attempt: context.attempt,
+      useCaseId: context.useCaseId,
+      analysisMode: context.analysisMode,
+      error: err.message,
+      parseNear,
+      responseLength: rawText?.length || 0,
+      prompt: shortText(context.prompt, 30000),
+      responseExcerpt: shortText(rawText, 6000),
+      response: shortText(rawText, 100000),
+      extra: context.extra || null,
+    });
+    throw err;
+  }
 }
 
 function sourceSummary(sources = []) {
@@ -181,7 +216,7 @@ function absorbMeta(analysisMeta, meta) {
   }
 }
 
-async function runAnalystPass(promptBuilder, analysisMeta, { liveSearch = false, maxTokens = 12000 }) {
+async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSession, { liveSearch = false, maxTokens = 12000 }) {
   try {
     const fullPrompt = promptBuilder(false);
     const fullRes = await callAnalystAPI(
@@ -191,8 +226,31 @@ async function runAnalystPass(promptBuilder, analysisMeta, { liveSearch = false,
       { liveSearch, includeMeta: true }
     );
     absorbMeta(analysisMeta, fullRes.meta);
-    return safeParseJSON(fullRes.text);
+    appendAnalysisDebugEvent(debugSession, {
+      type: "model_response",
+      phase: "analyst",
+      attempt: "full",
+      liveSearch,
+      responseLength: fullRes.text?.length || 0,
+      meta: fullRes.meta || null,
+      prompt: shortText(fullPrompt, 30000),
+      responseExcerpt: shortText(fullRes.text, 6000),
+      response: shortText(fullRes.text, 100000),
+    });
+    return parseWithDiagnostics(fullRes.text, {
+      phase: "analyst",
+      attempt: "full",
+      useCaseId: debugContext.useCaseId,
+      analysisMode: debugContext.analysisMode,
+      prompt: fullPrompt,
+    }, debugSession);
   } catch (parseErr) {
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_retry_triggered",
+      phase: "analyst",
+      attempt: "full",
+      error: parseErr.message || String(parseErr),
+    });
     console.warn("Analyst parse failed, retrying with condensed prompt:", parseErr.message);
     const condensedPrompt = promptBuilder(true);
     const condensedRes = await callAnalystAPI(
@@ -202,15 +260,35 @@ async function runAnalystPass(promptBuilder, analysisMeta, { liveSearch = false,
       { liveSearch, includeMeta: true }
     );
     absorbMeta(analysisMeta, condensedRes.meta);
-    return safeParseJSON(condensedRes.text);
+    appendAnalysisDebugEvent(debugSession, {
+      type: "model_response",
+      phase: "analyst",
+      attempt: "condensed_retry",
+      liveSearch,
+      responseLength: condensedRes.text?.length || 0,
+      meta: condensedRes.meta || null,
+      prompt: shortText(condensedPrompt, 30000),
+      responseExcerpt: shortText(condensedRes.text, 6000),
+      response: shortText(condensedRes.text, 100000),
+    });
+    return parseWithDiagnostics(condensedRes.text, {
+      phase: "analyst",
+      attempt: "condensed_retry",
+      useCaseId: debugContext.useCaseId,
+      analysisMode: debugContext.analysisMode,
+      prompt: condensedPrompt,
+    }, debugSession);
   }
 }
 
-async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta) {
+async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession) {
+  const debugContext = { useCaseId: id, analysisMode: analysisMeta.analysisMode };
   updateUC(id, (u) => ({ ...u, phase: "analyst_baseline" }));
   const baseline = await runAnalystPass(
     (condensed) => buildPhase1Prompt(desc, dims, { liveSearch: false, condensed }),
     analysisMeta,
+    debugContext,
+    debugSession,
     { liveSearch: false, maxTokens: 12000 }
   );
 
@@ -218,6 +296,8 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta) {
   const web = await runAnalystPass(
     (condensed) => buildPhase1Prompt(desc, dims, { liveSearch: true, condensed }),
     analysisMeta,
+    debugContext,
+    debugSession,
     { liveSearch: true, maxTokens: 12000 }
   );
 
@@ -225,6 +305,8 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta) {
   const reconciled = await runAnalystPass(
     (condensed) => buildHybridReconcilePrompt(desc, dims, baseline, web, condensed),
     analysisMeta,
+    debugContext,
+    debugSession,
     { liveSearch: false, maxTokens: 12000 }
   );
 
@@ -235,6 +317,21 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta) {
 export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const analysisMode = options.analysisMode || (options.liveSearch ? "live_search" : "standard");
   const liveSearch = analysisMode === "live_search";
+  const downloadDebugLog = options.downloadDebugLog !== false;
+
+  const debugSession = createAnalysisDebugSession({
+    useCaseId: id,
+    analysisMode,
+    rawInput: desc,
+    dims,
+  });
+  appendAnalysisDebugEvent(debugSession, {
+    type: "analysis_start",
+    phase: "analyst",
+    attempt: "init",
+    analysisMode,
+    liveSearch,
+  });
 
   const debate = [];
   const analysisMeta = {
@@ -246,29 +343,41 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     hybridStats: null,
   };
 
-  // Phase 1: Analyst
-  updateUC(id, (u) => ({ ...u, phase: analysisMode === "hybrid" ? "analyst_baseline" : "analyst" }));
+  let runStatus = "failed";
+  let runError = null;
+  try {
+    // Phase 1: Analyst
+    updateUC(id, (u) => ({ ...u, phase: analysisMode === "hybrid" ? "analyst_baseline" : "analyst" }));
 
-  const p1 = analysisMode === "hybrid"
-    ? await runHybridPhase1(desc, dims, updateUC, id, analysisMeta)
-    : await runAnalystPass(
-      (condensed) => buildPhase1Prompt(desc, dims, { liveSearch, condensed }),
-      analysisMeta,
-      { liveSearch, maxTokens: 12000 }
-    );
+    const p1 = analysisMode === "hybrid"
+      ? await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession)
+      : await runAnalystPass(
+        (condensed) => buildPhase1Prompt(desc, dims, { liveSearch, condensed }),
+        analysisMeta,
+        { useCaseId: id, analysisMode },
+        debugSession,
+        { liveSearch, maxTokens: 12000 }
+      );
 
-  debate.push({ phase: "initial", content: p1 });
-  updateUC(id, (u) => ({
-    ...u,
-    attributes: p1.attributes,
-    dimScores: p1.dimensions,
-    phase: "critic",
-    debate: [...debate],
-    analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
-  }));
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_complete",
+      phase: "analyst",
+      attempt: "final",
+      responseLength: JSON.stringify(p1 || {}).length,
+    });
 
-  // Phase 2: Critic
-  const phase2Prompt = `Review this analyst assessment of the AI use case: "${p1.attributes?.title || desc}"
+    debate.push({ phase: "initial", content: p1 });
+    updateUC(id, (u) => ({
+      ...u,
+      attributes: p1.attributes,
+      dimScores: p1.dimensions,
+      phase: "critic",
+      debate: [...debate],
+      analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+    }));
+
+    // Phase 2: Critic
+    const phase2Prompt = `Review this analyst assessment of the AI use case: "${p1.attributes?.title || desc}"
 
 Analyst scores (outsourcing delivery context):
 ${dims.map((d) => `- ${d.label} [${d.id}]: ${p1.dimensions?.[d.id]?.score}/5 - ${p1.dimensions?.[d.id]?.brief || ""}`).join("\n")}
@@ -287,14 +396,69 @@ Return ONLY this JSON:
   }
 }`;
 
-  const r2 = await callCriticAPI([{ role: "user", content: phase2Prompt }], SYS_CRITIC, 5000);
-  const p2 = safeParseJSON(r2);
+    let r2 = await callCriticAPI([{ role: "user", content: phase2Prompt }], SYS_CRITIC, 5000);
+    appendAnalysisDebugEvent(debugSession, {
+      type: "model_response",
+      phase: "critic",
+      attempt: "full",
+      responseLength: r2?.length || 0,
+      prompt: shortText(phase2Prompt, 30000),
+      responseExcerpt: shortText(r2, 6000),
+      response: shortText(r2, 100000),
+    });
 
-  debate.push({ phase: "critique", content: p2 });
-  updateUC(id, (u) => ({ ...u, critique: p2, phase: "finalizing", debate: [...debate] }));
+    let p2;
+    try {
+      p2 = parseWithDiagnostics(r2, {
+        phase: "critic",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: phase2Prompt,
+      }, debugSession);
+    } catch (err) {
+      console.warn("Critic parse failed, retrying with strict condensed prompt:", err.message);
+      const phase2RetryPrompt = `${phase2Prompt}
 
-  // Phase 3: Analyst responds
-  const phase3Prompt = `You are the analyst who assessed "${p1.attributes?.title || desc}".
+STRICT JSON RULES:
+- Return exactly one valid JSON object. No markdown, no prose before/after.
+- Use double quotes for every key and string value.
+- Escape any internal quote as \\".
+- No trailing commas.
+- Keep "overallFeedback" <= 40 words.
+- Keep each dimension "critique" <= 35 words.
+`;
+      r2 = await callCriticAPI([{ role: "user", content: phase2RetryPrompt }], SYS_CRITIC, 3800);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "model_response",
+        phase: "critic",
+        attempt: "condensed_retry",
+        responseLength: r2?.length || 0,
+        prompt: shortText(phase2RetryPrompt, 30000),
+        responseExcerpt: shortText(r2, 6000),
+        response: shortText(r2, 100000),
+      });
+      p2 = parseWithDiagnostics(r2, {
+        phase: "critic",
+        attempt: "condensed_retry",
+        useCaseId: id,
+        analysisMode,
+        prompt: phase2RetryPrompt,
+      }, debugSession);
+    }
+
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_complete",
+      phase: "critic",
+      attempt: "final",
+      responseLength: JSON.stringify(p2 || {}).length,
+    });
+
+    debate.push({ phase: "critique", content: p2 });
+    updateUC(id, (u) => ({ ...u, critique: p2, phase: "finalizing", debate: [...debate] }));
+
+    // Phase 3: Analyst responds
+    const phase3Prompt = `You are the analyst who assessed "${p1.attributes?.title || desc}".
 
 Your original scores:
 ${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5`).join("\n")}
@@ -324,9 +488,91 @@ Return ONLY this JSON:
   "conclusion": "<2-3 sentence strategic recommendation: should the outsourcing company pursue this, and how?>"
 }`;
 
-  const r3 = await callAnalystAPI([{ role: "user", content: phase3Prompt }], SYS_ANALYST_RESPONSE, 6000);
-  const p3 = safeParseJSON(r3);
+    let r3 = await callAnalystAPI([{ role: "user", content: phase3Prompt }], SYS_ANALYST_RESPONSE, 6000);
+    appendAnalysisDebugEvent(debugSession, {
+      type: "model_response",
+      phase: "finalizing",
+      attempt: "full",
+      responseLength: r3?.length || 0,
+      prompt: shortText(phase3Prompt, 30000),
+      responseExcerpt: shortText(r3, 6000),
+      response: shortText(r3, 100000),
+    });
 
-  debate.push({ phase: "response", content: p3 });
-  updateUC(id, (u) => ({ ...u, finalScores: p3, status: "complete", phase: "complete", debate: [...debate] }));
+    let p3;
+    try {
+      p3 = parseWithDiagnostics(r3, {
+        phase: "finalizing",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: phase3Prompt,
+      }, debugSession);
+    } catch (err) {
+      console.warn("Analyst response parse failed, retrying with strict condensed prompt:", err.message);
+      const phase3RetryPrompt = `${phase3Prompt}
+
+STRICT JSON RULES:
+- Return exactly one valid JSON object. No markdown, no prose before/after.
+- Use double quotes for every key and string value.
+- Escape any internal quote as \\".
+- No trailing commas.
+- Keep "analystResponse" <= 45 words.
+- Keep each dimension "response" <= 45 words.
+- Keep "conclusion" <= 50 words.
+`;
+      r3 = await callAnalystAPI([{ role: "user", content: phase3RetryPrompt }], SYS_ANALYST_RESPONSE, 4200);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "model_response",
+        phase: "finalizing",
+        attempt: "condensed_retry",
+        responseLength: r3?.length || 0,
+        prompt: shortText(phase3RetryPrompt, 30000),
+        responseExcerpt: shortText(r3, 6000),
+        response: shortText(r3, 100000),
+      });
+      p3 = parseWithDiagnostics(r3, {
+        phase: "finalizing",
+        attempt: "condensed_retry",
+        useCaseId: id,
+        analysisMode,
+        prompt: phase3RetryPrompt,
+      }, debugSession);
+    }
+
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_complete",
+      phase: "finalizing",
+      attempt: "final",
+      responseLength: JSON.stringify(p3 || {}).length,
+    });
+
+    debate.push({ phase: "response", content: p3 });
+    updateUC(id, (u) => ({ ...u, finalScores: p3, status: "complete", phase: "complete", debate: [...debate] }));
+    runStatus = "complete";
+  } catch (err) {
+    runError = err;
+    appendAnalysisDebugEvent(debugSession, {
+      type: "analysis_error",
+      phase: "analysis",
+      attempt: "final",
+      error: err.message || String(err),
+    });
+    throw err;
+  } finally {
+    appendAnalysisDebugEvent(debugSession, {
+      type: "analysis_end",
+      phase: "analysis",
+      attempt: "final",
+      status: runStatus,
+      analysisMeta,
+    });
+    if (downloadDebugLog) {
+      downloadAnalysisDebugSession(debugSession, {
+        status: runStatus,
+        error: runError,
+        analysisMeta,
+      });
+    }
+  }
 }
