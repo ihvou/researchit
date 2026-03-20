@@ -1,0 +1,31 @@
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2d3748;
+  border-radius: 3px;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+input,
+textarea {
+  font-family: inherit;
+}
+a:hover {
+  text-decoration: underline;
+}
