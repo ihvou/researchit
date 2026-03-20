@@ -1,4 +1,6 @@
 const MAX_TEXT = 120000;
+const MAX_COMPLETED_SESSIONS = 50;
+const completedSessions = [];
 
 function trimText(value, max = MAX_TEXT) {
   if (value == null) return value;
@@ -50,11 +52,9 @@ export function appendAnalysisDebugEvent(session, event) {
   session.events.push(entry);
 }
 
-export function downloadAnalysisDebugSession(session, { status, error, analysisMeta } = {}) {
-  if (typeof window === "undefined" || !session) return;
-
+function buildCompletedPayload(session, { status, error, analysisMeta } = {}) {
   const finishedAt = new Date().toISOString();
-  const payload = {
+  return {
     ...session,
     finishedAt,
     status: status || "unknown",
@@ -64,8 +64,10 @@ export function downloadAnalysisDebugSession(session, { status, error, analysisM
     } : null,
     analysisMeta: analysisMeta || null,
   };
+}
 
-  const fileName = `analysis-debug-${session.useCaseId || "unknown"}-${timestampTag(finishedAt)}.json`;
+function downloadJsonFile(fileName, payload) {
+  if (typeof window === "undefined") return;
   const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8;" });
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
@@ -75,4 +77,39 @@ export function downloadAnalysisDebugSession(session, { status, error, analysisM
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+export function storeCompletedAnalysisDebugSession(session, meta = {}) {
+  if (!session) return null;
+  const payload = buildCompletedPayload(session, meta);
+  completedSessions.unshift(payload);
+  if (completedSessions.length > MAX_COMPLETED_SESSIONS) {
+    completedSessions.length = MAX_COMPLETED_SESSIONS;
+  }
+  return payload;
+}
+
+export function downloadAnalysisDebugSession(session, meta = {}) {
+  const payload = buildCompletedPayload(session, meta);
+  const fileName = `analysis-debug-${session?.useCaseId || "unknown"}-${timestampTag(payload.finishedAt)}.json`;
+  downloadJsonFile(fileName, payload);
+}
+
+export function downloadDebugLogsBundle() {
+  if (typeof window === "undefined") return false;
+  if (!completedSessions.length) {
+    window.alert("No debug logs captured yet in this browser session.");
+    return false;
+  }
+
+  const exportedAt = new Date().toISOString();
+  const payload = {
+    schemaVersion: 1,
+    exportedAt,
+    sessionCount: completedSessions.length,
+    sessions: completedSessions,
+  };
+  const fileName = `analysis-debug-bundle-${timestampTag(exportedAt)}.json`;
+  downloadJsonFile(fileName, payload);
+  return true;
 }

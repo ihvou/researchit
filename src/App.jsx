@@ -4,6 +4,7 @@ import { getEffectiveScore, calcWeightedScore } from "./lib/scoring";
 import { runAnalysis } from "./hooks/useAnalysis";
 import { handleFollowUp } from "./hooks/useFollowUp";
 import { exportSummaryCsv, exportDetailCsv, exportAnalysisHtml, exportAnalysisPdf } from "./lib/export";
+import { downloadDebugLogsBundle } from "./lib/debug";
 import Spinner from "./components/Spinner";
 import ScorePill from "./components/ScorePill";
 import TotalPill from "./components/TotalPill";
@@ -165,6 +166,7 @@ export default function App() {
                 { label: "PDF Report", action: () => exportAnalysisPdf(useCases, dims) },
                 { label: "Summary CSV", action: () => exportSummaryCsv(useCases, dims) },
                 { label: "Detail CSV", action: () => exportDetailCsv(useCases, dims) },
+                { label: "Logs JSON", action: () => downloadDebugLogsBundle() },
               ].map((item) => (
                 <button
                   key={item.label}

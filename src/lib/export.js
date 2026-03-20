@@ -625,7 +625,7 @@ function reportCss() {
   `;
 }
 
-function buildReportHtml(useCases, dims, { forPrint = false } = {}) {
+function buildReportHtml(useCases, dims) {
   const generated = new Date().toLocaleString();
   const portfolioPage = `
     <article class="page">
@@ -643,18 +643,6 @@ function buildReportHtml(useCases, dims, { forPrint = false } = {}) {
     return `${summary}${dimPages}`;
   }).join("");
 
-  const printScript = forPrint
-    ? `
-      <script>
-        window.addEventListener("load", function () {
-          setTimeout(function () {
-            window.print();
-          }, 250);
-        });
-      </script>
-    `
-    : "";
-
   return `
     <!doctype html>
     <html lang="en">
@@ -669,7 +657,6 @@ function buildReportHtml(useCases, dims, { forPrint = false } = {}) {
           ${portfolioPage}
           ${useCasePages}
         </main>
-        ${printScript}
       </body>
     </html>
   `;
@@ -801,18 +788,60 @@ export function exportDetailCsv(useCases, dims) {
 }
 
 export function exportAnalysisHtml(useCases, dims) {
-  const html = buildReportHtml(useCases, dims, { forPrint: false });
+  const html = buildReportHtml(useCases, dims);
   downloadHtml(`use-case-analysis-${timestampTag()}.html`, html);
 }
 
 export function exportAnalysisPdf(useCases, dims) {
-  const html = buildReportHtml(useCases, dims, { forPrint: true });
-  const popup = window.open("", "_blank", "noopener,noreferrer");
-  if (!popup) {
-    window.alert("Popup blocked. Please allow popups and try again.");
+  const html = buildReportHtml(useCases, dims);
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+  };
+
+  iframe.onload = () => {
+    const win = iframe.contentWindow;
+    if (!win) {
+      cleanup();
+      return;
+    }
+
+    const afterPrint = () => {
+      win.removeEventListener("afterprint", afterPrint);
+      cleanup();
+    };
+    win.addEventListener("afterprint", afterPrint);
+
+    setTimeout(() => {
+      try {
+        win.focus();
+        win.print();
+      } finally {
+        setTimeout(cleanup, 25000);
+      }
+    }, 250);
+  };
+
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) {
+    cleanup();
+    window.alert("Could not initialize PDF print frame.");
     return;
   }
-  popup.document.open();
-  popup.document.write(html);
-  popup.document.close();
+  doc.open();
+  doc.write(html);
+  doc.close();
 }

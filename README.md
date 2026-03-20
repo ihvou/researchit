@@ -9,7 +9,7 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 3. **Phase 2 — Critic** challenges overconfident scores, names real SaaS incumbents and counter-evidence
 4. **Phase 3 — Analyst responds** per dimension — concedes with revised score or defends with new evidence
 5. PM sees a scored table with expandable detail and can **challenge any dimension directly** via a follow-up thread, triggering a new Analyst response
-6. PM selects an analysis mode (**Standard**, **Live search**, or **Hybrid reliability**) and uses the **Export** dropdown for **Summary CSV**, **Detail CSV**, **HTML report**, or **PDF report**
+6. PM selects an analysis mode (**Standard**, **Live search**, or **Hybrid reliability**) and uses the **Export** dropdown for **Summary CSV**, **Detail CSV**, **HTML report**, **PDF report**, or **Logs JSON**
 
 ## Key design decisions
 
@@ -20,7 +20,7 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 - **Live-search with fallback** — Analyst route attempts OpenAI Responses API web search (`web_search` / `web_search_preview`) and falls back to standard completion if unavailable
 - **Hybrid reliability mode** — runs baseline (no web) + web-assisted draft, then reconciles both into a final Phase 1 result to reduce overreaction to weak web snippets
 - **Per-dimension follow-up threads** — PM can challenge any individual dimension score in a collapsible thread; score revisions propagate to the weighted total
-- **Layered exports via one menu** — Summary CSV + Detail CSV for data workflows, plus visual HTML/PDF report pack (portfolio overview, use-case summary pages, and per-dimension pages with citations)
+- **Layered exports via one menu** — Summary CSV + Detail CSV for data workflows, visual HTML/PDF report pack (portfolio overview, use-case summary pages, and per-dimension pages with citations), and on-demand debug log export
 
 ## 11 Scoring Dimensions
 
@@ -110,7 +110,7 @@ Copy `.env.local.example` to `.env.local` and fill in your keys:
 ```
 OPENAI_API_KEY=sk-...           # For OpenAI-based analyst & critic
 ```
-The app automatically downloads a JSON debug log after each analysis run (success or error). Share that file for investigation of parse/model issues.
+Use **Export > Logs JSON** when needed to download captured analysis debug logs (prompt/response excerpts, parse failures, retries) and share that file for investigation.
 
 ## Deploying to Vercel
 
@@ -132,4 +132,4 @@ The `docs/` folder contains the research report this tool was designed around:
 - Live search may fall back to non-search mode when web tool path is unavailable
 - Hybrid reliability mode is slower/costlier because it runs three analyst passes before Critic
 - PDF export relies on browser print capabilities and may look slightly different across browsers
-- LLM JSON can still be malformed; parser now includes stronger repair + debate/final retry, and each run auto-downloads a debug JSON file for diagnostics
+- LLM JSON can still be malformed; parser includes stronger repair + debate/final retry, and debug logs are available on demand via the Export menu

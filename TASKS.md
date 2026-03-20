@@ -26,7 +26,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 **What**: Capture JSON parse failures with prompt/response excerpts and store logs for investigation.
 **Done**:
 - [x] Added analysis-run debug capture (`src/lib/debug.js`) with event timeline + raw response excerpts
-- [x] Added automatic JSON file download after each analysis run (success or failure)
+- [x] Added on-demand JSON debug log export via Export menu
 - [x] Added debate/final parse-failure diagnostics with phase + retry attempt context
 
 ---

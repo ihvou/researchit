@@ -4,6 +4,7 @@ import {
   createAnalysisDebugSession,
   appendAnalysisDebugEvent,
   downloadAnalysisDebugSession,
+  storeCompletedAnalysisDebugSession,
 } from "../lib/debug";
 import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/system";
 
@@ -317,7 +318,7 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
 export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const analysisMode = options.analysisMode || (options.liveSearch ? "live_search" : "standard");
   const liveSearch = analysisMode === "live_search";
-  const downloadDebugLog = options.downloadDebugLog !== false;
+  const downloadDebugLog = !!options.downloadDebugLog;
 
   const debugSession = createAnalysisDebugSession({
     useCaseId: id,
@@ -574,5 +575,10 @@ STRICT JSON RULES:
         analysisMeta,
       });
     }
+    storeCompletedAnalysisDebugSession(debugSession, {
+      status: runStatus,
+      error: runError,
+      analysisMeta,
+    });
   }
 }
