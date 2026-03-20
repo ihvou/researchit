@@ -329,7 +329,6 @@ function renderDimensionPage(uc, d, options = {}) {
   const score = view.effectiveScore;
   const scoreColor = score != null ? dimScoreColor(Number(score)) : "#64748b";
   const title = uc.attributes?.title || uc.rawInput || "Untitled use case";
-  const bigBriefWords = mode === "pdf" ? 22 : 30;
   const riskWords = mode === "pdf" ? 45 : 60;
   const criticWords = mode === "pdf" ? 40 : 52;
   const analystWords = mode === "pdf" ? 46 : 60;
@@ -352,7 +351,7 @@ function renderDimensionPage(uc, d, options = {}) {
       </div>
       <div class="score-brief-band">
         <div class="big-score" style="color:${escapeHtml(scoreColor)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</div>
-        <div class="big-brief">${escapeHtml(limitWords(view.brief || "No brief summary available.", bigBriefWords))}</div>
+        <div class="big-brief">${escapeHtml(view.brief || "No brief summary available.")}</div>
       </div>
       ${section("Full Analysis", `<div class="small-text pre-wrap">${escapeHtml(fullWithSourceLabels)}</div>`)}
       ${section("Risks", `<div class="small-text pre-wrap">${escapeHtml(limitWords(view.risks || "No risk notes provided.", riskWords))}</div>`)}
@@ -606,12 +605,12 @@ function reportCss(mode = "html") {
     .score-brief-band {
       display: grid;
       grid-template-columns: auto 1fr;
-      gap: 12px;
+      gap: 10px;
       align-items: center;
       background: #eff6ff;
       border: 1px solid #bfdbfe;
       border-radius: 12px;
-      padding: ${isPdf ? "10px 12px" : "12px 14px"};
+      padding: ${isPdf ? "9px 11px" : "10px 12px"};
       margin-bottom: 10px;
     }
     .big-score {
@@ -622,8 +621,8 @@ function reportCss(mode = "html") {
       text-align: center;
     }
     .big-brief {
-      font-size: ${isPdf ? "18px" : "20px"};
-      line-height: 1.2;
+      font-size: ${isPdf ? "15px" : "16px"};
+      line-height: 1.18;
       font-weight: 800;
       color: #0f172a;
     }
