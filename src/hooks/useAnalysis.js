@@ -473,9 +473,12 @@ ${dims.map((d) => {
 }).join("\n")}
 
 Respond per dimension: defend your score with NEW evidence not previously cited, OR concede and revise with clear reasoning.
-Also provide a neutral concise brief for each dimension in this exact framing:
-- why the score is above 0 (what value/evidence earns points),
-- why the score is below 5 (what gaps/risks cap the score).
+Also provide a neutral plain-language brief for each dimension:
+- Write 2-3 short sentences.
+- Explain why the score is at this level (why it is not lower).
+- Explain what limits it from a higher score (why it is not higher).
+- Use natural wording; DO NOT use template phrases like "Above 0 because" or "Below 5 because".
+- Keep it understandable for non-domain readers; avoid unexplained jargon/acronyms.
 Do NOT mention the critic or use first-person phrasing.
 
 Return ONLY this JSON:
@@ -486,7 +489,7 @@ Return ONLY this JSON:
     ${dims.map((d) => `"${d.id}": {
       "finalScore": <your final score 1-5 - may differ from original>,
       "scoreChanged": <true if you revised the score>,
-      "brief": "<single sentence, max 32 words, objective: why score >0 and why score <5>",
+      "brief": "<2-3 plain-language sentences, max 65 words, explain why this score is deserved and what prevents a higher score>",
       "response": "<3-4 sentences: concede or defend with new specific evidence>",
       "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
     }`).join(",\n    ")}
@@ -524,7 +527,8 @@ STRICT JSON RULES:
 - Escape any internal quote as \\".
 - No trailing commas.
 - Keep "analystResponse" <= 45 words.
-- Keep each dimension "brief" <= 32 words and objective (why score >0, why <5).
+- Keep each dimension "brief" <= 65 words, 2-3 plain-language sentences, and explain why score is not lower and not higher.
+- Do not use the literal phrasing "Above 0 because" / "Below 5 because".
 - Keep each dimension "response" <= 45 words.
 - Keep "conclusion" <= 50 words.
 `;

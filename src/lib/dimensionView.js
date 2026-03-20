@@ -22,11 +22,28 @@ export function getLatestAnalystFollowUp(thread = []) {
   return null;
 }
 
+function normalizeBriefText(brief, score) {
+  if (!brief) return "";
+  const raw = String(brief).trim();
+  if (!raw) return "";
+
+  const templateMatch = raw.match(/^above\s+0\s+because\s+(.+?)[;,.]\s*below\s+5\s+because\s+(.+)$/i);
+  if (!templateMatch) return raw;
+
+  const supports = templateMatch[1].trim().replace(/[.;\s]+$/g, "");
+  const limits = templateMatch[2].trim().replace(/[.;\s]+$/g, "");
+  const n = Number(score);
+  const scoreLabel = Number.isFinite(n) ? `${n}/5` : "this score";
+
+  return `Score ${scoreLabel} is supported because ${supports}. It is not higher because ${limits}.`;
+}
+
 export function getDimensionView(uc, dimId) {
   const initial = uc.dimScores?.[dimId] || null;
   const debate = uc.finalScores?.dimensions?.[dimId] || null;
   const thread = uc.followUps?.[dimId] || [];
   const followUp = getLatestAnalystFollowUp(thread);
+  const effectiveScore = getEffectiveScore(uc, dimId);
 
   const stage = followUp ? "follow_up" : debate ? "debate" : initial ? "initial" : "none";
   const stageLabel = stage === "follow_up"
@@ -50,8 +67,8 @@ export function getDimensionView(uc, dimId) {
     followUp,
     stage,
     stageLabel,
-    effectiveScore: getEffectiveScore(uc, dimId),
-    brief: briefSourceText,
+    effectiveScore,
+    brief: normalizeBriefText(briefSourceText, effectiveScore),
     full: combinedFull || initial?.full || "",
     risks: initial?.risks || "",
     sources,
