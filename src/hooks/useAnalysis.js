@@ -1,5 +1,6 @@
 import { callAnalystAPI, callCriticAPI } from "../lib/api";
 import { safeParseJSON, buildDimRubrics } from "../lib/json";
+import { buildRubricCalibrationBlock } from "../lib/rubric";
 import {
   createAnalysisDebugSession,
   appendAnalysisDebugEvent,
@@ -208,6 +209,72 @@ function computeHybridDeltaStats(dims, baseline, web, final) {
   };
 }
 
+function buildConsistencyCheckPrompt(desc, dims, p1, p2, p3) {
+  const rubricBlock = buildRubricCalibrationBlock(dims, { wordCap: 12 });
+  const snapshots = dims.map((d) => {
+    const init = p1?.dimensions?.[d.id];
+    const crit = p2?.dimensions?.[d.id];
+    const fin = p3?.dimensions?.[d.id];
+    return [
+      `DIMENSION: ${d.label} [${d.id}]`,
+      `Initial score: ${init?.score ?? "n/a"}/5`,
+      `Critic suggested: ${crit?.suggestedScore ?? "n/a"}/5`,
+      `Final score: ${fin?.finalScore ?? "n/a"}/5`,
+      `Critic critique: "${clip(crit?.critique, 240)}"`,
+      `Final brief: "${clip(fin?.brief, 220)}"`,
+      `Final response: "${clip(fin?.response, 260)}"`,
+    ].join("\n");
+  }).join("\n\n");
+
+  return `Audit final scores for rubric consistency for this use case:
+"${p1?.attributes?.title || desc}"
+
+Rubric calibration reminders (higher score is better):
+${rubricBlock}
+
+Score snapshots:
+${snapshots}
+
+Task:
+- Keep a final score if it is consistent with rubric direction and evidence.
+- If inconsistent, adjust to the nearest defensible integer (1-5).
+- Be conservative: do not raise scores unless evidence clearly supports it.
+
+Return ONLY this JSON:
+{
+  "dimensions": {
+    ${dims.map((d) => `"${d.id}": {"adjustedScore": <1-5>, "changed": <true/false>, "reason": "<max 20 words>"}`).join(",\n    ")}
+  }
+}`;
+}
+
+function applyConsistencyAdjustments(p3, audit, dims) {
+  const out = JSON.parse(JSON.stringify(p3 || {}));
+  out.dimensions = out.dimensions || {};
+  const changed = [];
+
+  dims.forEach((d) => {
+    const current = Number(out.dimensions?.[d.id]?.finalScore);
+    const proposed = Number(audit?.dimensions?.[d.id]?.adjustedScore);
+    if (!Number.isFinite(proposed)) return;
+    const adj = Math.max(1, Math.min(5, Math.round(proposed)));
+    if (!Number.isFinite(current)) {
+      out.dimensions[d.id] = out.dimensions[d.id] || {};
+      out.dimensions[d.id].finalScore = adj;
+      out.dimensions[d.id].scoreChanged = true;
+      changed.push({ id: d.id, from: null, to: adj });
+      return;
+    }
+    if (current !== adj) {
+      out.dimensions[d.id].finalScore = adj;
+      out.dimensions[d.id].scoreChanged = true;
+      changed.push({ id: d.id, from: current, to: adj });
+    }
+  });
+
+  return { adjusted: out, changed };
+}
+
 function absorbMeta(analysisMeta, meta) {
   if (!meta) return;
   if (meta.liveSearchUsed) analysisMeta.liveSearchUsed = true;
@@ -383,6 +450,13 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
 Analyst scores (outsourcing delivery context):
 ${dims.map((d) => `- ${d.label} [${d.id}]: ${p1.dimensions?.[d.id]?.score}/5 - ${p1.dimensions?.[d.id]?.brief || ""}`).join("\n")}
 
+Rubric calibration reminders (higher score is always better):
+${buildRubricCalibrationBlock(dims, { wordCap: 11 })}
+
+Important:
+- If your critique is mainly about higher risk, disruption, complexity, weak evidence, or stronger SaaS pressure, your suggested score should usually stay flat or move lower.
+- Do not invert rubric direction.
+
 Return ONLY this JSON:
 {
   "overallFeedback": "<2-3 sentence overall critique - what is the analyst getting right and wrong?>",
@@ -466,6 +540,9 @@ ${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5`).join("\n")}
 
 Critic's overall feedback: ${p2.overallFeedback || ""}
 
+Rubric calibration reminders (higher score is always better):
+${buildRubricCalibrationBlock(dims, { wordCap: 11 })}
+
 Per-dimension critiques:
 ${dims.map((d) => {
   const c = p2.dimensions?.[d.id];
@@ -479,6 +556,7 @@ Also provide a neutral plain-language brief for each dimension:
 - Explain what limits it from a higher score (why it is not higher).
 - Use natural wording; DO NOT use template phrases like "Above 0 because" or "Below 5 because".
 - Keep it understandable for non-domain readers; avoid unexplained jargon/acronyms.
+- Do not invert rubric direction.
 Do NOT mention the critic or use first-person phrasing.
 
 Return ONLY this JSON:
@@ -551,15 +629,53 @@ STRICT JSON RULES:
       }, debugSession);
     }
 
+    let finalResponse = p3;
+    try {
+      const consistencyPrompt = buildConsistencyCheckPrompt(desc, dims, p1, p2, p3);
+      const r4 = await callAnalystAPI([{ role: "user", content: consistencyPrompt }], SYS_ANALYST_RESPONSE, 3000);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "model_response",
+        phase: "finalizing_consistency",
+        attempt: "full",
+        responseLength: r4?.length || 0,
+        prompt: shortText(consistencyPrompt, 30000),
+        responseExcerpt: shortText(r4, 6000),
+        response: shortText(r4, 100000),
+      });
+      const audit = parseWithDiagnostics(r4, {
+        phase: "finalizing_consistency",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: consistencyPrompt,
+      }, debugSession);
+      const { adjusted, changed } = applyConsistencyAdjustments(p3, audit, dims);
+      finalResponse = adjusted;
+      appendAnalysisDebugEvent(debugSession, {
+        type: "consistency_check_applied",
+        phase: "finalizing_consistency",
+        attempt: "final",
+        changedCount: changed.length,
+        changed,
+      });
+    } catch (consistencyErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "consistency_check_failed",
+        phase: "finalizing_consistency",
+        attempt: "final",
+        error: consistencyErr.message || String(consistencyErr),
+      });
+    }
+
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
       phase: "finalizing",
       attempt: "final",
-      responseLength: JSON.stringify(p3 || {}).length,
+      responseLength: JSON.stringify(finalResponse || {}).length,
     });
 
-    debate.push({ phase: "response", content: p3 });
-    updateUC(id, (u) => ({ ...u, finalScores: p3, status: "complete", phase: "complete", debate: [...debate] }));
+    debate.push({ phase: "response", content: finalResponse });
+    updateUC(id, (u) => ({ ...u, finalScores: finalResponse, status: "complete", phase: "complete", debate: [...debate] }));
     runStatus = "complete";
   } catch (err) {
     runError = err;
