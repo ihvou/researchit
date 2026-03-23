@@ -8,9 +8,11 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 2. **Phase 1 — Analyst** scores the use case across 11 dimensions with brief + full evidence, sources, risks, and a per-dimension confidence level (`high`/`medium`/`low`) + reason
 3. **Phase 2 — Critic** audits Analyst claims with live web search, challenges overconfident scores, and cites current SaaS/incumbent counter-evidence
 4. **Phase 3 — Analyst responds** per dimension — concedes with revised score or defends with new evidence, and updates confidence where needed
-5. PM sees a scored table with expandable detail and can **challenge any dimension directly** via a follow-up thread, triggering a new Analyst response
-6. PM selects an analysis mode (**Hybrid reliability** is default; also **Standard** and **Live search**) and uses the **Export** dropdown for **Summary CSV**, **Detail CSV**, **HTML report**, **PDF report**, or **Logs JSON**
-7. PM can also export a single use case directly from the expanded row panel (**Export HTML** / **Export PDF** / **Export Images ZIP**). Single-use-case HTML is pre-generated after completion and opens in a new browser tab on click.
+5. **Phase 4 — Discover** generates 3-5 related, weakness-targeted use case candidates (focused on low-scoring dimensions)
+6. PM sees a scored table with expandable detail and can **challenge any dimension directly** via a follow-up thread, triggering a new Analyst response
+7. In the **Discover** tab, PM can click **Analyse →** on any candidate to launch a full new analysis row
+8. PM selects an analysis mode (**Hybrid reliability** is default; also **Standard** and **Live search**) and uses the **Export** dropdown for **Summary CSV**, **Detail CSV**, **HTML report**, **PDF report**, or **Logs JSON**
+9. PM can also export a single use case directly from the expanded row panel (**Export HTML** / **Export PDF** / **Export Images ZIP**). Single-use-case HTML is pre-generated after completion and opens in a new browser tab on click.
 
 ## Key design decisions
 
@@ -22,6 +24,7 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 - **Live-search with fallback** — in `live_search` and `hybrid` modes, Analyst and Critic routes attempt OpenAI Responses API web search (`web_search` / `web_search_preview`) and fall back to standard completion if unavailable
 - **Hybrid reliability mode (default)** — runs baseline (no web) + web-assisted draft, then reconciles both into a final Phase 1 result to reduce overreaction to weak web snippets
 - **Per-dimension follow-up threads** — PM can challenge any individual dimension score in a collapsible thread; score revisions propagate to the weighted total
+- **Related use case discovery** — after debate completes, the tool proposes targeted variants designed to improve weakest dimensions, with one-click re-analysis
 - **Layered exports via one menu** — Summary CSV + Detail CSV for data workflows, visual HTML/PDF report pack (portfolio overview, use-case summary pages, and per-dimension pages with citations), single-use-case HTML/PDF export, and on-demand debug log export
 
 ## 11 Scoring Dimensions

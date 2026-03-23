@@ -76,26 +76,31 @@ export default function App() {
     setFuInputs(prev => ({ ...prev, [key]: val }));
   }
 
-  async function startAnalysis() {
-    const desc = inputText.trim();
+  async function runNewAnalysis(descInput, requestedMode = analysisMode, origin = null) {
+    const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
 
-    const id = Date.now().toString();
-    const initialPhase = analysisMode === "hybrid" ? "analyst_baseline" : "analyst";
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const initialPhase = requestedMode === "hybrid" ? "analyst_baseline" : "analyst";
     const blankUC = {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
       attributes: null, dimScores: null, critique: null, finalScores: null,
-      debate: [], followUps: {}, errorMsg: null,
+      debate: [], followUps: {}, errorMsg: null, discover: null, origin,
       analysisMeta: {
-        analysisMode,
-        liveSearchRequested: analysisMode !== "standard",
+        analysisMode: requestedMode,
+        liveSearchRequested: requestedMode !== "standard",
         liveSearchUsed: false,
         webSearchCalls: 0,
         liveSearchFallbackReason: null,
-        criticLiveSearchRequested: analysisMode !== "standard",
+        criticLiveSearchRequested: requestedMode !== "standard",
         criticLiveSearchUsed: false,
         criticWebSearchCalls: 0,
         criticLiveSearchFallbackReason: null,
+        discoveryLiveSearchRequested: requestedMode !== "standard",
+        discoveryLiveSearchUsed: false,
+        discoveryWebSearchCalls: 0,
+        discoveryLiveSearchFallbackReason: null,
+        discoverCandidatesCount: 0,
         hybridStats: null,
       },
     };
@@ -107,12 +112,18 @@ export default function App() {
     setGlobalAnalyzing(true);
 
     try {
-      await runAnalysis(desc, dims, updateUC, id, { analysisMode });
+      await runAnalysis(desc, dims, updateUC, id, { analysisMode: requestedMode });
     } catch (err) {
       console.error("Analysis error:", err);
       updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: err.message }));
     }
     setGlobalAnalyzing(false);
+  }
+
+  async function startAnalysis() {
+    const desc = inputText.trim();
+    if (!desc || globalAnalyzing) return;
+    await runNewAnalysis(desc, analysisMode, null);
   }
 
   async function onFollowUp(ucId, dimId, challenge) {
@@ -146,6 +157,19 @@ export default function App() {
     setFuLoading(prev => ({ ...prev, [fuKey]: false }));
   }
 
+  async function onAnalyzeRelated(parentUc, candidate) {
+    const desc = (candidate?.analysisInput || candidate?.title || "").trim();
+    if (!desc || globalAnalyzing) return;
+    const inheritedMode = parentUc?.analysisMeta?.analysisMode || analysisMode;
+    const origin = {
+      type: "discover",
+      fromUseCaseId: parentUc?.id,
+      fromUseCaseTitle: parentUc?.attributes?.title || parentUc?.rawInput || "",
+      candidateTitle: candidate?.title || "",
+    };
+    await runNewAnalysis(desc, inheritedMode, origin);
+  }
+
   const activeDims = dims.filter(d => d.enabled);
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
 
@@ -156,6 +180,7 @@ export default function App() {
     analyst_reconcile: "Reconcile pass...",
     critic: "Critic review...",
     finalizing: "Debate...",
+    discover: "Discover...",
   };
 
   return (
@@ -466,6 +491,13 @@ export default function App() {
                               {uc.attributes.vertical}
                             </span>
                           )}
+                          {uc.origin?.type === "discover" && (
+                            <span
+                              title={`Suggested from: ${uc.origin?.fromUseCaseTitle || "related analysis"}`}
+                              style={{ fontSize: 11, color: "#0f7a55", background: "#ebf8f0", border: "1px solid #b8e8d0", padding: "1px 7px", borderRadius: 4 }}>
+                              related
+                            </span>
+                          )}
                           {uc.analysisMeta?.analysisMode === "hybrid" && (
                             <span
                               title={uc.analysisMeta?.hybridStats
@@ -533,6 +565,8 @@ export default function App() {
                             onFuInputChange={setFuInput}
                             fuLoading={fuLoading}
                             onFollowUp={onFollowUp}
+                            onAnalyzeRelated={(candidate) => onAnalyzeRelated(uc, candidate)}
+                            globalAnalyzing={globalAnalyzing}
                             getPrebuiltHtml={(id) => prebuiltSingleHtmlRef.current[id]?.html || ""}
                           />
                         </td>

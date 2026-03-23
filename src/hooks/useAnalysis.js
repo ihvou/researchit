@@ -242,6 +242,124 @@ Return ONLY this JSON:
 }`;
 }
 
+function finalScoreForDim(finalScores, dimId) {
+  const n = Number(finalScores?.dimensions?.[dimId]?.finalScore);
+  return Number.isFinite(n) ? n : null;
+}
+
+function weakestDimensions(dims, finalScores, count = 4) {
+  return dims
+    .map((d) => ({
+      dim: d,
+      score: finalScoreForDim(finalScores, d.id),
+    }))
+    .filter((item) => item.score != null)
+    .sort((a, b) => a.score - b.score || b.dim.weight - a.dim.weight)
+    .slice(0, count);
+}
+
+function buildDiscoverPrompt(desc, dims, p1, finalScores) {
+  const weakest = weakestDimensions(dims, finalScores, 4);
+  const weakestBlock = weakest.length
+    ? weakest.map((item) => `- ${item.dim.label} [${item.dim.id}]: ${item.score}/5`).join("\n")
+    : "- No weak dimensions available";
+
+  const snapshotBlock = dims.map((d) => {
+    const init = p1?.dimensions?.[d.id];
+    const fin = finalScores?.dimensions?.[d.id];
+    const score = fin?.finalScore ?? init?.score ?? "n/a";
+    const brief = fin?.brief || init?.brief || "";
+    return `- ${d.label} [${d.id}]: ${score}/5 | "${clip(brief, 180)}"`;
+  }).join("\n");
+
+  return `Generate related AI use case candidates for an outsourcing AI delivery company.
+
+Original use case:
+"${desc}"
+
+Final analysis conclusion:
+${finalScores?.conclusion || "No conclusion provided."}
+
+Final dimension snapshots:
+${snapshotBlock}
+
+Weakest dimensions to target first:
+${weakestBlock}
+
+Task:
+- Generate 3 to 5 related candidates that are specifically designed to improve weak dimensions.
+- Do NOT return generic adjacent ideas; each candidate must clearly address weaknesses above.
+- Prefer narrower, actionable variants where custom delivery opportunity is stronger.
+- If Build vs. Buy is weak, suggest niches with weaker SaaS dominance.
+- If Evidence is weak, suggest variants with stronger deployment track record.
+- If Change Management is weak, suggest variants with lower workflow disruption.
+
+For each candidate include:
+- title
+- analysisInput: 1-2 sentence prompt that can be analyzed directly
+- rationale: one sentence explaining why it should score better
+- expectedImprovedDimensions: 2-3 dimension IDs from this allowed list: ${dims.map((d) => d.id).join(", ")}
+
+Return ONLY this JSON:
+{
+  "candidates": [
+    {
+      "title": "<short candidate title>",
+      "analysisInput": "<1-2 sentence use case prompt>",
+      "rationale": "<one sentence: why this is likely to score better>",
+      "expectedImprovedDimensions": ["<id1>", "<id2>", "<id3 optional>"]
+    }
+  ]
+}`;
+}
+
+function cleanDiscoverText(value, fallback = "") {
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function uniqueIds(values = []) {
+  return [...new Set(values)];
+}
+
+function normalizeDiscoverCandidates(payload, dims, weakestFallbackIds = []) {
+  const allowed = new Set(dims.map((d) => d.id));
+  const seen = new Set();
+  const source = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  const out = [];
+
+  for (const raw of source) {
+    if (!raw || typeof raw !== "object") continue;
+    const title = cleanDiscoverText(raw.title);
+    const analysisInput = cleanDiscoverText(raw.analysisInput, title);
+    const rationale = cleanDiscoverText(raw.rationale);
+    if (!title || !analysisInput || !rationale) continue;
+
+    const key = title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const expected = uniqueIds((raw.expectedImprovedDimensions || [])
+      .map((v) => String(v || "").trim())
+      .filter((id) => allowed.has(id)))
+      .slice(0, 3);
+
+    const expectedImprovedDimensions = expected.length
+      ? expected
+      : weakestFallbackIds.slice(0, 3);
+
+    out.push({
+      title: title.slice(0, 120),
+      analysisInput: analysisInput.slice(0, 360),
+      rationale: rationale.slice(0, 220),
+      expectedImprovedDimensions,
+    });
+    if (out.length >= 5) break;
+  }
+
+  return out;
+}
+
 function calcWeightedFromDimScores(dimScores, dims) {
   let wSum = 0;
   let wTotal = 0;
@@ -399,6 +517,15 @@ function absorbCriticMeta(analysisMeta, meta) {
   }
 }
 
+function absorbDiscoveryMeta(analysisMeta, meta) {
+  if (!meta) return;
+  if (meta.liveSearchUsed) analysisMeta.discoveryLiveSearchUsed = true;
+  analysisMeta.discoveryWebSearchCalls += Number(meta.webSearchCalls || 0);
+  if (!analysisMeta.discoveryLiveSearchFallbackReason && meta.liveSearchFallbackReason) {
+    analysisMeta.discoveryLiveSearchFallbackReason = meta.liveSearchFallbackReason;
+  }
+}
+
 async function runAnalystPass(promptBuilder, dims, analysisMeta, debugContext, debugSession, { liveSearch = false, maxTokens = 12000 }) {
   try {
     const fullPrompt = promptBuilder(false);
@@ -531,6 +658,11 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     criticLiveSearchUsed: false,
     criticWebSearchCalls: 0,
     criticLiveSearchFallbackReason: null,
+    discoveryLiveSearchRequested: analysisMode !== "standard",
+    discoveryLiveSearchUsed: false,
+    discoveryWebSearchCalls: 0,
+    discoveryLiveSearchFallbackReason: null,
+    discoverCandidatesCount: 0,
     hybridStats: null,
   };
 
@@ -804,7 +936,126 @@ STRICT JSON RULES:
     });
 
     debate.push({ phase: "response", content: finalResponse });
-    updateUC(id, (u) => ({ ...u, finalScores: finalResponse, status: "complete", phase: "complete", debate: [...debate] }));
+    updateUC(id, (u) => ({
+      ...u,
+      finalScores: finalResponse,
+      phase: "discover",
+      debate: [...debate],
+      analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+    }));
+
+    // Phase 4: Related use case discovery (non-blocking)
+    const discoveryLiveSearch = analysisMode !== "standard";
+    let discover = {
+      candidates: [],
+      error: null,
+      generatedAt: new Date().toISOString(),
+    };
+    const weakestFallbackIds = weakestDimensions(dims, finalResponse, 3).map((item) => item.dim.id);
+    const discoverPrompt = buildDiscoverPrompt(desc, dims, p1, finalResponse);
+
+    try {
+      const discoverRes = await callAnalystAPI(
+        [{ role: "user", content: discoverPrompt }],
+        SYS_ANALYST,
+        3200,
+        { liveSearch: discoveryLiveSearch, includeMeta: true }
+      );
+      absorbDiscoveryMeta(analysisMeta, discoverRes.meta);
+      let r5 = discoverRes.text;
+      appendAnalysisDebugEvent(debugSession, {
+        type: "model_response",
+        phase: "discover",
+        attempt: "full",
+        liveSearch: discoveryLiveSearch,
+        responseLength: r5?.length || 0,
+        meta: discoverRes.meta || null,
+        prompt: shortText(discoverPrompt, 30000),
+        responseExcerpt: shortText(r5, 6000),
+        response: shortText(r5, 100000),
+      });
+
+      let p5;
+      try {
+        p5 = parseWithDiagnostics(r5, {
+          phase: "discover",
+          attempt: "full",
+          useCaseId: id,
+          analysisMode,
+          prompt: discoverPrompt,
+        }, debugSession);
+      } catch (err) {
+        const discoverRetryPrompt = `${discoverPrompt}
+
+STRICT JSON RULES:
+- Return exactly one valid JSON object. No markdown, no prose before/after.
+- Use double quotes for every key and string value.
+- Escape any internal quote as \\".
+- No trailing commas.
+- Keep title <= 12 words.
+- Keep rationale <= 24 words.
+- Keep analysisInput <= 45 words.
+`;
+        const discoverRetryRes = await callAnalystAPI(
+          [{ role: "user", content: discoverRetryPrompt }],
+          SYS_ANALYST,
+          2400,
+          { liveSearch: discoveryLiveSearch, includeMeta: true }
+        );
+        absorbDiscoveryMeta(analysisMeta, discoverRetryRes.meta);
+        r5 = discoverRetryRes.text;
+        appendAnalysisDebugEvent(debugSession, {
+          type: "model_response",
+          phase: "discover",
+          attempt: "condensed_retry",
+          liveSearch: discoveryLiveSearch,
+          responseLength: r5?.length || 0,
+          meta: discoverRetryRes.meta || null,
+          prompt: shortText(discoverRetryPrompt, 30000),
+          responseExcerpt: shortText(r5, 6000),
+          response: shortText(r5, 100000),
+        });
+        p5 = parseWithDiagnostics(r5, {
+          phase: "discover",
+          attempt: "condensed_retry",
+          useCaseId: id,
+          analysisMode,
+          prompt: discoverRetryPrompt,
+        }, debugSession);
+      }
+
+      const candidates = normalizeDiscoverCandidates(p5, dims, weakestFallbackIds);
+      discover = {
+        ...discover,
+        candidates,
+      };
+      analysisMeta.discoverCandidatesCount = candidates.length;
+      appendAnalysisDebugEvent(debugSession, {
+        type: "phase_complete",
+        phase: "discover",
+        attempt: "final",
+        candidateCount: candidates.length,
+      });
+    } catch (discoverErr) {
+      discover.error = discoverErr.message || String(discoverErr);
+      analysisMeta.discoverCandidatesCount = 0;
+      appendAnalysisDebugEvent(debugSession, {
+        type: "discover_failed",
+        phase: "discover",
+        attempt: "final",
+        error: discover.error,
+      });
+    }
+
+    updateUC(id, (u) => ({
+      ...u,
+      finalScores: finalResponse,
+      discover,
+      status: "complete",
+      phase: "complete",
+      debate: [...debate],
+      analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+    }));
     runStatus = "complete";
   } catch (err) {
     runError = err;

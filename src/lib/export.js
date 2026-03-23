@@ -309,12 +309,14 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
     const dimIcon = dimensionScoreIcon(score);
     return `
       <div class="dim-card">
-        <div class="dim-head">
+        <div class="dim-head-inline">
           <span class="dim-name">${dimIcon} ${escapeHtml(d.label)}</span>
-          <span class="dim-weight">${escapeHtml(d.weight)}%</span>
+          <span class="dim-inline-meta">
+            <span class="dim-score-inline" style="color:${escapeHtml(color)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</span>
+            ${confidenceChipHtml(view.confidence, view.confidenceReason, true)}
+            <span class="dim-weight">${escapeHtml(d.weight)}%</span>
+          </span>
         </div>
-        <div class="dim-confidence-line">${confidenceChipHtml(view.confidence, view.confidenceReason, true)}</div>
-        <div class="dim-score" style="color:${escapeHtml(color)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</div>
         <div class="dim-brief">${escapeHtml(limitWords(view.brief || "No brief available.", briefWordCap))}</div>
         ${citationBadgesHtml((view.sources || []).slice(0, 1))}
       </div>
@@ -604,16 +606,18 @@ function reportCss(mode = "html") {
       line-height: 1.35;
       font-weight: 600;
     }
-    .dim-head {
+    .dim-head-inline {
       display: flex;
       justify-content: space-between;
-      align-items: baseline;
+      align-items: center;
       gap: 8px;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
-    .dim-confidence-line {
-      min-height: 20px;
-      margin-bottom: 2px;
+    .dim-inline-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
     }
     .confidence-chip {
       display: inline-flex;
@@ -631,17 +635,23 @@ function reportCss(mode = "html") {
       font-size: 12px;
       font-weight: 700;
       color: #0f172a;
+      line-height: 1.15;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .dim-weight {
-      font-size: 12px;
+      font-size: 11px;
       color: #64748b;
       font-weight: 700;
     }
-    .dim-score {
-      font-size: ${isPdf ? "20px" : "22px"};
+    .dim-score-inline {
+      font-size: ${isPdf ? "17px" : "19px"};
       font-weight: 800;
       line-height: 1;
-      margin-bottom: 2px;
+      min-width: ${isPdf ? "36px" : "40px"};
+      text-align: right;
     }
     .dim-brief {
       font-size: ${isPdf ? "10px" : "11px"};

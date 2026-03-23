@@ -36,6 +36,12 @@ const HYBRID_FLOW = [
     detail: "Resolves critique, updates score cards, and prepares final per-dimension rationale.",
   },
   {
+    key: "discover",
+    phase: "discover",
+    title: "Related use case discovery",
+    detail: "Generates sharper variants targeting weak dimensions, using the same mode as the parent analysis.",
+  },
+  {
     key: "complete",
     phase: "complete",
     title: "Final report ready",
@@ -69,6 +75,12 @@ const STANDARD_FLOW = [
     detail: "Scores and reasoning are updated after debate.",
   },
   {
+    key: "discover",
+    phase: "discover",
+    title: "Related use case discovery",
+    detail: "Generates weak-point-targeted variants without live web search in Standard mode.",
+  },
+  {
     key: "complete",
     phase: "complete",
     title: "Final report ready",
@@ -100,6 +112,12 @@ const LIVE_FLOW = [
     phase: "finalizing",
     title: "Analyst LLM final response",
     detail: "Scores and reasoning are updated after debate.",
+  },
+  {
+    key: "discover",
+    phase: "discover",
+    title: "Related use case discovery",
+    detail: "Generates weak-point-targeted variants with live web support in this mode.",
   },
   {
     key: "complete",

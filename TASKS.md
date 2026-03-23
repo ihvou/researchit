@@ -138,3 +138,4 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 - [x] HTML + PDF visual report export with citation-first layout
 - [x] Per-dimension confidence levels (`high`/`medium`/`low`) with reason + UI flags (table, overview, dimensions)
 - [x] Critic live web-audit (claim verification + contradiction search) with fallback-safe routing
+- [x] Related Use Case Discovery pass + Discover tab with one-click "Analyse →" candidate re-analysis

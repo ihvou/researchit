@@ -3,6 +3,7 @@ import Spinner from "./Spinner";
 import OverviewTab from "./OverviewTab";
 import DimensionsTab from "./DimensionsTab";
 import DebateTab from "./DebateTab";
+import DiscoverTab from "./DiscoverTab";
 import ProgressTab from "./ProgressTab";
 import { openSingleUseCaseHtml, exportSingleUseCasePdf, exportSingleUseCaseImagesZip } from "../lib/export";
 
@@ -13,6 +14,7 @@ const PHASE_LABELS = {
   analyst_reconcile: "Analyst reconcile pass...",
   critic: "Critic reviewing...",
   finalizing: "Analyst responding...",
+  discover: "Discovering related use cases...",
 };
 
 export default function ExpandedRow({
@@ -23,6 +25,8 @@ export default function ExpandedRow({
   fuLoading,
   onFollowUp,
   getPrebuiltHtml,
+  onAnalyzeRelated,
+  globalAnalyzing = false,
 }) {
   const [tab, setTab] = useState("progress");
 
@@ -43,6 +47,7 @@ export default function ExpandedRow({
           { id: "overview", label: "Overview" },
           { id: "dimensions", label: "Dimensions" },
           { id: "debate", label: "Debate & Challenges" },
+          { id: "discover", label: "Discover" },
           { id: "progress", label: "Progress" },
         ].map(t => (
           <button
@@ -148,6 +153,11 @@ export default function ExpandedRow({
                   : "fallback"}
               </span>
             )}
+            {uc.analysisMeta?.discoverCandidatesCount != null && uc.status === "complete" && (
+              <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
+                | Discover: {uc.analysisMeta.discoverCandidatesCount} candidates
+              </span>
+            )}
             {uc.analysisMeta?.criticLiveSearchFallbackReason && (
               <span title={uc.analysisMeta.criticLiveSearchFallbackReason} style={{ marginLeft: 6, color: "#935f00" }}>
                 | Critic fallback reason available
@@ -170,6 +180,14 @@ export default function ExpandedRow({
             uc={uc} dims={dims}
             fuInputs={fuInputs} onFuInputChange={onFuInputChange}
             fuLoading={fuLoading} onFollowUp={onFollowUp}
+          />
+        )}
+        {tab === "discover" && (
+          <DiscoverTab
+            uc={uc}
+            dims={dims}
+            onAnalyzeRelated={(candidate) => onAnalyzeRelated?.(candidate)}
+            globalAnalyzing={globalAnalyzing}
           />
         )}
         {tab === "progress" && <ProgressTab uc={uc} />}
