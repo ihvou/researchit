@@ -17,7 +17,10 @@ export async function callAnalystAPI(messages, systemPrompt, maxTokens = 5000, o
   return data.text;
 }
 
-export async function callCriticAPI(messages, systemPrompt, maxTokens = 5000) {
-  const data = await callRoute("/api/critic", messages, systemPrompt, maxTokens);
+export async function callCriticAPI(messages, systemPrompt, maxTokens = 5000, options = {}) {
+  const data = await callRoute("/api/critic", messages, systemPrompt, maxTokens, {
+    liveSearch: !!options.liveSearch,
+  });
+  if (options.includeMeta) return data;
   return data.text;
 }

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { DEFAULT_DIMS } from "./constants/dimensions";
-import { getEffectiveScore, calcWeightedScore } from "./lib/scoring";
+import { calcWeightedScore } from "./lib/scoring";
+import { getDimensionView } from "./lib/dimensionView";
 import { runAnalysis } from "./hooks/useAnalysis";
 import { handleFollowUp } from "./hooks/useFollowUp";
 import { exportSummaryCsv, exportDetailCsv, exportAnalysisHtml, exportAnalysisPdf } from "./lib/export";
@@ -10,6 +11,7 @@ import ScorePill from "./components/ScorePill";
 import TotalPill from "./components/TotalPill";
 import DimRubricToggle from "./components/DimRubricToggle";
 import ExpandedRow from "./components/ExpandedRow";
+import ConfidenceBadge from "./components/ConfidenceBadge";
 
 export default function App() {
   const [useCases, setUseCases] = useState([]);
@@ -51,6 +53,10 @@ export default function App() {
         liveSearchUsed: false,
         webSearchCalls: 0,
         liveSearchFallbackReason: null,
+        criticLiveSearchRequested: true,
+        criticLiveSearchUsed: false,
+        criticWebSearchCalls: 0,
+        criticLiveSearchFallbackReason: null,
         hybridStats: null,
       },
     };
@@ -109,7 +115,7 @@ export default function App() {
     analyst_baseline: "Baseline pass...",
     analyst_web: "Web pass...",
     analyst_reconcile: "Reconcile pass...",
-    critic: "Critique...",
+    critic: "Critic audit...",
     finalizing: "Debate...",
   };
 
@@ -325,15 +331,15 @@ export default function App() {
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🛡️</span>
-                <span><strong>Critic LLM:</strong> pressure-tests assumptions and challenges weak or inflated scoring.</span>
+                <span><strong>Critic LLM:</strong> audits Analyst claims, checks vendor reality, and challenges weak scoring with live web evidence.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🌐</span>
-                <span><strong>Evidence layer:</strong> combines model memory with optional web-search LLM passes, then shows sources per dimension.</span>
+                <span><strong>Evidence layer:</strong> combines model memory with web-search passes and shows auditable sources per dimension.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">📈</span>
-                <span><strong>Prioritization:</strong> computes a weighted score across 11 dimensions and normalizes it into a portfolio-ready priority score.</span>
+                <span><strong>Prioritization:</strong> computes weighted scores across 11 dimensions and tags each one with high/medium/low confidence.</span>
               </li>
             </ul>
             <div style={{
@@ -442,17 +448,27 @@ export default function App() {
                         </div>
                       </td>
                       {activeDims.map(d => {
-                        const sc = getEffectiveScore(uc, d.id);
-                        const initScore = uc.dimScores?.[d.id]?.score;
-                        const finScore = uc.finalScores?.dimensions?.[d.id]?.finalScore;
+                        const view = getDimensionView(uc, d.id);
+                        const sc = view.effectiveScore;
+                        const initScore = view.initial?.score;
+                        const finScore = view.debate?.finalScore;
                         const revised = finScore != null && initScore != null && finScore !== initScore;
                         return (
                           <td key={d.id} style={{ textAlign: "center", padding: "12px 4px" }}>
-                            {sc != null
-                              ? <ScorePill score={sc} revised={revised} />
-                              : uc.status === "analyzing"
-                                ? <Spinner size={10} />
-                                : <span style={{ color: "var(--ck-muted)" }}>-</span>}
+                            {sc != null ? (
+                              <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, alignItems: "center" }}>
+                                <ScorePill score={sc} revised={revised} />
+                                <ConfidenceBadge
+                                  level={view.confidence}
+                                  reason={view.confidenceReason}
+                                  compact={true}
+                                />
+                              </div>
+                            ) : uc.status === "analyzing" ? (
+                              <Spinner size={10} />
+                            ) : (
+                              <span style={{ color: "var(--ck-muted)" }}>-</span>
+                            )}
                           </td>
                         );
                       })}

@@ -26,8 +26,8 @@ const HYBRID_FLOW = [
   {
     key: "critic",
     phase: "critic",
-    title: "Critic LLM review",
-    detail: "A skeptical model challenges scores, assumptions, and market realism.",
+    title: "Critic LLM web-audit review",
+    detail: "A skeptical model verifies analyst claims with live search and challenges weak assumptions.",
   },
   {
     key: "finalizing",
@@ -59,8 +59,8 @@ const STANDARD_FLOW = [
   {
     key: "critic",
     phase: "critic",
-    title: "Critic LLM review",
-    detail: "A skeptical model challenges scores and assumptions.",
+    title: "Critic LLM web-audit review",
+    detail: "A skeptical model verifies analyst claims with live search and challenges weak assumptions.",
   },
   {
     key: "finalizing",
@@ -92,8 +92,8 @@ const LIVE_FLOW = [
   {
     key: "critic",
     phase: "critic",
-    title: "Critic LLM review",
-    detail: "A skeptical model challenges scores and assumptions.",
+    title: "Critic LLM web-audit review",
+    detail: "A skeptical model verifies analyst claims with live search and challenges weak assumptions.",
   },
   {
     key: "finalizing",

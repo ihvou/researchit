@@ -11,7 +11,7 @@ const PHASE_LABELS = {
   analyst_baseline: "Analyst baseline pass...",
   analyst_web: "Analyst web pass...",
   analyst_reconcile: "Analyst reconcile pass...",
-  critic: "Critic reviewing...",
+  critic: "Critic web-auditing...",
   finalizing: "Analyst responding...",
 };
 
@@ -130,6 +130,18 @@ export default function ExpandedRow({ uc, dims, fuInputs, onFuInputChange, fuLoa
             {uc.analysisMeta?.hybridStats && (
               <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
                 | Hybrid delta: {uc.analysisMeta.hybridStats.changedFromBaseline} dims
+              </span>
+            )}
+            {uc.analysisMeta?.criticLiveSearchRequested && (
+              <span style={{ marginLeft: 6, color: "var(--ck-blue)" }}>
+                | Critic audit search {uc.analysisMeta?.criticLiveSearchUsed
+                  ? `on (${uc.analysisMeta?.criticWebSearchCalls || 0} calls)`
+                  : "fallback"}
+              </span>
+            )}
+            {uc.analysisMeta?.criticLiveSearchFallbackReason && (
+              <span title={uc.analysisMeta.criticLiveSearchFallbackReason} style={{ marginLeft: 6, color: "#935f00" }}>
+                | Critic fallback reason available
               </span>
             )}
           </div>

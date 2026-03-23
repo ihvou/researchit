@@ -1,6 +1,7 @@
 import ScorePill from "./ScorePill";
 import DimRubricToggle from "./DimRubricToggle";
 import EvidenceBlock from "./EvidenceBlock";
+import ConfidenceBadge from "./ConfidenceBadge";
 import { getDimensionView } from "../lib/dimensionView";
 
 export default function DimensionsTab({ uc, dims }) {
@@ -22,6 +23,7 @@ export default function DimensionsTab({ uc, dims }) {
           <div key={d.id} style={{ background: "var(--ck-surface)", borderRadius: 10, padding: "14px 16px", border: `1px solid ${d.enabled ? "var(--ck-line-strong)" : "var(--ck-line)"}`, opacity: d.enabled ? 1 : 0.6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
               <span style={{ fontWeight: 700, color: "var(--ck-text)", fontSize: 13 }}>{d.label}</span>
+              <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} />
               {!d.enabled && (
                 <span style={{ fontSize: 10, color: "var(--ck-muted)", background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", padding: "1px 6px", borderRadius: 4 }}>excluded from score</span>
               )}

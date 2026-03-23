@@ -1,6 +1,8 @@
 import ScorePill from "./ScorePill";
 import SourcesList from "./SourcesList";
 import FollowUpThread from "./FollowUpThread";
+import ConfidenceBadge from "./ConfidenceBadge";
+import { getDimensionView } from "../lib/dimensionView";
 
 export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoading, onFollowUp }) {
   const phaseInitial = uc.debate?.find(d => d.phase === "initial");
@@ -43,7 +45,8 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {dims.map(d => {
-          const initScore = uc.dimScores?.[d.id]?.score;
+          const view = getDimensionView(uc, d.id);
+          const initScore = view.initial?.score;
           const crit = phaseCritique?.content?.dimensions?.[d.id];
           const fin = phaseResponse?.content?.dimensions?.[d.id];
           const thread = uc.followUps?.[d.id] || [];
@@ -57,6 +60,7 @@ export default function DebateTab({ uc, dims, fuInputs, onFuInputChange, fuLoadi
             <div key={d.id} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--ck-surface-soft)" }}>
                 <span style={{ fontWeight: 700, color: "var(--ck-text)", fontSize: 13 }}>{d.label}</span>
+                <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
                 <div style={{ marginLeft: "auto", display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
                   <ScorePill score={initScore} />
                   {fin?.finalScore != null && fin.finalScore !== initScore && (

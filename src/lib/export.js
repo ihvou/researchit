@@ -94,6 +94,8 @@ function getScoreColumns(dims) {
   dims.forEach((d) => {
     cols.push(`${d.id}_score`);
     cols.push(`${d.id}_stage`);
+    cols.push(`${d.id}_confidence`);
+    cols.push(`${d.id}_confidence_reason`);
   });
   return cols;
 }
@@ -200,6 +202,40 @@ function sectionIcon(label) {
   return map[label] || "📌";
 }
 
+function normalizeConfidence(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.startsWith("h")) return "high";
+  if (raw.startsWith("m")) return "medium";
+  if (raw.startsWith("l")) return "low";
+  return "";
+}
+
+function confidenceLabel(level) {
+  if (level === "high") return "High confidence";
+  if (level === "medium") return "Medium confidence";
+  if (level === "low") return "Low confidence";
+  return "Confidence unavailable";
+}
+
+function confidenceChipHtml(level, reason = "", compact = false) {
+  const normalized = normalizeConfidence(level);
+  if (!normalized) return "";
+  const tone = normalized === "high"
+    ? { bg: "#e9f8ee", line: "#b3e3c4", ink: "#12805c", icon: "🟢", short: "High" }
+    : normalized === "medium"
+      ? { bg: "#fff6e8", line: "#f5d7a3", ink: "#9a6507", icon: "🟡", short: "Med" }
+      : { bg: "#fff1ef", line: "#f3c2ba", ink: "#b42318", icon: "🔴", short: "Low" };
+  const title = reason ? `${confidenceLabel(normalized)}: ${reason}` : confidenceLabel(normalized);
+
+  return `
+    <span class="confidence-chip" title="${escapeHtml(title)}" style="background:${tone.bg};border-color:${tone.line};color:${tone.ink};">
+      <span>${tone.icon}</span>
+      <span>${escapeHtml(compact ? tone.short : `${tone.short} confidence`)}</span>
+    </span>
+  `;
+}
+
 function sourceChipArrayHtml(sources = [], options = {}) {
   const { maxItems = 12 } = options;
   if (!sources?.length) return "<div class=\"muted\">No sources available.</div>";
@@ -277,6 +313,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
           <span class="dim-name">${dimIcon} ${escapeHtml(d.label)}</span>
           <span class="dim-weight">${escapeHtml(d.weight)}%</span>
         </div>
+        <div class="dim-confidence-line">${confidenceChipHtml(view.confidence, view.confidenceReason, true)}</div>
         <div class="dim-score" style="color:${escapeHtml(color)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</div>
         <div class="dim-brief">${escapeHtml(limitWords(view.brief || "No brief available.", briefWordCap))}</div>
         ${citationBadgesHtml((view.sources || []).slice(0, 1))}
@@ -294,6 +331,9 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
     `
     : "";
   const dimCards = `${baseCards}${fillerCard}`;
+  const lowConfidence = dims
+    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id) }))
+    .filter((item) => item.view.confidence === "low");
 
   const summaryMeta = `
     <div class="meta-grid">
@@ -305,6 +345,14 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       <div><span class="meta-k">Priority Tier</span><span class="meta-v">${escapeHtml(tier)}</span></div>
     </div>
   `;
+  const lowConfidenceBanner = lowConfidence.length
+    ? `
+      <div class="confidence-alert">
+        <strong>🔴 Low-confidence dimensions: ${lowConfidence.length}</strong>
+        <span>${escapeHtml(lowConfidence.map((item) => item.dim.label).join(", "))}</span>
+      </div>
+    `
+    : "";
 
   return `
     <article class="page summary-page">
@@ -316,6 +364,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       </div>
       <div class="summary-desc">${escapeHtml(limitWords(uc.attributes?.expandedDescription || uc.rawInput || "", summaryWordCap))}</div>
       ${summaryMeta}
+      ${lowConfidenceBanner}
       ${section("Strategic Conclusion", `<div class="small-text">${escapeHtml(limitWords(uc.finalScores?.conclusion || "No conclusion available yet.", conclusionWordCap))}</div>`)}
       <div class="dim-grid">${dimCards}</div>
     </article>
@@ -347,7 +396,10 @@ function renderDimensionPage(uc, d, options = {}) {
       <div class="page-topline">🧩 ${escapeHtml(title)} - ${escapeHtml(d.label)}</div>
       <div class="dim-page-head">
         <h2 class="dim-page-title">${dimensionScoreIcon(score)} ${escapeHtml(d.label)}</h2>
-        <div class="dim-page-weight">⚖️ Weight ${escapeHtml(d.weight)}%</div>
+        <div class="dim-page-meta">
+          <div class="dim-page-weight">⚖️ Weight ${escapeHtml(d.weight)}%</div>
+          ${confidenceChipHtml(view.confidence, view.confidenceReason)}
+        </div>
       </div>
       <div class="score-brief-band">
         <div class="big-score" style="color:${escapeHtml(scoreColor)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</div>
@@ -508,6 +560,19 @@ function reportCss(mode = "html") {
       font-weight: 600;
       color: #0f172a;
     }
+    .confidence-alert {
+      margin-bottom: 8px;
+      border: 1px solid #f5d7a3;
+      background: #fff6e8;
+      color: #7a4a00;
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-size: 11px;
+      line-height: 1.35;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
     .dim-grid {
       margin-top: 8px;
       display: grid;
@@ -545,6 +610,22 @@ function reportCss(mode = "html") {
       align-items: baseline;
       gap: 8px;
       margin-bottom: 5px;
+    }
+    .dim-confidence-line {
+      min-height: 20px;
+      margin-bottom: 2px;
+    }
+    .confidence-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.2;
+      padding: 2px 7px;
+      white-space: nowrap;
     }
     .dim-name {
       font-size: 12px;
@@ -591,6 +672,12 @@ function reportCss(mode = "html") {
       align-items: flex-end;
       gap: 10px;
       margin-bottom: 10px;
+    }
+    .dim-page-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 5px;
     }
     .dim-page-title {
       margin: 0;
@@ -871,6 +958,8 @@ export function exportSummaryCsv(useCases, dims) {
       const view = getDimensionView(uc, d.id);
       row[`${d.id}_score`] = view.effectiveScore ?? "";
       row[`${d.id}_stage`] = view.stageLabel;
+      row[`${d.id}_confidence`] = view.confidence || "";
+      row[`${d.id}_confidence_reason`] = view.confidenceReason || "";
     });
     return row;
   });
@@ -892,6 +981,8 @@ export function exportDetailCsv(useCases, dims) {
     "debate_score",
     "follow_up_score",
     "update_stage",
+    "confidence_level",
+    "confidence_reason",
     "brief",
     "full_analysis",
     "risks",
@@ -926,6 +1017,8 @@ export function exportDetailCsv(useCases, dims) {
         debate_score: view.debate?.finalScore ?? "",
         follow_up_score: view.followUp?.newScore ?? "",
         update_stage: view.stageLabel,
+        confidence_level: view.confidence || "",
+        confidence_reason: view.confidenceReason || "",
         brief: view.brief,
         full_analysis: view.full,
         risks: view.risks,

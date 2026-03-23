@@ -1,11 +1,16 @@
 import ScorePill from "./ScorePill";
 import TotalPill from "./TotalPill";
+import ConfidenceBadge from "./ConfidenceBadge";
 import { calcWeightedScore } from "../lib/scoring";
 import { getDimensionView } from "../lib/dimensionView";
 
 export default function OverviewTab({ uc, dims }) {
   const a = uc.attributes;
   const score = calcWeightedScore(uc, dims);
+  const lowConfidence = dims
+    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id) }))
+    .filter((item) => item.view.confidence === "low");
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 }}>
       <div style={{ background: "var(--ck-surface)", borderRadius: 10, padding: "14px 16px", border: "1px solid var(--ck-line)" }}>
@@ -41,6 +46,16 @@ export default function OverviewTab({ uc, dims }) {
         <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
           Score Summary
         </div>
+        {!!lowConfidence.length && (
+          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 8, border: "1px solid #f5d7a3", background: "#fff6e8" }}>
+            <div style={{ fontSize: 11, color: "#935f00", fontWeight: 700, marginBottom: 2 }}>
+              Low-confidence dimensions flagged: {lowConfidence.length}
+            </div>
+            <div style={{ fontSize: 11, color: "#7a4a00", lineHeight: 1.45 }}>
+              Hover each confidence badge for the reason. These are the best candidates for a quick manual verification pass.
+            </div>
+          </div>
+        )}
         {dims.map(d => {
           const view = getDimensionView(uc, d.id);
           const initScore = view.initial?.score;
@@ -57,6 +72,9 @@ export default function OverviewTab({ uc, dims }) {
                   {d.label}
                   <span style={{ color: "var(--ck-muted)", fontWeight: 400, fontSize: 10, marginLeft: 4 }}>{d.weight}%</span>
                   {!d.enabled && <span style={{ color: "var(--ck-muted)", fontSize: 10, marginLeft: 4 }}>(excluded)</span>}
+                </div>
+                <div style={{ marginTop: 2 }}>
+                  <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
                 </div>
                 {view.brief && (
                   <div style={{ fontSize: 11, color: "var(--ck-muted)", marginTop: 1, lineHeight: 1.4 }}>

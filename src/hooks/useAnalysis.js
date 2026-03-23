@@ -1,6 +1,7 @@
 import { callAnalystAPI, callCriticAPI } from "../lib/api";
 import { safeParseJSON, buildDimRubrics } from "../lib/json";
 import { buildRubricCalibrationBlock } from "../lib/rubric";
+import { normalizeConfidenceLevel } from "../lib/confidence";
 import {
   createAnalysisDebugSession,
   appendAnalysisDebugEvent,
@@ -12,13 +13,15 @@ import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/system
 function buildDimJsonTemplate(dims, condensed = false) {
   if (condensed) {
     return dims.map((d) =>
-      `"${d.id}": {"score": <1-5>, "brief": "<max 20 words>", "full": "<1 paragraph, max 80 words, cite 1-2 named companies>", "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}], "risks": "<max 20 words>"}`
+      `"${d.id}": {"score": <1-5>, "confidence": "<high|medium|low>", "confidenceReason": "<1 sentence>", "brief": "<max 20 words>", "full": "<1 paragraph, max 80 words, cite 1-2 named companies>", "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}], "risks": "<max 20 words>"}`
     ).join(",\n    ");
   }
 
   return dims.map((d) =>
     `"${d.id}": {
       "score": <integer 1-5 based on rubric>,
+      "confidence": "<high|medium|low>",
+      "confidenceReason": "<1 sentence: why confidence is at this level>",
       "brief": "<single sentence summary, max 25 words>",
       "full": "<detailed 3-5 paragraph analysis citing named companies with specific metrics, trends, and market context>",
       "sources": [
@@ -56,6 +59,11 @@ function buildPhase1Prompt(desc, dims, { liveSearch = false, condensed = false }
 
 SCORING DIMENSIONS - use the rubric below to score each one 1-5:
 ${buildDimRubrics(dims)}${liveSearchBlock}
+CONFIDENCE CALIBRATION (required for every dimension):
+- High: named deployments with verifiable metrics and strong market familiarity.
+- Medium: deployments exist but evidence is sparse, self-reported, or rapidly changing.
+- Low: fewer than two verifiable deployments, underrepresented vertical, or heavy extrapolation.
+
 Return ONLY this JSON structure, fully populated for ALL 11 dimension IDs (${dims.map((d) => d.id).join(", ")}):
 
 {
@@ -117,10 +125,14 @@ function buildHybridReconcilePrompt(desc, dims, baseline, web, condensed = false
     return [
       `DIMENSION: ${d.label} [${d.id}]`,
       `BASELINE score: ${b.score ?? "n/a"}/5`,
+      `BASELINE confidence: ${b.confidence || "n/a"}`,
+      `BASELINE confidence reason: "${clip(b.confidenceReason, 150)}"`,
       `BASELINE brief: "${clip(b.brief, 180)}"`,
       `BASELINE sources: ${sourceSummary(b.sources)}`,
       `BASELINE full snapshot: "${clip(b.full, 320)}"`,
       `WEB score: ${w.score ?? "n/a"}/5`,
+      `WEB confidence: ${w.confidence || "n/a"}`,
+      `WEB confidence reason: "${clip(w.confidenceReason, 150)}"`,
       `WEB brief: "${clip(w.brief, 180)}"`,
       `WEB sources: ${sourceSummary(w.sources)}`,
       `WEB full snapshot: "${clip(w.full, 320)}"`,
@@ -159,12 +171,66 @@ Rules:
 - Do not overreact to weak web snippets.
 - If changing a baseline score by 2+ points, ensure the full reasoning clearly justifies the change.
 - Keep the same outsourcing-delivery framing.
+- Output confidence and confidenceReason for every dimension using the same high/medium/low calibration:
+  - High: named deployments with verifiable metrics and strong market familiarity.
+  - Medium: deployments exist but evidence is sparse, self-reported, or rapidly changing.
+  - Low: fewer than two verifiable deployments, underrepresented vertical, or heavy extrapolation.
 
 Return ONLY this JSON structure, fully populated for ALL 11 dimension IDs (${dims.map((d) => d.id).join(", ")}):
 {
   "attributes": ${attrsTemplate},
   "dimensions": {
     ${dimTemplate}
+  }
+}`;
+}
+
+function buildCriticAuditPrompt(desc, dims, p1) {
+  const evidenceSnapshots = dims.map((d) => {
+    const dim = p1?.dimensions?.[d.id] || {};
+    return [
+      `DIMENSION: ${d.label} [${d.id}]`,
+      `Analyst score: ${dim.score ?? "n/a"}/5`,
+      `Analyst confidence: ${dim.confidence || "n/a"}`,
+      `Analyst brief: "${clip(dim.brief, 190)}"`,
+      `Analyst full snapshot: "${clip(dim.full, 320)}"`,
+      `Analyst cited sources: ${sourceSummary(dim.sources)}`,
+    ].join("\n");
+  }).join("\n\n");
+
+  return `Audit this analyst assessment of the AI use case: "${p1?.attributes?.title || desc}"
+
+Use case description:
+"${desc}"
+
+Your mandate (web-audit critic, not a second analyst):
+- Use live web search to verify the analyst's specific claims, numbers, and named deployments.
+- Search for contradictory or newer evidence that weakens overconfident claims.
+- Verify current SaaS/incumbent vendor position before citing them.
+- If evidence is stale, unverified, or contradictory, state that explicitly and suggest a lower or unchanged score.
+- Do not re-research from scratch; focus on auditing and stress-testing analyst evidence.
+
+Analyst evidence snapshots:
+${evidenceSnapshots}
+
+Rubric calibration reminders (higher score is always better):
+${buildRubricCalibrationBlock(dims, { wordCap: 11 })}
+
+Important:
+- If your critique is mainly about higher risk, disruption, complexity, weak evidence, or stronger SaaS pressure, your suggested score should usually stay flat or move lower.
+- Do not invert rubric direction.
+
+Return ONLY this JSON:
+{
+  "overallFeedback": "<2-3 sentence overall critique - what is verified, what is weak or outdated?>",
+  "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}],
+  "dimensions": {
+    ${dims.map((d) => `"${d.id}": {
+      "scoreJustified": <true if score is defensible, false if over/under-stated>,
+      "suggestedScore": <your suggested score 1-5>,
+      "critique": "<2-3 sentences: audit findings, contradictions, incumbent pressure, or unverified analyst claims>",
+      "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
+    }`).join(",\n    ")}
   }
 }`;
 }
@@ -275,7 +341,40 @@ function applyConsistencyAdjustments(p3, audit, dims) {
   return { adjusted: out, changed };
 }
 
-function absorbMeta(analysisMeta, meta) {
+function ensureDimensionConfidence(payload, dims) {
+  const out = payload || {};
+  out.dimensions = out.dimensions || {};
+
+  dims.forEach((d) => {
+    out.dimensions[d.id] = out.dimensions[d.id] || {};
+    const dim = out.dimensions[d.id];
+    const normalized = normalizeConfidenceLevel(dim.confidence);
+    const sourceCount = Array.isArray(dim.sources)
+      ? dim.sources.filter((s) => s && (s.url || s.name || s.quote)).length
+      : 0;
+
+    if (normalized) {
+      dim.confidence = normalized;
+    } else {
+      dim.confidence = sourceCount >= 3 ? "medium" : "low";
+    }
+
+    const reason = typeof dim.confidenceReason === "string" ? dim.confidenceReason.trim() : "";
+    if (reason) {
+      dim.confidenceReason = reason;
+    } else if (dim.confidence === "high") {
+      dim.confidenceReason = "Strong named evidence is available, but key claims should still be spot-checked.";
+    } else if (dim.confidence === "medium") {
+      dim.confidenceReason = "Evidence exists, but verification depth is uneven across available sources.";
+    } else {
+      dim.confidenceReason = "Confidence is limited because explicit, verifiable deployments are sparse.";
+    }
+  });
+
+  return out;
+}
+
+function absorbAnalystMeta(analysisMeta, meta) {
   if (!meta) return;
   if (meta.liveSearchUsed) analysisMeta.liveSearchUsed = true;
   analysisMeta.webSearchCalls += Number(meta.webSearchCalls || 0);
@@ -284,7 +383,16 @@ function absorbMeta(analysisMeta, meta) {
   }
 }
 
-async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSession, { liveSearch = false, maxTokens = 12000 }) {
+function absorbCriticMeta(analysisMeta, meta) {
+  if (!meta) return;
+  if (meta.liveSearchUsed) analysisMeta.criticLiveSearchUsed = true;
+  analysisMeta.criticWebSearchCalls += Number(meta.webSearchCalls || 0);
+  if (!analysisMeta.criticLiveSearchFallbackReason && meta.liveSearchFallbackReason) {
+    analysisMeta.criticLiveSearchFallbackReason = meta.liveSearchFallbackReason;
+  }
+}
+
+async function runAnalystPass(promptBuilder, dims, analysisMeta, debugContext, debugSession, { liveSearch = false, maxTokens = 12000 }) {
   try {
     const fullPrompt = promptBuilder(false);
     const fullRes = await callAnalystAPI(
@@ -293,7 +401,7 @@ async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSe
       maxTokens,
       { liveSearch, includeMeta: true }
     );
-    absorbMeta(analysisMeta, fullRes.meta);
+    absorbAnalystMeta(analysisMeta, fullRes.meta);
     appendAnalysisDebugEvent(debugSession, {
       type: "model_response",
       phase: "analyst",
@@ -305,13 +413,13 @@ async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSe
       responseExcerpt: shortText(fullRes.text, 6000),
       response: shortText(fullRes.text, 100000),
     });
-    return parseWithDiagnostics(fullRes.text, {
+    return ensureDimensionConfidence(parseWithDiagnostics(fullRes.text, {
       phase: "analyst",
       attempt: "full",
       useCaseId: debugContext.useCaseId,
       analysisMode: debugContext.analysisMode,
       prompt: fullPrompt,
-    }, debugSession);
+    }, debugSession), dims);
   } catch (parseErr) {
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_retry_triggered",
@@ -327,7 +435,7 @@ async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSe
       8000,
       { liveSearch, includeMeta: true }
     );
-    absorbMeta(analysisMeta, condensedRes.meta);
+    absorbAnalystMeta(analysisMeta, condensedRes.meta);
     appendAnalysisDebugEvent(debugSession, {
       type: "model_response",
       phase: "analyst",
@@ -339,13 +447,13 @@ async function runAnalystPass(promptBuilder, analysisMeta, debugContext, debugSe
       responseExcerpt: shortText(condensedRes.text, 6000),
       response: shortText(condensedRes.text, 100000),
     });
-    return parseWithDiagnostics(condensedRes.text, {
+    return ensureDimensionConfidence(parseWithDiagnostics(condensedRes.text, {
       phase: "analyst",
       attempt: "condensed_retry",
       useCaseId: debugContext.useCaseId,
       analysisMode: debugContext.analysisMode,
       prompt: condensedPrompt,
-    }, debugSession);
+    }, debugSession), dims);
   }
 }
 
@@ -354,6 +462,7 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
   updateUC(id, (u) => ({ ...u, phase: "analyst_baseline" }));
   const baseline = await runAnalystPass(
     (condensed) => buildPhase1Prompt(desc, dims, { liveSearch: false, condensed }),
+    dims,
     analysisMeta,
     debugContext,
     debugSession,
@@ -363,6 +472,7 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
   updateUC(id, (u) => ({ ...u, phase: "analyst_web" }));
   const web = await runAnalystPass(
     (condensed) => buildPhase1Prompt(desc, dims, { liveSearch: true, condensed }),
+    dims,
     analysisMeta,
     debugContext,
     debugSession,
@@ -372,6 +482,7 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
   updateUC(id, (u) => ({ ...u, phase: "analyst_reconcile" }));
   const reconciled = await runAnalystPass(
     (condensed) => buildHybridReconcilePrompt(desc, dims, baseline, web, condensed),
+    dims,
     analysisMeta,
     debugContext,
     debugSession,
@@ -408,6 +519,10 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     liveSearchUsed: false,
     webSearchCalls: 0,
     liveSearchFallbackReason: null,
+    criticLiveSearchRequested: true,
+    criticLiveSearchUsed: false,
+    criticWebSearchCalls: 0,
+    criticLiveSearchFallbackReason: null,
     hybridStats: null,
   };
 
@@ -421,6 +536,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
       ? await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession)
       : await runAnalystPass(
         (condensed) => buildPhase1Prompt(desc, dims, { liveSearch, condensed }),
+        dims,
         analysisMeta,
         { useCaseId: id, analysisMode },
         debugSession,
@@ -445,38 +561,22 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     }));
 
     // Phase 2: Critic
-    const phase2Prompt = `Review this analyst assessment of the AI use case: "${p1.attributes?.title || desc}"
+    const phase2Prompt = buildCriticAuditPrompt(desc, dims, p1);
 
-Analyst scores (outsourcing delivery context):
-${dims.map((d) => `- ${d.label} [${d.id}]: ${p1.dimensions?.[d.id]?.score}/5 - ${p1.dimensions?.[d.id]?.brief || ""}`).join("\n")}
-
-Rubric calibration reminders (higher score is always better):
-${buildRubricCalibrationBlock(dims, { wordCap: 11 })}
-
-Important:
-- If your critique is mainly about higher risk, disruption, complexity, weak evidence, or stronger SaaS pressure, your suggested score should usually stay flat or move lower.
-- Do not invert rubric direction.
-
-Return ONLY this JSON:
-{
-  "overallFeedback": "<2-3 sentence overall critique - what is the analyst getting right and wrong?>",
-  "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}],
-  "dimensions": {
-    ${dims.map((d) => `"${d.id}": {
-      "scoreJustified": <true if score is defensible, false if over/under-stated>,
-      "suggestedScore": <your suggested score 1-5>,
-      "critique": "<2-3 sentences: specific challenge with named incumbent vendors, SaaS products, or counter-evidence>",
-      "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
-    }`).join(",\n    ")}
-  }
-}`;
-
-    let r2 = await callCriticAPI([{ role: "user", content: phase2Prompt }], SYS_CRITIC, 5000);
+    const criticRes = await callCriticAPI(
+      [{ role: "user", content: phase2Prompt }],
+      SYS_CRITIC,
+      6000,
+      { liveSearch: true, includeMeta: true }
+    );
+    absorbCriticMeta(analysisMeta, criticRes.meta);
+    let r2 = criticRes.text;
     appendAnalysisDebugEvent(debugSession, {
       type: "model_response",
       phase: "critic",
       attempt: "full",
       responseLength: r2?.length || 0,
+      meta: criticRes.meta || null,
       prompt: shortText(phase2Prompt, 30000),
       responseExcerpt: shortText(r2, 6000),
       response: shortText(r2, 100000),
@@ -503,12 +603,20 @@ STRICT JSON RULES:
 - Keep "overallFeedback" <= 40 words.
 - Keep each dimension "critique" <= 35 words.
 `;
-      r2 = await callCriticAPI([{ role: "user", content: phase2RetryPrompt }], SYS_CRITIC, 3800);
+      const criticRetryRes = await callCriticAPI(
+        [{ role: "user", content: phase2RetryPrompt }],
+        SYS_CRITIC,
+        4200,
+        { liveSearch: true, includeMeta: true }
+      );
+      absorbCriticMeta(analysisMeta, criticRetryRes.meta);
+      r2 = criticRetryRes.text;
       appendAnalysisDebugEvent(debugSession, {
         type: "model_response",
         phase: "critic",
         attempt: "condensed_retry",
         responseLength: r2?.length || 0,
+        meta: criticRetryRes.meta || null,
         prompt: shortText(phase2RetryPrompt, 30000),
         responseExcerpt: shortText(r2, 6000),
         response: shortText(r2, 100000),
@@ -530,13 +638,19 @@ STRICT JSON RULES:
     });
 
     debate.push({ phase: "critique", content: p2 });
-    updateUC(id, (u) => ({ ...u, critique: p2, phase: "finalizing", debate: [...debate] }));
+    updateUC(id, (u) => ({
+      ...u,
+      critique: p2,
+      phase: "finalizing",
+      debate: [...debate],
+      analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+    }));
 
     // Phase 3: Analyst responds
     const phase3Prompt = `You are the analyst who assessed "${p1.attributes?.title || desc}".
 
-Your original scores:
-${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5`).join("\n")}
+Your original scores and confidence:
+${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5 (${p1.dimensions?.[d.id]?.confidence || "n/a"} confidence)`).join("\n")}
 
 Critic's overall feedback: ${p2.overallFeedback || ""}
 
@@ -557,6 +671,10 @@ Also provide a neutral plain-language brief for each dimension:
 - Use natural wording; DO NOT use template phrases like "Above 0 because" or "Below 5 because".
 - Keep it understandable for non-domain readers; avoid unexplained jargon/acronyms.
 - Do not invert rubric direction.
+Set confidence for every dimension:
+- High: named deployments with verifiable metrics and strong market familiarity.
+- Medium: deployments exist but evidence is sparse, self-reported, or moving fast.
+- Low: fewer than two verifiable deployments, underrepresented vertical, or heavy extrapolation.
 Do NOT mention the critic or use first-person phrasing.
 
 Return ONLY this JSON:
@@ -567,6 +685,8 @@ Return ONLY this JSON:
     ${dims.map((d) => `"${d.id}": {
       "finalScore": <your final score 1-5 - may differ from original>,
       "scoreChanged": <true if you revised the score>,
+      "confidence": "<high|medium|low>",
+      "confidenceReason": "<1 sentence explaining confidence level>",
       "brief": "<2-3 plain-language sentences, max 65 words, explain why this score is deserved and what prevents a higher score>",
       "response": "<3-4 sentences: concede or defend with new specific evidence>",
       "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
@@ -588,13 +708,13 @@ Return ONLY this JSON:
 
     let p3;
     try {
-      p3 = parseWithDiagnostics(r3, {
+      p3 = ensureDimensionConfidence(parseWithDiagnostics(r3, {
         phase: "finalizing",
         attempt: "full",
         useCaseId: id,
         analysisMode,
         prompt: phase3Prompt,
-      }, debugSession);
+      }, debugSession), dims);
     } catch (err) {
       console.warn("Analyst response parse failed, retrying with strict condensed prompt:", err.message);
       const phase3RetryPrompt = `${phase3Prompt}
@@ -605,6 +725,7 @@ STRICT JSON RULES:
 - Escape any internal quote as \\".
 - No trailing commas.
 - Keep "analystResponse" <= 45 words.
+- Keep each dimension "confidenceReason" <= 24 words.
 - Keep each dimension "brief" <= 65 words, 2-3 plain-language sentences, and explain why score is not lower and not higher.
 - Do not use the literal phrasing "Above 0 because" / "Below 5 because".
 - Keep each dimension "response" <= 45 words.
@@ -620,13 +741,13 @@ STRICT JSON RULES:
         responseExcerpt: shortText(r3, 6000),
         response: shortText(r3, 100000),
       });
-      p3 = parseWithDiagnostics(r3, {
+      p3 = ensureDimensionConfidence(parseWithDiagnostics(r3, {
         phase: "finalizing",
         attempt: "condensed_retry",
         useCaseId: id,
         analysisMode,
         prompt: phase3RetryPrompt,
-      }, debugSession);
+      }, debugSession), dims);
     }
 
     let finalResponse = p3;
@@ -650,7 +771,7 @@ STRICT JSON RULES:
         prompt: consistencyPrompt,
       }, debugSession);
       const { adjusted, changed } = applyConsistencyAdjustments(p3, audit, dims);
-      finalResponse = adjusted;
+      finalResponse = ensureDimensionConfidence(adjusted, dims);
       appendAnalysisDebugEvent(debugSession, {
         type: "consistency_check_applied",
         phase: "finalizing_consistency",

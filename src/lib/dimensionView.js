@@ -1,4 +1,5 @@
 import { getEffectiveScore } from "./scoring";
+import { normalizeConfidenceLevel } from "./confidence";
 
 function mergeSources(...lists) {
   const merged = [];
@@ -60,6 +61,13 @@ export function getDimensionView(uc, dimId) {
 
   const briefSourceText = followUp?.brief || debate?.brief || initial?.brief || "";
   const sources = mergeSources(followUp?.sources, debate?.sources, initial?.sources);
+  const confidence = normalizeConfidenceLevel(
+    followUp?.confidence || debate?.confidence || initial?.confidence
+  );
+  const confidenceReason = followUp?.confidenceReason
+    || debate?.confidenceReason
+    || initial?.confidenceReason
+    || "";
 
   return {
     initial,
@@ -72,6 +80,8 @@ export function getDimensionView(uc, dimId) {
     full: combinedFull || initial?.full || "",
     risks: initial?.risks || "",
     sources,
+    confidence,
+    confidenceReason,
   };
 }
 

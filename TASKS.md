@@ -43,10 +43,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 - [x] Added per-use-case metadata (`liveSearchRequested`, `liveSearchUsed`, `webSearchCalls`) in UI + CSV export
 - [x] Implemented hybrid reliability flow (baseline pass + web pass + reconcile pass)
 - [x] Added hybrid delta metadata (`changedFromBaseline`, weighted baseline/web/reconciled) to UI + summary export
+- [x] Added Critic live web-audit path with fallback + metadata (`criticLiveSearchUsed`, `criticWebSearchCalls`)
 **Impact**: Sources become verifiable real URLs instead of training-knowledge-based citations. Scores reflect current market (new entrants, recent acquisitions, pricing changes).
 **Remaining**:
 - [ ] Add recency/source quality badges per citation
-- [ ] Decide whether Critic/Follow-up phases should optionally use live search too
+- [ ] Decide whether Follow-up challenge responses should optionally use live search too
 
 ### [~] T-05: Multi-model LLM support
 **What**: Support different LLM providers for Analyst and Critic roles.
@@ -135,3 +136,5 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 - [x] T-05 (partial): Multi-model support — separated analyst/critic API routes, both on OpenAI temporarily
 - [x] Summary + detail CSV export
 - [x] HTML + PDF visual report export with citation-first layout
+- [x] Per-dimension confidence levels (`high`/`medium`/`low`) with reason + UI flags (table, overview, dimensions)
+- [x] Critic live web-audit (claim verification + contradiction search) with fallback-safe routing
