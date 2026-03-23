@@ -92,7 +92,7 @@ export default function App() {
         liveSearchUsed: false,
         webSearchCalls: 0,
         liveSearchFallbackReason: null,
-        criticLiveSearchRequested: true,
+        criticLiveSearchRequested: analysisMode !== "standard",
         criticLiveSearchUsed: false,
         criticWebSearchCalls: 0,
         criticLiveSearchFallbackReason: null,
@@ -154,7 +154,7 @@ export default function App() {
     analyst_baseline: "Baseline pass...",
     analyst_web: "Web pass...",
     analyst_reconcile: "Reconcile pass...",
-    critic: "Critic audit...",
+    critic: "Critic review...",
     finalizing: "Debate...",
   };
 
@@ -370,7 +370,7 @@ export default function App() {
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🛡️</span>
-                <span><strong>Critic LLM:</strong> audits Analyst claims, checks vendor reality, and challenges weak scoring with live web evidence.</span>
+                <span><strong>Critic LLM:</strong> audits Analyst claims and challenges weak scoring; in web-enabled modes it verifies with live search.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">🌐</span>

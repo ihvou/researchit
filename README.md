@@ -19,7 +19,7 @@ Internal tool for an AI outsourcing company's product & GTM team. Takes a vague 
 - **Evidence-first scoring** — Analyst is instructed to cite named companies with specific metrics and real URLs. Scores without evidence are invalid
 - **Per-dimension confidence** — every dimension includes confidence level (`high`/`medium`/`low`) plus a reason; low-confidence dimensions are visually flagged for manual validation
 - **Multi-LLM debate** — Analyst uses OpenAI GPT-5.4 mini, Critic uses OpenAI GPT-5.4. Architecture supports swapping to other models via the API route layer
-- **Live-search with fallback** — Analyst and Critic routes attempt OpenAI Responses API web search (`web_search` / `web_search_preview`) and fall back to standard completion if unavailable
+- **Live-search with fallback** — in `live_search` and `hybrid` modes, Analyst and Critic routes attempt OpenAI Responses API web search (`web_search` / `web_search_preview`) and fall back to standard completion if unavailable
 - **Hybrid reliability mode (default)** — runs baseline (no web) + web-assisted draft, then reconciles both into a final Phase 1 result to reduce overreaction to weak web snippets
 - **Per-dimension follow-up threads** — PM can challenge any individual dimension score in a collapsible thread; score revisions propagate to the weighted total
 - **Layered exports via one menu** — Summary CSV + Detail CSV for data workflows, visual HTML/PDF report pack (portfolio overview, use-case summary pages, and per-dimension pages with citations), single-use-case HTML/PDF export, and on-demand debug log export
@@ -50,7 +50,7 @@ Each dimension has a 5-level rubric with named examples baked into both the LLM 
 - **API routes**: Vercel serverless functions in `api/` — keys stay server-side
 - **Analysis modes**: Standard (no web), Live search (web-assisted), Hybrid reliability (baseline + web + reconciliation)
 - **Optional live web**: OpenAI Responses API tools for analyst Phase 1 when mode uses web
-- **Critic web audit**: Critic phase always runs with live web-search attempt (with fallback), focused on verifying/challenging Analyst claims
+- **Critic web audit**: Critic phase uses live web-search attempt in web-enabled modes (`live_search`, `hybrid`) and runs memory-only critique in `standard`
 - **Report exports**: Client-side HTML report generation and browser print-to-PDF flow (no extra backend required)
 - **Styling**: Inline styles, light theme aligned to Ciklum visual language
 - **Storage**: In-memory React state only — no persistence between sessions yet

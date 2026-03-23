@@ -185,7 +185,7 @@ Return ONLY this JSON structure, fully populated for ALL 11 dimension IDs (${dim
 }`;
 }
 
-function buildCriticAuditPrompt(desc, dims, p1) {
+function buildCriticPrompt(desc, dims, p1, { liveSearch = false } = {}) {
   const evidenceSnapshots = dims.map((d) => {
     const dim = p1?.dimensions?.[d.id] || {};
     return [
@@ -197,18 +197,25 @@ function buildCriticAuditPrompt(desc, dims, p1) {
       `Analyst cited sources: ${sourceSummary(dim.sources)}`,
     ].join("\n");
   }).join("\n\n");
+  const mandateBlock = liveSearch
+    ? `Your mandate (web-audit critic, not a second analyst):
+- Use live web search to verify the analyst's specific claims, numbers, and named deployments.
+- Search for contradictory or newer evidence that weakens overconfident claims.
+- Verify current SaaS/incumbent vendor position before citing them.
+- If evidence is stale, unverified, or contradictory, state that explicitly and suggest a lower or unchanged score.
+- Do not re-research from scratch; focus on auditing and stress-testing analyst evidence.`
+    : `Your mandate (memory-only critic for this run):
+- Live web search is disabled in this mode. Audit analyst claims using provided evidence and your internal knowledge.
+- Flag any claims that appear weak, outdated, or insufficiently verified.
+- Challenge with realistic incumbent/SaaS pressure where relevant, and state uncertainty when verification is limited.
+- Do not re-research from scratch; focus on adversarial review of analyst evidence.`;
 
   return `Audit this analyst assessment of the AI use case: "${p1?.attributes?.title || desc}"
 
 Use case description:
 "${desc}"
 
-Your mandate (web-audit critic, not a second analyst):
-- Use live web search to verify the analyst's specific claims, numbers, and named deployments.
-- Search for contradictory or newer evidence that weakens overconfident claims.
-- Verify current SaaS/incumbent vendor position before citing them.
-- If evidence is stale, unverified, or contradictory, state that explicitly and suggest a lower or unchanged score.
-- Do not re-research from scratch; focus on auditing and stress-testing analyst evidence.
+${mandateBlock}
 
 Analyst evidence snapshots:
 ${evidenceSnapshots}
@@ -496,6 +503,7 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
 export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const analysisMode = options.analysisMode || (options.liveSearch ? "live_search" : "standard");
   const liveSearch = analysisMode === "live_search";
+  const criticLiveSearch = analysisMode !== "standard";
   const downloadDebugLog = !!options.downloadDebugLog;
 
   const debugSession = createAnalysisDebugSession({
@@ -519,7 +527,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     liveSearchUsed: false,
     webSearchCalls: 0,
     liveSearchFallbackReason: null,
-    criticLiveSearchRequested: true,
+    criticLiveSearchRequested: criticLiveSearch,
     criticLiveSearchUsed: false,
     criticWebSearchCalls: 0,
     criticLiveSearchFallbackReason: null,
@@ -561,13 +569,13 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     }));
 
     // Phase 2: Critic
-    const phase2Prompt = buildCriticAuditPrompt(desc, dims, p1);
+    const phase2Prompt = buildCriticPrompt(desc, dims, p1, { liveSearch: criticLiveSearch });
 
     const criticRes = await callCriticAPI(
       [{ role: "user", content: phase2Prompt }],
       SYS_CRITIC,
       6000,
-      { liveSearch: true, includeMeta: true }
+      { liveSearch: criticLiveSearch, includeMeta: true }
     );
     absorbCriticMeta(analysisMeta, criticRes.meta);
     let r2 = criticRes.text;
@@ -607,7 +615,7 @@ STRICT JSON RULES:
         [{ role: "user", content: phase2RetryPrompt }],
         SYS_CRITIC,
         4200,
-        { liveSearch: true, includeMeta: true }
+        { liveSearch: criticLiveSearch, includeMeta: true }
       );
       absorbCriticMeta(analysisMeta, criticRetryRes.meta);
       r2 = criticRetryRes.text;

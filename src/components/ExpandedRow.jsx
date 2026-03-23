@@ -11,7 +11,7 @@ const PHASE_LABELS = {
   analyst_baseline: "Analyst baseline pass...",
   analyst_web: "Analyst web pass...",
   analyst_reconcile: "Analyst reconcile pass...",
-  critic: "Critic web-auditing...",
+  critic: "Critic reviewing...",
   finalizing: "Analyst responding...",
 };
 

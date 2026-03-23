@@ -26,8 +26,8 @@ const HYBRID_FLOW = [
   {
     key: "critic",
     phase: "critic",
-    title: "Critic LLM web-audit review",
-    detail: "A skeptical model verifies analyst claims with live search and challenges weak assumptions.",
+    title: "Critic LLM review",
+    detail: "A skeptical model challenges analyst assumptions and scoring without live web search in this mode.",
   },
   {
     key: "finalizing",

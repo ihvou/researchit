@@ -43,7 +43,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 - [x] Added per-use-case metadata (`liveSearchRequested`, `liveSearchUsed`, `webSearchCalls`) in UI + CSV export
 - [x] Implemented hybrid reliability flow (baseline pass + web pass + reconcile pass)
 - [x] Added hybrid delta metadata (`changedFromBaseline`, weighted baseline/web/reconciled) to UI + summary export
-- [x] Added Critic live web-audit path with fallback + metadata (`criticLiveSearchUsed`, `criticWebSearchCalls`)
+- [x] Added mode-aware Critic web-audit path with fallback + metadata (`criticLiveSearchUsed`, `criticWebSearchCalls`); disabled in Standard mode
 **Impact**: Sources become verifiable real URLs instead of training-knowledge-based citations. Scores reflect current market (new entrants, recent acquisitions, pricing changes).
 **Remaining**:
 - [ ] Add recency/source quality badges per citation
