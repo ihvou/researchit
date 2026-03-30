@@ -3,6 +3,7 @@ import SourcesList from "./SourcesList";
 import FollowUpThread from "./FollowUpThread";
 import ConfidenceBadge from "./ConfidenceBadge";
 import ArgumentList from "./ArgumentList";
+import ResearchBriefBlock from "./ResearchBriefBlock";
 import { getDimensionView } from "../lib/dimensionView";
 import { getLatestAcceptedFollowUpAdjustment } from "../lib/scoring";
 
@@ -56,7 +57,7 @@ export default function DebateTab({
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {dims.map(d => {
-          const view = getDimensionView(uc, d.id);
+          const view = getDimensionView(uc, d.id, { dimLabel: d.label });
           const initScore = view.initial?.score;
           const crit = phaseCritique?.content?.dimensions?.[d.id];
           const fin = phaseResponse?.content?.dimensions?.[d.id];
@@ -124,6 +125,7 @@ export default function DebateTab({
                   onDiscard={handleDiscardArgument}
                   actionDisabled={loading}
                 />
+                {view.confidence === "low" && <ResearchBriefBlock brief={view.researchBrief} compact={true} />}
               </div>
 
               {crit && (

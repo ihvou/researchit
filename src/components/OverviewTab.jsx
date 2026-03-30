@@ -1,6 +1,7 @@
 import ScorePill from "./ScorePill";
 import TotalPill from "./TotalPill";
 import ConfidenceBadge from "./ConfidenceBadge";
+import ResearchBriefBlock from "./ResearchBriefBlock";
 import { calcWeightedScore } from "../lib/scoring";
 import { getDimensionView } from "../lib/dimensionView";
 
@@ -22,7 +23,7 @@ export default function OverviewTab({ uc, dims }) {
   const problemStatement = fallbackProblem(uc);
   const solutionStatement = fallbackSolution(uc);
   const lowConfidence = dims
-    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id) }))
+    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id, { dimLabel: d.label }) }))
     .filter((item) => item.view.confidence === "low");
 
   return (
@@ -90,12 +91,24 @@ export default function OverviewTab({ uc, dims }) {
               Low-confidence dimensions flagged: {lowConfidence.length}
             </div>
             <div style={{ fontSize: 11, color: "#7a4a00", lineHeight: 1.45 }}>
-              Hover each confidence badge for the reason. These are the best candidates for a quick manual verification pass.
+              Hover each confidence badge for the reason. Each low-confidence dimension now includes a targeted research brief below.
             </div>
           </div>
         )}
+        {!!lowConfidence.length && (
+          <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            {lowConfidence.map(({ dim, view }) => (
+              <div key={`${dim.id}-brief`} style={{ border: "1px solid #f5d7a3", borderRadius: 8, background: "#fffdf6", padding: "7px 8px" }}>
+                <div style={{ fontSize: 10, color: "#935f00", fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
+                  {dim.label}
+                </div>
+                <ResearchBriefBlock brief={view.researchBrief} compact={true} />
+              </div>
+            ))}
+          </div>
+        )}
         {dims.map(d => {
-          const view = getDimensionView(uc, d.id);
+          const view = getDimensionView(uc, d.id, { dimLabel: d.label });
           const initScore = view.initial?.score;
           const revised = view.effectiveScore != null && initScore != null && view.effectiveScore !== initScore;
           return (

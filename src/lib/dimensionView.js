@@ -1,6 +1,7 @@
 import { getEffectiveScore } from "./scoring";
 import { normalizeConfidenceLevel } from "./confidence";
 import { ensureDimensionArgumentShape, applyThreadArgumentUpdates } from "./arguments";
+import { getResearchBriefForLowConfidence } from "./researchBrief";
 
 function mergeSources(...lists) {
   const merged = [];
@@ -40,7 +41,8 @@ function normalizeBriefText(brief, score) {
   return `Score ${scoreLabel} is supported because ${supports}. It is not higher because ${limits}.`;
 }
 
-export function getDimensionView(uc, dimId) {
+export function getDimensionView(uc, dimId, options = {}) {
+  const dimLabel = options?.dimLabel || "";
   const initial = uc.dimScores?.[dimId] || null;
   const debate = uc.finalScores?.dimensions?.[dimId] || null;
   const thread = uc.followUps?.[dimId] || [];
@@ -69,6 +71,17 @@ export function getDimensionView(uc, dimId) {
     || debate?.confidenceReason
     || initial?.confidenceReason
     || "";
+  const researchBrief = getResearchBriefForLowConfidence({
+    confidence,
+    existingBrief: followUp?.researchBrief || debate?.researchBrief || initial?.researchBrief,
+    dimId,
+    dimLabel,
+    attributes: uc?.attributes || {},
+    missingEvidence: followUp?.missingEvidence || debate?.missingEvidence || initial?.missingEvidence || "",
+    confidenceReason,
+    risks: followUp?.risks || debate?.risks || initial?.risks || "",
+    sources,
+  });
 
   const baseArgumentDim = followUp?.arguments || debate || initial || {};
   const baseArguments = ensureDimensionArgumentShape(baseArgumentDim, dimId);
@@ -87,6 +100,7 @@ export function getDimensionView(uc, dimId) {
     sources,
     confidence,
     confidenceReason,
+    researchBrief,
     arguments: appliedArguments,
     supportingArguments: appliedArguments.supporting,
     limitingArguments: appliedArguments.limiting,

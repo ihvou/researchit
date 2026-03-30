@@ -622,7 +622,7 @@ export default function App() {
                         </div>
                       </td>
                       {activeDims.map(d => {
-                        const view = getDimensionView(uc, d.id);
+                        const view = getDimensionView(uc, d.id, { dimLabel: d.label });
                         const sc = view.effectiveScore;
                         const initScore = view.initial?.score;
                         const finScore = view.debate?.finalScore;

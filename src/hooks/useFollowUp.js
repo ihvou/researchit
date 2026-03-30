@@ -4,6 +4,7 @@ import { SYS_FOLLOWUP } from "../prompts/system";
 import { getEffectiveScore } from "../lib/scoring";
 import { buildDimRubricReminder } from "../lib/rubric";
 import { normalizeConfidenceLevel } from "../lib/confidence";
+import { getDimensionView } from "../lib/dimensionView";
 import {
   FOLLOW_UP_INTENTS,
   normalizeFollowUpIntent,
@@ -352,16 +353,28 @@ Return ONLY JSON:
       };
     }
 
-    const gapHint = uc.finalScores?.dimensions?.[dim?.id]?.confidenceReason
+    const dimView = getDimensionView(uc, dim?.id, { dimLabel: dim?.label || "" });
+    const gapHint = dimView?.researchBrief?.missingEvidence
+      || uc.finalScores?.dimensions?.[dim?.id]?.confidenceReason
       || uc.dimScores?.[dim?.id]?.confidenceReason
       || uc.dimScores?.[dim?.id]?.risks
       || "Evidence for this dimension appears incomplete.";
+    const queryHints = Array.isArray(dimView?.researchBrief?.suggestedQueries)
+      ? dimView.researchBrief.suggestedQueries.slice(0, 4)
+      : [];
+    const queryHintBlock = queryHints.length
+      ? `Suggested targeted queries:
+${queryHints.map((q, idx) => `${idx + 1}. ${q}`).join("\n")}
+
+`
+      : "";
 
     const prompt = `${baseHeader}
 PM requested targeted re-search: "${challenge}"
 
 Evidence gap hint:
 ${gapHint}
+${queryHintBlock}
 
 Run a focused live web search for this dimension's weakest evidence points.
 Use fresh external sources, then re-evaluate this dimension only.

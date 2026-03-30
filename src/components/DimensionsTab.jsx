@@ -3,13 +3,14 @@ import DimRubricToggle from "./DimRubricToggle";
 import EvidenceBlock from "./EvidenceBlock";
 import ConfidenceBadge from "./ConfidenceBadge";
 import ArgumentList from "./ArgumentList";
+import ResearchBriefBlock from "./ResearchBriefBlock";
 import { getDimensionView } from "../lib/dimensionView";
 
 export default function DimensionsTab({ uc, dims }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {dims.map(d => {
-        const view = getDimensionView(uc, d.id);
+        const view = getDimensionView(uc, d.id, { dimLabel: d.label });
         const initData = view.initial;
         const revised = view.effectiveScore != null && initData?.score != null && view.effectiveScore !== initData.score;
 
@@ -46,6 +47,7 @@ export default function DimensionsTab({ uc, dims }) {
             <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
               <ArgumentList group="supporting" argumentsList={view.supportingArguments} />
               <ArgumentList group="limiting" argumentsList={view.limitingArguments} />
+              {view.confidence === "low" && <ResearchBriefBlock brief={view.researchBrief} />}
             </div>
             <EvidenceBlock
               brief={view.brief}

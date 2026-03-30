@@ -252,6 +252,7 @@ function sectionIcon(label) {
     "Strategic Conclusion": "🎯",
     "Supporting Evidence": "✅",
     "Limiting Factors": "⚠️",
+    "Research Brief": "🧭",
     "Full Analysis": "🧠",
     "Risks": "⚠️",
     "Sources": "🔎",
@@ -368,6 +369,30 @@ function argumentRowsHtml(argumentsList = [], options = {}) {
   `;
 }
 
+function researchBriefHtml(brief) {
+  if (!brief) return "<div class=\"muted\">No research brief available.</div>";
+  const missingEvidence = String(brief.missingEvidence || "").trim();
+  const whereToLook = Array.isArray(brief.whereToLook) ? brief.whereToLook.filter(Boolean).slice(0, 4) : [];
+  const suggestedQueries = Array.isArray(brief.suggestedQueries) ? brief.suggestedQueries.filter(Boolean).slice(0, 4) : [];
+  return `
+    <div class="research-brief">
+      ${missingEvidence ? `<div class="small-text"><strong>Missing evidence:</strong> ${escapeHtml(missingEvidence)}</div>` : ""}
+      ${whereToLook.length ? `
+        <div class="small-text" style="margin-top:4px;"><strong>Where to look:</strong></div>
+        <ul class="brief-list">
+          ${whereToLook.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      ` : ""}
+      ${suggestedQueries.length ? `
+        <div class="small-text" style="margin-top:4px;"><strong>Suggested queries:</strong></div>
+        <div class="source-chip-array">
+          ${suggestedQueries.map((q) => `<span class="source-chip source-chip-static">${escapeHtml(q)}</span>`).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function threadHistoryHtml(thread = [], options = {}) {
   const { maxItems = Number.POSITIVE_INFINITY, maxBodyWords = 0 } = options;
   if (!thread?.length) return "<div class=\"muted\">No follow-up thread.</div>";
@@ -467,7 +492,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const tier = scoreTier(weighted);
   const scoreColor = weighted ? totalScoreColor(weighted) : "#64748b";
   const baseCards = dims.map((d) => {
-    const view = getDimensionView(uc, d.id);
+    const view = getDimensionView(uc, d.id, { dimLabel: d.label });
     const score = view.effectiveScore;
     const color = score != null ? dimScoreColor(Number(score)) : "#64748b";
     const dimIcon = dimensionScoreIcon(score);
@@ -497,7 +522,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
     : "";
   const dimCards = `${baseCards}${fillerCard}`;
   const lowConfidence = dims
-    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id) }))
+    .map((d) => ({ dim: d, view: getDimensionView(uc, d.id, { dimLabel: d.label }) }))
     .filter((item) => item.view.confidence === "low");
 
   const summaryMeta = `
@@ -537,7 +562,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
 }
 
 function renderDimensionPage(uc, d, options = {}) {
-  const view = getDimensionView(uc, d.id);
+  const view = getDimensionView(uc, d.id, { dimLabel: d.label });
   const critic = uc.critique?.dimensions?.[d.id];
   const score = view.effectiveScore;
   const scoreColor = score != null ? dimScoreColor(Number(score)) : "#64748b";
@@ -581,6 +606,7 @@ function renderDimensionPage(uc, d, options = {}) {
         argumentRowsHtml(view.limitingArguments, { emptyText: "No limiting-factor arguments." }),
         "compact"
       )}
+      ${view.researchBrief ? section("Research Brief", researchBriefHtml(view.researchBrief), "compact") : ""}
       ${section("Full Analysis", `<div class="small-text pre-wrap">${escapeHtml(fullWithSourceLabels)}</div>`)}
       ${section("Risks", `<div class="small-text pre-wrap">${escapeHtml(view.risks || "No risk notes provided.")}</div>`)}
       ${section("Sources", sourceChipArrayHtml(view.sources), "compact")}
@@ -994,6 +1020,15 @@ function reportCss(mode = "html") {
       color: #935f00;
       font-weight: 700;
     }
+    .brief-list {
+      margin: 3px 0 0;
+      padding-left: 16px;
+      display: grid;
+      gap: 2px;
+      font-size: ${isPdf ? "9.6px" : "10px"};
+      color: #334155;
+      line-height: 1.22;
+    }
     .pre-wrap {
       white-space: pre-wrap;
     }
@@ -1365,7 +1400,7 @@ export function exportSummaryCsv(useCases, dims) {
       raw_input: uc.rawInput || "",
     };
     dims.forEach((d) => {
-      const view = getDimensionView(uc, d.id);
+      const view = getDimensionView(uc, d.id, { dimLabel: d.label });
       row[`${d.id}_score`] = view.effectiveScore ?? "";
       row[`${d.id}_stage`] = view.stageLabel;
       row[`${d.id}_confidence`] = view.confidence || "";
@@ -1393,6 +1428,9 @@ export function exportDetailCsv(useCases, dims) {
     "update_stage",
     "confidence_level",
     "confidence_reason",
+    "research_missing_evidence",
+    "research_where_to_look",
+    "research_suggested_queries",
     "brief",
     "full_analysis",
     "risks",
@@ -1408,7 +1446,7 @@ export function exportDetailCsv(useCases, dims) {
 
   useCases.forEach((uc) => {
     dims.forEach((d) => {
-      const view = getDimensionView(uc, d.id);
+      const view = getDimensionView(uc, d.id, { dimLabel: d.label });
       const critic = uc.critique?.dimensions?.[d.id];
       const threadHistory = (uc.followUps?.[d.id] || [])
         .map((m) => (m.role === "pm" ? `PM: ${m.text || ""}` : `Analyst: ${m.response || m.text || ""}`))
@@ -1429,6 +1467,9 @@ export function exportDetailCsv(useCases, dims) {
         update_stage: view.stageLabel,
         confidence_level: view.confidence || "",
         confidence_reason: view.confidenceReason || "",
+        research_missing_evidence: view.researchBrief?.missingEvidence || "",
+        research_where_to_look: (view.researchBrief?.whereToLook || []).join(" | "),
+        research_suggested_queries: (view.researchBrief?.suggestedQueries || []).join(" | "),
         brief: view.brief,
         full_analysis: view.full,
         risks: view.risks,
