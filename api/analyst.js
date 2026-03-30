@@ -39,6 +39,49 @@ function extractResponsesText(data) {
   return parts.join("\n").trim();
 }
 
+function extractChatCompletionsText(data) {
+  const choices = Array.isArray(data?.choices) ? data.choices : [];
+  for (const choice of choices) {
+    const message = choice?.message || {};
+
+    if (typeof message.content === "string" && message.content.trim()) {
+      return message.content.trim();
+    }
+
+    if (Array.isArray(message.content)) {
+      const parts = [];
+      for (const content of message.content) {
+        if (typeof content === "string" && content.trim()) {
+          parts.push(content.trim());
+          continue;
+        }
+        if (!content || typeof content !== "object") continue;
+        if (typeof content.text === "string" && content.text.trim()) {
+          parts.push(content.text.trim());
+        } else if (typeof content.output_text === "string" && content.output_text.trim()) {
+          parts.push(content.output_text.trim());
+        } else if (typeof content.content === "string" && content.content.trim()) {
+          parts.push(content.content.trim());
+        } else if (typeof content.refusal === "string" && content.refusal.trim()) {
+          parts.push(`Refusal: ${content.refusal.trim()}`);
+        }
+      }
+      const joined = parts.join("\n").trim();
+      if (joined) return joined;
+    }
+
+    if (typeof message.refusal === "string" && message.refusal.trim()) {
+      return `Refusal: ${message.refusal.trim()}`;
+    }
+
+    if (typeof choice?.text === "string" && choice.text.trim()) {
+      return choice.text.trim();
+    }
+  }
+
+  return "";
+}
+
 function countWebSearchCalls(payload) {
   let count = 0;
   const stack = [payload];
@@ -72,8 +115,45 @@ async function callChatCompletions(apiKey, systemPrompt, messages, maxTokens, ex
   const data = await response.json();
   if (data.error) throw new Error(data.error.message);
 
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error("No text content in OpenAI chat completion response");
+  const text = extractChatCompletionsText(data);
+  if (!text) {
+    // Fallback for non-string/no-text chat payload variants.
+    const fallback = await callResponsesTextOnly(apiKey, systemPrompt, messages, maxTokens, {
+      ...extraMeta,
+      chatCompletionNoTextFallback: true,
+    });
+    return fallback;
+  }
+
+  return {
+    text,
+    meta: {
+      liveSearchUsed: false,
+      webSearchCalls: 0,
+      ...extraMeta,
+    },
+  };
+}
+
+async function callResponsesTextOnly(apiKey, systemPrompt, messages, maxTokens, extraMeta = {}) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-5.4-mini",
+      max_output_tokens: maxTokens,
+      input: buildResponsesInput(systemPrompt, messages),
+    }),
+  });
+
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message);
+
+  const text = extractResponsesText(data);
+  if (!text) throw new Error("No text content in OpenAI responses output");
 
   return {
     text,
