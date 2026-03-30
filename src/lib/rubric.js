@@ -21,7 +21,7 @@ const POLARITY_HINTS = {
   feasibility: "Higher score = easier delivery with lower technical complexity.",
   market_size: "Higher score = larger repeatable buyer pool.",
   build_vs_buy: "Higher score = stronger custom-delivery need (weaker SaaS substitution).",
-  regulatory: "Higher score = lower regulatory/compliance burden.",
+  regulatory: "Higher score = lower regulatory/compliance delivery burden = cleaner delivery profile.",
   change_mgmt: "Higher score = lower disruption and easier organizational adoption.",
   reusability: "Higher score = higher reuse/productization potential.",
 };
@@ -55,4 +55,3 @@ export function buildRubricCalibrationBlock(dims = [], options = {}) {
     })
     .join("\n");
 }
-
