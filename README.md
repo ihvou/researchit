@@ -50,49 +50,52 @@ Prompting is role-based and schema-driven:
   - `SYS_FOLLOWUP`
 - Each call expects JSON-only output with explicit schema templates to reduce malformed responses.
 
-Per-phase prompt design:
-- Phase 1 Step 1 (evidence enumeration):
-  - Enumerates evidence only (no scores)
-  - Requires source typing (`vendor|press|independent`)
-  - Adds dynamic mandatory search depth for top-weighted dimensions (computed from current dimension weights, not hard-coded IDs)
-- Phase 1 Step 2 (scoring from evidence):
-  - Scores strictly from Step 1 evidence payload
-  - Forbids adding new facts during scoring
-  - Requires confidence level + reason per dimension
-- Phase 2 Critic:
-  - Audits analyst claims and suggested scores
-  - Mandate is adversarial verification, not full re-research from scratch
-- Phase 3 Analyst response:
-  - Requires `decision: defend|concede` for each dimension
-  - Applies explicit confidence revision constraints
-  - Then a separate consistency-check pass can adjust final scores
-- Follow-up thread:
-  - First classifies intent (`challenge|question|reframe|add_evidence|note|re_search`)
-  - Then runs intent-specific prompt logic
-  - Score changes are proposals that PM explicitly accepts or dismisses
+### What the user prompt contains at each stage
+
+The app builds a different **user prompt** for each stage (in addition to the system prompt).  
+Each prompt includes context + clear instructions + strict JSON output schema.
+
+| Stage | What is sent in the user prompt (human-readable) | What the model must return |
+|---|---|---|
+| Phase 1A: Evidence enumeration (baseline/web) | Original use-case text, full rubric, dimension list, and evidence rules. In web pass, it also includes required search-depth instructions for top-weighted dimensions. | Per-dimension evidence facts + missing evidence gaps only (no scores). |
+| Phase 1B: Scoring from evidence (baseline/web) | Same use-case text + the full JSON evidence payload from 1A + rubric + confidence calibration rules. | Per-dimension score, confidence, brief/full reasoning, risks, sources, argument lists. |
+| Phase 1C: Hybrid reconcile evidence | Side-by-side summary of baseline draft and web draft (scores/confidence/brief/sources/missing evidence) for every dimension, plus merge rules. | One merged evidence-only payload that keeps best-supported facts and unresolved gaps. |
+| Phase 1D: Reconcile scoring | Reconciled evidence JSON + rubric + confidence rules. | Reconciled per-dimension scores and reasoning. |
+| Targeted cycle A: Query planning (for low confidence, and some medium with specific gaps) | Use-case text + one target dimension + current score/confidence + explicit evidence gap. | 3-4 focused search queries + one-sentence gap statement. |
+| Targeted cycle B: Web harvest | Target dimension + generated queries + current context. | Raw findings by query, with source links and useful/not-useful coverage. |
+| Targeted cycle C: Dimension re-score | Current dimension state + query plan + harvested findings + single-dimension rubric. | Updated score/confidence/reasoning for that dimension + research brief. |
+| Phase 2: Critic audit | Use-case text + analyst outputs per dimension (score/confidence/brief/full/sources) + rubric reminders. Plain-language instruction: verify claims, look for contradictions, and challenge weak points. | Per-dimension critique, suggested score, evidence links, plus overall feedback. |
+| Phase 3: Analyst response to critic | Phase-1 anchor scores/confidence + critic feedback + defend/concede rules + confidence-revision rules + wording requirements for brief summaries. | Final per-dimension decision (`defend`/`concede`), final score, confidence, brief, response text, sources, conclusion. |
+| Phase 3 retry/fallback prompts | Same context, but with tighter JSON constraints (shorter fields, stricter limits) when parse fails. | Same schema, but compressed and parse-safe. |
+| Consistency check | Initial score, critic suggestion, and final score snapshots per dimension + rubric reminder. | Any needed score adjustments with short reasons. |
+| Discover generation | Use-case text + final conclusion + weakest dimensions + specific limiting factors. | 3-5 related candidates with rationale, expected improved dimensions, and how each candidate fixes limiting factors. |
+| Discover pre-validation | Original use case + one candidate + current scores for claimed improved dimensions. | Predicted scores for claimed dimensions and pass/fail rationale for validation filter. |
+| Follow-up: intent classification | Latest PM message + dimension + recent thread context. | One intent label (`challenge|question|reframe|add_evidence|note|re_search`) + short rationale. |
+| Follow-up: intent execution | Intent-specific context (e.g., PM question, fetched URL content, targeted evidence gaps, argument under challenge). | Intent-specific JSON reply; score changes are always proposals that PM explicitly accepts/dismisses. |
 
 ## Model Request Profile (Approximate)
 
-### Models
-- Analyst route (`api/analyst.js`): OpenAI `gpt-5.4-mini`
-- Critic route (`api/critic.js`): OpenAI `gpt-5.4`
+### Runtime model configuration
+- Analyst and Critic model identifiers are configured in API handlers:
+  - `api/analyst.js`
+  - `api/critic.js`
 - Live-search calls use Responses API tools (`web_search` / `web_search_preview`) with fallback to non-tool completion.
 
 ### Analysis run request pattern
 
-Core run (all 11 dimensions are batch-processed, not one call per dimension):
+Core run (all active dimensions are batch-processed, not one call per dimension):
 
-| Stage | Route / model | Typical calls | Notes |
+| Stage | Route / runtime config | Typical calls | Notes |
 |---|---|---:|---|
-| Baseline analyst pass | Analyst / `gpt-5.4-mini` | 2 | Evidence + scoring |
-| Web analyst pass | Analyst / `gpt-5.4-mini` | 2 | Evidence (live web) + scoring |
-| Reconcile analyst pass | Analyst / `gpt-5.4-mini` | 2 | Reconcile evidence + scoring |
-| Targeted confidence cycle | Analyst / `gpt-5.4-mini` | +3 per targeted dimension | Query plan + targeted live search + re-score |
-| Critic audit | Critic / `gpt-5.4` | 1 | +1 retry on parse failure |
-| Analyst response | Analyst / `gpt-5.4-mini` | 1 | +up to 2 retries on parse failure |
-| Consistency check | Analyst / `gpt-5.4-mini` | 1 | Post-response score audit |
-| Discover generation | Analyst / `gpt-5.4-mini` | 1 | +1 retry on parse failure |
-| Discover validation | Analyst / `gpt-5.4-mini` | +1 per candidate | Up to 5 candidates |
+| Baseline analyst pass | Analyst route (configured analyst model) | 2 | Evidence + scoring |
+| Web analyst pass | Analyst route (configured analyst model) | 2 | Evidence (live web) + scoring |
+| Reconcile analyst pass | Analyst route (configured analyst model) | 2 | Reconcile evidence + scoring |
+| Targeted confidence cycle | Analyst route (configured analyst model) | +3 per targeted dimension | Query plan + targeted live search + re-score |
+| Critic audit | Critic route (configured critic model) | 1 | +1 retry on parse failure |
+| Analyst response | Analyst route (configured analyst model) | 1 | +up to 2 retries on parse failure |
+| Consistency check | Analyst route (configured analyst model) | 1 | Post-response score audit |
+| Discover generation | Analyst route (configured analyst model) | 1 | +1 retry on parse failure |
+| Discover validation | Analyst route (configured analyst model) | +1 per candidate | Up to 5 candidates |
 
 No-retry formula:
 - `total_calls ~= 10 + (3 * targeted_dimensions) + validated_candidates`
@@ -115,18 +118,10 @@ Retry behavior can add extra calls when strict JSON repair retries are needed.
 
 ## Scoring Model
 
-11 weighted dimensions:
-- `roi` (18)
-- `ai_fit` (14)
-- `evidence` (13)
-- `ttv` (11)
-- `data_readiness` (9)
-- `feasibility` (9)
-- `market_size` (7)
-- `build_vs_buy` (9)
-- `regulatory` (8)
-- `change_mgmt` (8)
-- `reusability` (7)
+Dimension definitions, IDs, and default weights are configuration-driven:
+- Source of truth: `src/constants/dimensions.js`
+- Runtime controls: UI dimension toggles/weights in the Dimensions panel
+- Import/export: JSON includes a dimension configuration snapshot for compatibility checks
 
 Each dimension includes:
 - score (`1-5`)
@@ -165,9 +160,7 @@ Report pages include argument sections per dimension:
 
 - Frontend: React + Vite
 - API routes: Vercel serverless functions (`api/analyst.js`, `api/critic.js`, `api/fetch-source.js`)
-- Models:
-  - Analyst: OpenAI `gpt-5.4-mini`
-  - Critic: OpenAI `gpt-5.4`
+- Models: configurable in API route handlers (`api/analyst.js`, `api/critic.js`)
 - Web search path: OpenAI Responses API tools (`web_search` / `web_search_preview`) with fallback
 - Storage: in-memory UI state (no persistence yet)
 

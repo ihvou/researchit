@@ -39,8 +39,23 @@ Return ONLY JSON:
   "urls": ["...optional extracted URLs..."]
 }`;
 
+const FOLLOW_UP_SOURCE_QUALITY_RULES = `SOURCE QUALITY RULES:
+- UNACCEPTABLE sources: vendor product/pricing pages, storefront homepages, app marketplace listings, SEO landing pages, generic marketing brochures.
+- ACCEPTABLE sources: independent analyst reports, named case studies with metrics, earnings calls, press coverage with named outcomes, regulatory filings, peer-reviewed research, named customer outcomes.
+- If no acceptable source is available, say that explicitly and keep sources empty. Do not substitute a marketing page.`;
+
 function makeId(prefix = "fu") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeSourceType(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw === "vendor" || raw === "press" || raw === "independent") return raw;
+  if (raw.includes("vendor") || raw.includes("marketing") || raw.includes("product")) return "vendor";
+  if (raw.includes("press") || raw.includes("news") || raw.includes("earnings") || raw.includes("filing")) return "press";
+  if (raw.includes("independent") || raw.includes("peer") || raw.includes("benchmark") || raw.includes("analyst")) return "independent";
+  return "";
 }
 
 function normalizeSources(input) {
@@ -51,6 +66,7 @@ function normalizeSources(input) {
       name: String(s.name || "").trim(),
       quote: String(s.quote || "").trim().slice(0, 180),
       url: String(s.url || "").trim(),
+      sourceType: normalizeSourceType(s.sourceType),
     }))
     .slice(0, 14);
 }
@@ -246,6 +262,18 @@ function normalizeConfidence(parsed, uc, dimId) {
   return { normalizedConfidence, normalizedReason };
 }
 
+function wantsLiveSearch(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  if (parsed.searchNeeded === true) return true;
+  const raw = String(parsed.searchNeeded || "").trim().toLowerCase();
+  return raw === "true" || raw === "yes" || raw === "1";
+}
+
+function searchReasonText(parsed, fallback = "") {
+  const reason = String(parsed?.searchReason || "").trim();
+  return reason || fallback || "Fresh external verification is needed for this follow-up.";
+}
+
 function renderPromptHeader({ uc, dim, effectiveScore, threadHistory }) {
   return `Use case: "${uc.attributes?.title || uc.rawInput}"
 Dimension: "${dim?.label || "Unknown"}"
@@ -275,13 +303,45 @@ async function runIntentResponse({
 PM question: "${challenge}"
 
 Answer as a plain-language explanation. No score revision proposal.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
 Return ONLY JSON:
 {
   "response": "<clear explanation, 3-5 sentences, non-defensive>",
-  "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}]
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": <true|false>,
+  "searchReason": "<1 sentence: why existing context is enough OR what specific gap needs web search>"
 }`;
     const raw = await callAnalystAPI([{ role: "user", content: prompt }], SYS_FOLLOWUP, 1400);
-    return { parsed: safeParseJSON(raw), meta: null };
+    const parsed = safeParseJSON(raw);
+
+    if (!wantsLiveSearch(parsed)) {
+      return { parsed, meta: null };
+    }
+
+    const reason = searchReasonText(parsed, `Need fresh evidence for PM question on ${dim?.label || "this dimension"}.`);
+    const searchPrompt = `${baseHeader}
+PM question: "${challenge}"
+
+You identified this evidence gap: "${reason}"
+Run focused live web research and answer using current, high-quality evidence.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "response": "<clear explanation, 3-5 sentences, non-defensive>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": false,
+  "searchReason": "<short note on what was searched>"
+}`;
+
+    const data = await callAnalystAPI(
+      [{ role: "user", content: searchPrompt }],
+      SYS_FOLLOWUP,
+      1700,
+      { liveSearch: true, includeMeta: true }
+    );
+    return { parsed: safeParseJSON(data.text), meta: data.meta || null };
   }
 
   if (intent === FOLLOW_UP_INTENTS.REFRAME) {
@@ -309,6 +369,7 @@ New evidence content (fetched server-side and/or pasted):
 ${evidence.contextText || "No external source content was retrievable."}
 
 Assess what changes and what does not. Propose a score revision only if evidence justifies it.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
 Rubric reminder:
 ${buildDimRubricReminder(dim, { wordCap: 16 })}
 
@@ -318,7 +379,7 @@ Return ONLY JSON:
   "confidenceReason": "<1 sentence>",
   "brief": "<2-3 sentences for non-domain reader>",
   "response": "<3-6 sentences explaining impact of this evidence>",
-  "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}],
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
   "proposedScore": <null or integer 1-5>,
   "proposalReason": "<1-2 sentences>"
 }`;
@@ -356,6 +417,7 @@ ${queryHintBlock}
 
 Run a focused live web search for this dimension's weakest evidence points.
 Use fresh external sources, then re-evaluate this dimension only.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
 Rubric reminder:
 ${buildDimRubricReminder(dim, { wordCap: 16 })}
 
@@ -365,7 +427,7 @@ Return ONLY JSON:
   "confidenceReason": "<1 sentence>",
   "brief": "<2-3 sentence summary>",
   "response": "<3-6 sentences with fresh findings>",
-  "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}],
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
   "proposedScore": <null or integer 1-5>,
   "proposalReason": "<1-2 sentences>"
 }`;
@@ -401,6 +463,7 @@ ${targetArgumentBlock}
 
 Respond directly. If valid, concede with an updated argument and proposed score.
 If not valid, defend with new evidence.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
 Rubric reminder:
 ${buildDimRubricReminder(dim, { wordCap: 16 })}
 
@@ -415,21 +478,67 @@ Return ONLY JSON:
   "confidenceReason": "<1 sentence>",
   "brief": "<2-3 plain-language sentences>",
   "response": "<3-5 direct analytical sentences>",
-  "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}],
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
   "argumentUpdate": {
     "id": "<argument id or empty>",
     "group": "<supporting|limiting>",
     "action": "<keep|discard|modify|none>",
     "updatedClaim": "<required if modify>",
     "updatedDetail": "<required if modify>",
-    "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}],
+    "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
     "reason": "<1 sentence why keep/modify/discard>"
   },
   "proposedScore": <null or integer 1-5>,
-  "proposalReason": "<1-2 sentences>"
+  "proposalReason": "<1-2 sentences>",
+  "searchNeeded": <true|false>,
+  "searchReason": "<1 sentence: why existing context is enough OR what specific gap needs web search>"
 }`;
   const raw = await callAnalystAPI([{ role: "user", content: prompt }], SYS_FOLLOWUP, 2100);
-  return { parsed: safeParseJSON(raw), meta: null };
+  const parsed = safeParseJSON(raw);
+
+  if (!wantsLiveSearch(parsed)) {
+    return { parsed, meta: null };
+  }
+
+  const reason = searchReasonText(parsed, `Need fresh evidence for PM challenge on ${dim?.label || "this dimension"}.`);
+  const searchPrompt = `${baseHeader}
+PM challenge: "${challenge}"
+${targetArgumentBlock}
+
+Initial non-web draft highlighted this evidence gap: "${reason}"
+Now run focused live web research to validate/adjust the answer.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+Rubric reminder:
+${buildDimRubricReminder(dim, { wordCap: 16 })}
+
+Return ONLY JSON:
+{
+  "confidence": "<high|medium|low>",
+  "confidenceReason": "<1 sentence>",
+  "brief": "<2-3 plain-language sentences>",
+  "response": "<3-5 direct analytical sentences>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "argumentUpdate": {
+    "id": "<argument id or empty>",
+    "group": "<supporting|limiting>",
+    "action": "<keep|discard|modify|none>",
+    "updatedClaim": "<required if modify>",
+    "updatedDetail": "<required if modify>",
+    "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+    "reason": "<1 sentence why keep/modify/discard>"
+  },
+  "proposedScore": <null or integer 1-5>,
+  "proposalReason": "<1-2 sentences>",
+  "searchNeeded": false,
+  "searchReason": "<short note on what was searched>"
+}`;
+  const data = await callAnalystAPI(
+    [{ role: "user", content: searchPrompt }],
+    SYS_FOLLOWUP,
+    2400,
+    { liveSearch: true, includeMeta: true }
+  );
+  return { parsed: safeParseJSON(data.text), meta: data.meta || null };
 }
 
 export async function handleFollowUp(ucId, dimId, challenge, dims, ucRef, updateUC, options = {}) {
