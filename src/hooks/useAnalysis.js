@@ -1336,6 +1336,40 @@ function ensureFinalAnalystSummary(payload, dims) {
   return out;
 }
 
+function mergePhase3WithBaseline(payload, phase1, dims) {
+  const out = payload && typeof payload === "object" ? { ...payload } : {};
+  out.attributes = out.attributes && typeof out.attributes === "object"
+    ? { ...out.attributes }
+    : { ...(phase1?.attributes || {}) };
+  out.sources = mergeSourceLists(out.sources, phase1?.sources);
+  out.dimensions = out.dimensions && typeof out.dimensions === "object" ? { ...out.dimensions } : {};
+
+  dims.forEach((d) => {
+    const base = phase1?.dimensions?.[d.id] || {};
+    const fin = out.dimensions?.[d.id] || {};
+    const baseScore = clampScore(base?.score, 3);
+    const nextScore = clampScore(fin?.finalScore, baseScore);
+    const merged = {
+      ...base,
+      ...fin,
+      finalScore: nextScore,
+      scoreChanged: Number.isFinite(baseScore) && Number.isFinite(nextScore) ? nextScore !== baseScore : !!fin?.scoreChanged,
+      confidence: normalizeConfidenceLevel(fin?.confidence) || normalizeConfidenceLevel(base?.confidence) || "medium",
+      confidenceReason: String(fin?.confidenceReason || "").trim() || String(base?.confidenceReason || "").trim(),
+      brief: String(fin?.brief || "").trim() || String(base?.brief || "").trim(),
+      full: String(fin?.full || "").trim() || String(base?.full || "").trim(),
+      risks: String(fin?.risks || "").trim() || String(base?.risks || "").trim(),
+      missingEvidence: String(fin?.missingEvidence || "").trim() || String(base?.missingEvidence || "").trim(),
+      response: String(fin?.response || "").trim(),
+      sources: mergeSourceLists(fin?.sources, base?.sources),
+      arguments: fin?.arguments || base?.arguments || null,
+    };
+    out.dimensions[d.id] = merged;
+  });
+
+  return out;
+}
+
 function confidenceRank(level) {
   const normalized = normalizeConfidenceLevel(level);
   if (normalized === "high") return 3;
@@ -2427,25 +2461,7 @@ Return ONLY this JSON:
       "confidenceReason": "<1 sentence explaining confidence level>",
       "brief": "<2-3 plain-language sentences, max 65 words, explain why this score is deserved and what prevents a higher score>",
       "response": "<3-4 sentences: concede or defend with new specific evidence>",
-      "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}],
-      "arguments": {
-        "supporting": [
-          {
-            "id": "<stable id like sup-1>",
-            "claim": "<one-line supporting claim>",
-            "detail": "<1-2 sentence explanation>",
-            "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}]
-          }
-        ],
-        "limiting": [
-          {
-            "id": "<stable id like lim-1>",
-            "claim": "<one-line limiting claim>",
-            "detail": "<1-2 sentence explanation>",
-            "sources": [{"name":"...","quote":"<max 15 words>","url":"..."}]
-          }
-        ]
-      }
+      "sources": [{"name": "...", "quote": "<max 15 words>", "url": "..."}]
     }`).join(",\n    ")}
   },
   "conclusion": "<2-3 sentence strategic recommendation: should the outsourcing company pursue this, and how?>"
@@ -2472,13 +2488,15 @@ Return ONLY this JSON:
 
     let p3;
     try {
-      p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(parseWithDiagnostics(r3, {
+      const parsedPhase3 = parseWithDiagnostics(r3, {
         phase: "finalizing",
         attempt: "full",
         useCaseId: id,
         analysisMode,
         prompt: phase3Prompt,
-      }, debugSession), dims), dims), dims);
+      }, debugSession);
+      const mergedPhase3 = mergePhase3WithBaseline(parsedPhase3, p1, dims);
+      p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(mergedPhase3, dims), dims), dims);
     } catch (err) {
       console.warn("Analyst response parse failed, retrying with strict condensed prompt:", err.message);
       const phase3RetryPrompt = `${phase3Prompt}
@@ -2497,8 +2515,7 @@ STRICT JSON RULES:
 - If a score changes, include "revisionBasis" (not "none") and a specific "revisionJustification".
 - If confidence decreases, include specific "confidenceGap"; otherwise keep it empty.
 - Keep each dimension "response" <= 45 words.
-- Keep each dimension "arguments.supporting" and "arguments.limiting" to 2-3 items each.
-- Keep each argument claim concise (<16 words) and detail concise (<28 words).
+- Keep each dimension "sources" to max 1 item.
 - Keep "conclusion" <= 50 words.
 `;
       const phase3RetryRes = await callAnalystAPI(
@@ -2519,13 +2536,89 @@ STRICT JSON RULES:
         responseExcerpt: shortText(r3, 6000),
         response: shortText(r3, 100000),
       });
-      p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(parseWithDiagnostics(r3, {
-        phase: "finalizing",
-        attempt: "condensed_retry",
-        useCaseId: id,
-        analysisMode,
-        prompt: phase3RetryPrompt,
-      }, debugSession), dims), dims), dims);
+      try {
+        const parsedRetry = parseWithDiagnostics(r3, {
+          phase: "finalizing",
+          attempt: "condensed_retry",
+          useCaseId: id,
+          analysisMode,
+          prompt: phase3RetryPrompt,
+        }, debugSession);
+        const mergedRetry = mergePhase3WithBaseline(parsedRetry, p1, dims);
+        p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(mergedRetry, dims), dims), dims);
+      } catch (retryErr) {
+        appendAnalysisDebugEvent(debugSession, {
+          type: "phase_retry_triggered",
+          phase: "finalizing",
+          attempt: "emergency_minimal",
+          error: retryErr.message || String(retryErr),
+        });
+        const emergencyPrompt = `Return ONLY valid JSON with this exact schema, no extra keys:
+{
+  "analystResponse": "<max 35 words>",
+  "dimensions": {
+    ${dims.map((d) => `"${d.id}": {"finalScore": <1-5>, "decision":"<defend|concede>", "revisionBasis":"<none|new_evidence|evidence_gap|rubric_alignment|rubric_misalignment>", "revisionJustification":"<max 18 words>", "confidence":"<high|medium|low>", "confidenceReason":"<max 16 words>", "brief":"<max 32 words>", "response":"<max 24 words>", "sources":[{"name":"...","quote":"<max 10 words>","url":"..."}]}`).join(",\n    ")}
+  },
+  "conclusion": "<max 32 words>"
+}`;
+        const emergencyRes = await callAnalystAPI(
+          [{ role: "user", content: emergencyPrompt }],
+          SYS_ANALYST_RESPONSE,
+          2400,
+          { liveSearch: true, includeMeta: true }
+        );
+        absorbAnalystMeta(analysisMeta, emergencyRes.meta);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "model_response",
+          phase: "finalizing",
+          attempt: "emergency_minimal",
+          responseLength: emergencyRes.text?.length || 0,
+          meta: emergencyRes.meta || null,
+          prompt: shortText(emergencyPrompt, 30000),
+          responseExcerpt: shortText(emergencyRes.text, 6000),
+          response: shortText(emergencyRes.text, 100000),
+        });
+        try {
+          const parsedEmergency = parseWithDiagnostics(emergencyRes.text, {
+            phase: "finalizing",
+            attempt: "emergency_minimal",
+            useCaseId: id,
+            analysisMode,
+            prompt: emergencyPrompt,
+          }, debugSession);
+          const mergedEmergency = mergePhase3WithBaseline(parsedEmergency, p1, dims);
+          p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(mergedEmergency, dims), dims), dims);
+        } catch (emergencyErr) {
+          appendAnalysisDebugEvent(debugSession, {
+            type: "emergency_phase3_fallback",
+            phase: "finalizing",
+            attempt: "baseline_merge",
+            error: emergencyErr.message || String(emergencyErr),
+          });
+          const fallbackPayload = {
+            analystResponse: "Phase 3 response was truncated; baseline analyst scoring is retained with confidence safeguards.",
+            conclusion: p1?.conclusion || "",
+            dimensions: {},
+          };
+          dims.forEach((d) => {
+            const base = p1?.dimensions?.[d.id] || {};
+            fallbackPayload.dimensions[d.id] = {
+              finalScore: clampScore(base?.score, 3),
+              scoreChanged: false,
+              decision: "defend",
+              revisionBasis: "none",
+              revisionJustification: "",
+              confidence: normalizeConfidenceLevel(base?.confidence) || "medium",
+              confidenceReason: String(base?.confidenceReason || "").trim(),
+              brief: String(base?.brief || "").trim(),
+              response: "Baseline score retained due malformed finalizing response output.",
+              sources: mergeSourceLists(base?.sources),
+            };
+          });
+          const mergedFallback = mergePhase3WithBaseline(fallbackPayload, p1, dims);
+          p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(mergedFallback, dims), dims), dims);
+        }
+      }
     }
 
     {

@@ -118,8 +118,7 @@ function normalizeStringLiterals(input) {
 
 function balanceBrackets(input) {
   let out = input;
-  let braceDepth = 0;
-  let bracketDepth = 0;
+  const stack = [];
   let inString = false;
   let escaped = false;
 
@@ -140,15 +139,38 @@ function balanceBrackets(input) {
       inString = true;
       continue;
     }
-    if (ch === "{") braceDepth += 1;
-    else if (ch === "}") braceDepth -= 1;
-    else if (ch === "[") bracketDepth += 1;
-    else if (ch === "]") bracketDepth -= 1;
+    if (ch === "{") {
+      stack.push("{");
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("[");
+      continue;
+    }
+    if (ch === "}") {
+      for (let j = stack.length - 1; j >= 0; j -= 1) {
+        if (stack[j] === "{") {
+          stack.splice(j, 1);
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === "]") {
+      for (let j = stack.length - 1; j >= 0; j -= 1) {
+        if (stack[j] === "[") {
+          stack.splice(j, 1);
+          break;
+        }
+      }
+    }
   }
 
   if (inString) out += "\"";
-  if (bracketDepth > 0) out += "]".repeat(bracketDepth);
-  if (braceDepth > 0) out += "}".repeat(braceDepth);
+  while (stack.length) {
+    const opener = stack.pop();
+    out += opener === "{" ? "}" : "]";
+  }
   return out;
 }
 
