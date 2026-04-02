@@ -159,53 +159,59 @@ Report pages include argument sections per dimension:
 ## Tech Stack
 
 - Frontend: React + Vite
-- API routes: Vercel serverless functions (`api/analyst.js`, `api/critic.js`, `api/fetch-source.js`)
-- Models: configurable in API route handlers (`api/analyst.js`, `api/critic.js`)
+- API routes: Vercel serverless functions (`app/api/analyst.js`, `app/api/critic.js`, `app/api/fetch-source.js`)
+- Provider adapter: shared OpenAI provider in `engine/providers/openai.js`
 - Web search path: OpenAI Responses API tools (`web_search` / `web_search_preview`) with fallback
 - Storage: in-memory UI state (no persistence yet)
 
 ## Repository Layout
 
 ```txt
-ai-use-case-prioritizer/
-  api/
-    analyst.js
-    critic.js
-    fetch-source.js
-  src/
-    App.jsx
-    components/
-      ConfidenceBadge.jsx
-      ArgumentList.jsx
-      DebateTab.jsx
-      DiscoverTab.jsx
-      DimensionsTab.jsx
-      ExpandedRow.jsx
-      OverviewTab.jsx
-      ProgressTab.jsx
-      ...
-    constants/
-      dimensions.js
-    hooks/
-      useAnalysis.js
-      useFollowUp.js
+researchit/
+  app/                               # Product shell
+    api/
+      analyst.js
+      critic.js
+      fetch-source.js
+    src/
+      App.jsx
+      components/
+      hooks/
+      lib/
+      constants/
+      prompts/
+    package.json
+  engine/                            # Reusable research engine
+    pipeline/
+      analysis.js
+      followUp.js
+    providers/
+      openai.js
     lib/
-      api.js
       arguments.js
+      confidence.js
       debug.js
       dimensionView.js
-      export.js
       followUpIntent.js
       json.js
+      researchBrief.js
       rubric.js
       scoring.js
+      serialize.js
+      transport.js
+    configs/
+      ai-use-case-dims.js
     prompts/
-      system.js
+      defaults.js
+    index.js
+  configs/
+    ai-use-case-prioritizer.js
 ```
 
 ## Local Setup
 
 ```bash
+cd app
 npm install
 npx vercel dev
 ```
@@ -214,7 +220,7 @@ App URL: `http://localhost:3000`
 
 ### Environment
 
-Create `.env.local`:
+Create `app/.env.local`:
 
 ```bash
 OPENAI_API_KEY=sk-...
