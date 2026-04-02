@@ -90,6 +90,25 @@ Current pipeline (quality-first):
 
 Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals.
 
+## Plan Alignment Status
+
+Status against `ResearchIt—Engine-Extraction-Restructuring-Plan.md`: **partially complete**.
+
+Implemented:
+- Engine extracted to `engine/` with independent package boundary and barrel exports.
+- Pipelines live in `engine/pipeline/*` and run through injected transport (`engine/lib/transport.js`).
+- OpenAI provider logic centralized in `engine/providers/openai.js`.
+- Product shell runs from `app/` and consumes engine via `@researchit/engine`.
+- Config-driven tabs are implemented via `configs/research-configurations.js`.
+
+Remaining to fully match plan intent:
+1. Remove product-specific framing from engine pipeline prompts.
+Current `engine/pipeline/analysis.js` still hardcodes outsourcing-delivery phrasing in several prompt builders. This should move to defaults/config-driven prompt text only.
+2. Optional cleanup of compatibility shims in `app/src/lib/*`, `app/src/constants/*`, and `app/src/prompts/*`.
+These files are mostly thin re-exports for backward compatibility; the target structure expects a smaller app-lib surface.
+3. Archive or replace `ResearchIt—Engine-Extraction-Restructuring-Plan.md`.
+It is now historical and still references old names/paths from the migration phase.
+
 ## Configuration
 
 Research behavior is configured through a `ResearchConfig` object.

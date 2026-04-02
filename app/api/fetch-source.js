@@ -63,7 +63,7 @@ export default async function handler(req, res) {
       redirect: "follow",
       signal: controller.signal,
       headers: {
-        "User-Agent": "AI-Use-Case-Researcher/1.0 (+https://github.com/ihvou/ai-use-case-prioritizer)",
+        "User-Agent": "Researchit/1.0 (+https://github.com/ihvou/researchit)",
         Accept: "text/html, text/plain;q=0.9, application/json;q=0.7, */*;q=0.5",
       },
     });
@@ -104,4 +104,3 @@ export default async function handler(req, res) {
     clearTimeout(timeout);
   }
 }
-
