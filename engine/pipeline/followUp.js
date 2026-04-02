@@ -558,6 +558,23 @@ export async function handleFollowUp(input, config, callbacks) {
   if (!transport?.callAnalyst || !transport?.fetchSource) {
     throw new Error("handleFollowUp requires callbacks.transport with callAnalyst and fetchSource.");
   }
+  const analystModelCfg = config?.models?.analyst || {};
+  const callAnalyst = (messages, systemPrompt, maxTokens = 5000, options = {}) => {
+    const merged = { ...(options || {}) };
+    if (!merged.model && typeof analystModelCfg.model === "string" && analystModelCfg.model.trim()) {
+      merged.model = analystModelCfg.model.trim();
+    }
+    if (!merged.webSearchModel && typeof analystModelCfg.webSearchModel === "string" && analystModelCfg.webSearchModel.trim()) {
+      merged.webSearchModel = analystModelCfg.webSearchModel.trim();
+    }
+    if (!merged.baseUrl && typeof analystModelCfg.baseUrl === "string" && analystModelCfg.baseUrl.trim()) {
+      merged.baseUrl = analystModelCfg.baseUrl.trim();
+    }
+    if (!merged.apiKey && typeof analystModelCfg.apiKey === "string" && analystModelCfg.apiKey.trim()) {
+      merged.apiKey = analystModelCfg.apiKey.trim();
+    }
+    return transport.callAnalyst(messages, systemPrompt, maxTokens, merged);
+  };
 
   const dims = config?.dimensions || [];
   const dim = dims.find((d) => d.id === dimId);
@@ -615,7 +632,7 @@ export async function handleFollowUp(input, config, callbacks) {
         dim,
         challenge,
         existingThread,
-        callAnalyst: transport.callAnalyst,
+        callAnalyst,
         maxTokens: tokenLimits.intentClassification,
       });
 
@@ -637,7 +654,7 @@ export async function handleFollowUp(input, config, callbacks) {
     effectiveScore,
     threadHistory,
     targetArgument,
-    callAnalyst: transport.callAnalyst,
+    callAnalyst,
     fetchSource: transport.fetchSource,
     followUpPrompt: prompts.followUp,
     limits: tokenLimits,

@@ -137,8 +137,20 @@ Default system prompts live in:
   },
 
   models: {
-    analyst: { provider: "openai", model: "gpt-5.4-mini" },
-    critic: { provider: "openai", model: "gpt-5.4" }
+    analyst: {
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      webSearchModel: "gpt-5.4-mini",   // optional; defaults to model
+      baseUrl: "https://api.openai.com", // optional
+      apiKey: "sk-..."                   // optional (BYOK at config/runtime layer)
+    },
+    critic: {
+      provider: "openai",
+      model: "gpt-5.4",
+      webSearchModel: "gpt-5.4",        // optional
+      baseUrl: "https://api.openai.com", // optional
+      apiKey: "sk-..."                   // optional
+    }
   },
 
   limits: {
@@ -168,10 +180,25 @@ Default system prompts live in:
 Create:
 - `app/.env.local`
 
-Required variable:
+Minimum server-side variable:
 ```bash
 OPENAI_API_KEY=sk-...
 ```
+
+Optional model/base URL variables:
+```bash
+OPENAI_BASE_URL=https://api.openai.com
+OPENAI_ANALYST_MODEL=gpt-5.4-mini
+OPENAI_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
+OPENAI_CRITIC_MODEL=gpt-5.4
+OPENAI_CRITIC_WEBSEARCH_MODEL=gpt-5.4
+OPENAI_WEBSEARCH_MODEL=gpt-5.4   # global fallback for web-search calls
+```
+
+BYOK notes:
+- API routes also accept per-request overrides: `apiKey`, `model`, `webSearchModel`, `baseUrl`.
+- If `apiKey` is passed in the request body, it overrides `OPENAI_API_KEY` for that request.
+- In the default app UI flow, keys are typically provided server-side via env vars.
 
 ### Install
 From repo root:

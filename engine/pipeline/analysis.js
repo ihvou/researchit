@@ -16,12 +16,33 @@ function getRuntime() {
   return ACTIVE_RUNTIME;
 }
 
+function withRoleModelOptions(role, options = {}) {
+  const runtime = getRuntime();
+  const modelCfg = runtime?.models?.[role] || {};
+  const merged = { ...(options || {}) };
+  if (!merged.model && typeof modelCfg.model === "string" && modelCfg.model.trim()) {
+    merged.model = modelCfg.model.trim();
+  }
+  if (!merged.webSearchModel && typeof modelCfg.webSearchModel === "string" && modelCfg.webSearchModel.trim()) {
+    merged.webSearchModel = modelCfg.webSearchModel.trim();
+  }
+  if (!merged.baseUrl && typeof modelCfg.baseUrl === "string" && modelCfg.baseUrl.trim()) {
+    merged.baseUrl = modelCfg.baseUrl.trim();
+  }
+  if (!merged.apiKey && typeof modelCfg.apiKey === "string" && modelCfg.apiKey.trim()) {
+    merged.apiKey = modelCfg.apiKey.trim();
+  }
+  return merged;
+}
+
 async function callAnalystAPI(messages, systemPrompt, maxTokens = 5000, options = {}) {
-  return getRuntime().transport.callAnalyst(messages, systemPrompt, maxTokens, options);
+  const merged = withRoleModelOptions("analyst", options);
+  return getRuntime().transport.callAnalyst(messages, systemPrompt, maxTokens, merged);
 }
 
 async function callCriticAPI(messages, systemPrompt, maxTokens = 5000, options = {}) {
-  return getRuntime().transport.callCritic(messages, systemPrompt, maxTokens, options);
+  const merged = withRoleModelOptions("critic", options);
+  return getRuntime().transport.callCritic(messages, systemPrompt, maxTokens, merged);
 }
 
 function analystPrompt() {
@@ -2998,6 +3019,7 @@ export async function runAnalysis(input, config, callbacks = {}) {
   ACTIVE_RUNTIME = {
     transport,
     prompts: config?.prompts || {},
+    models: config?.models || {},
   };
   try {
     await runAnalysisLegacy(

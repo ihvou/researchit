@@ -22,6 +22,10 @@ export function createTransport(callFn) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        model: typeof options.model === "string" ? options.model : undefined,
+        webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
+        apiKey: typeof options.apiKey === "string" ? options.apiKey : undefined,
+        baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
       };
       const data = await callFn("analyst", payload);
       return normalizeResult(data, !!options.includeMeta);
@@ -33,6 +37,10 @@ export function createTransport(callFn) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        model: typeof options.model === "string" ? options.model : undefined,
+        webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
+        apiKey: typeof options.apiKey === "string" ? options.apiKey : undefined,
+        baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
       };
       const data = await callFn("critic", payload);
       return normalizeResult(data, !!options.includeMeta);

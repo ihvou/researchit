@@ -125,6 +125,7 @@ async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, ma
   return {
     text,
     meta: {
+      model,
       liveSearchUsed: false,
       webSearchCalls: 0,
       ...extraMeta,
@@ -169,6 +170,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
   return {
     text,
     meta: {
+      model,
       liveSearchUsed: false,
       webSearchCalls: 0,
       ...extraMeta,
@@ -210,6 +212,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
     return {
       text,
       meta: {
+        model,
         liveSearchUsed: true,
         webSearchCalls: countWebSearchCalls(data),
       },
@@ -222,6 +225,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
 export async function callOpenAI({
   apiKey,
   model,
+  webSearchModel,
   messages,
   systemPrompt,
   maxTokens = 5000,
@@ -233,13 +237,24 @@ export async function callOpenAI({
     throw new Error("Missing messages or systemPrompt");
   }
 
+  const standardModel = String(model || "").trim();
+  const searchModel = String(webSearchModel || standardModel || "").trim();
+  if (!standardModel) throw new Error("OpenAI model is required");
+
   if (liveSearch) {
     try {
-      return await callResponsesWithWebSearch({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl });
+      return await callResponsesWithWebSearch({
+        apiKey,
+        model: searchModel,
+        messages,
+        systemPrompt,
+        maxTokens,
+        baseUrl,
+      });
     } catch (webErr) {
       return callChatCompletions({
         apiKey,
-        model,
+        model: searchModel,
         messages,
         systemPrompt,
         maxTokens,
@@ -252,5 +267,12 @@ export async function callOpenAI({
     }
   }
 
-  return callChatCompletions({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl });
+  return callChatCompletions({
+    apiKey,
+    model: standardModel,
+    messages,
+    systemPrompt,
+    maxTokens,
+    baseUrl,
+  });
 }

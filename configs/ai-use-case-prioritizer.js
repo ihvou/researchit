@@ -22,8 +22,16 @@ export const AI_USE_CASE_PRIORITIZER_CONFIG = {
   },
 
   models: {
-    analyst: { provider: "openai", model: "gpt-5.4-mini" },
-    critic: { provider: "openai", model: "gpt-5.4" },
+    analyst: {
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      webSearchModel: "gpt-5.4-mini",
+    },
+    critic: {
+      provider: "openai",
+      model: "gpt-5.4",
+      webSearchModel: "gpt-5.4",
+    },
   },
 
   limits: {
