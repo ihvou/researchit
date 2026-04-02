@@ -20,6 +20,9 @@ function withRoleModelOptions(role, options = {}) {
   const runtime = getRuntime();
   const modelCfg = runtime?.models?.[role] || {};
   const merged = { ...(options || {}) };
+  if (!merged.provider && typeof modelCfg.provider === "string" && modelCfg.provider.trim()) {
+    merged.provider = modelCfg.provider.trim();
+  }
   if (!merged.model && typeof modelCfg.model === "string" && modelCfg.model.trim()) {
     merged.model = modelCfg.model.trim();
   }
@@ -28,9 +31,6 @@ function withRoleModelOptions(role, options = {}) {
   }
   if (!merged.baseUrl && typeof modelCfg.baseUrl === "string" && modelCfg.baseUrl.trim()) {
     merged.baseUrl = modelCfg.baseUrl.trim();
-  }
-  if (!merged.apiKey && typeof modelCfg.apiKey === "string" && modelCfg.apiKey.trim()) {
-    merged.apiKey = modelCfg.apiKey.trim();
   }
   return merged;
 }

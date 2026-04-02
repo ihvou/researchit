@@ -561,6 +561,9 @@ export async function handleFollowUp(input, config, callbacks) {
   const analystModelCfg = config?.models?.analyst || {};
   const callAnalyst = (messages, systemPrompt, maxTokens = 5000, options = {}) => {
     const merged = { ...(options || {}) };
+    if (!merged.provider && typeof analystModelCfg.provider === "string" && analystModelCfg.provider.trim()) {
+      merged.provider = analystModelCfg.provider.trim();
+    }
     if (!merged.model && typeof analystModelCfg.model === "string" && analystModelCfg.model.trim()) {
       merged.model = analystModelCfg.model.trim();
     }
@@ -569,9 +572,6 @@ export async function handleFollowUp(input, config, callbacks) {
     }
     if (!merged.baseUrl && typeof analystModelCfg.baseUrl === "string" && analystModelCfg.baseUrl.trim()) {
       merged.baseUrl = analystModelCfg.baseUrl.trim();
-    }
-    if (!merged.apiKey && typeof analystModelCfg.apiKey === "string" && analystModelCfg.apiKey.trim()) {
-      merged.apiKey = analystModelCfg.apiKey.trim();
     }
     return transport.callAnalyst(messages, systemPrompt, maxTokens, merged);
   };

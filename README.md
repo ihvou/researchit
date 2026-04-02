@@ -141,15 +141,13 @@ Default system prompts live in:
       provider: "openai",
       model: "gpt-5.4-mini",
       webSearchModel: "gpt-5.4-mini",   // optional; defaults to model
-      baseUrl: "https://api.openai.com", // optional
-      apiKey: "sk-..."                   // optional (BYOK at config/runtime layer)
+      baseUrl: "https://api.openai.com"  // optional
     },
     critic: {
       provider: "openai",
       model: "gpt-5.4",
       webSearchModel: "gpt-5.4",        // optional
-      baseUrl: "https://api.openai.com", // optional
-      apiKey: "sk-..."                   // optional
+      baseUrl: "https://api.openai.com" // optional
     }
   },
 
@@ -185,20 +183,48 @@ Minimum server-side variable:
 OPENAI_API_KEY=sk-...
 ```
 
-Optional model/base URL variables:
+Optional provider/model/key overrides (env-first):
+```bash
+RESEARCHIT_PROVIDER=openai                  # or openai_compatible
+RESEARCHIT_API_KEY=...                      # global provider key override
+RESEARCHIT_BASE_URL=https://api.openai.com # or your OpenAI-compatible endpoint
+
+RESEARCHIT_ANALYST_PROVIDER=openai
+RESEARCHIT_ANALYST_API_KEY=...
+RESEARCHIT_ANALYST_MODEL=gpt-5.4-mini
+RESEARCHIT_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
+RESEARCHIT_ANALYST_BASE_URL=https://api.openai.com
+
+RESEARCHIT_CRITIC_PROVIDER=openai
+RESEARCHIT_CRITIC_API_KEY=...
+RESEARCHIT_CRITIC_MODEL=gpt-5.4
+RESEARCHIT_CRITIC_WEBSEARCH_MODEL=gpt-5.4
+RESEARCHIT_CRITIC_BASE_URL=https://api.openai.com
+```
+
+OpenAI-prefixed aliases are also supported for compatibility:
 ```bash
 OPENAI_BASE_URL=https://api.openai.com
+OPENAI_MODEL=gpt-5.4
+OPENAI_WEBSEARCH_MODEL=gpt-5.4
 OPENAI_ANALYST_MODEL=gpt-5.4-mini
 OPENAI_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
 OPENAI_CRITIC_MODEL=gpt-5.4
 OPENAI_CRITIC_WEBSEARCH_MODEL=gpt-5.4
-OPENAI_WEBSEARCH_MODEL=gpt-5.4   # global fallback for web-search calls
 ```
 
-BYOK notes:
-- API routes also accept per-request overrides: `apiKey`, `model`, `webSearchModel`, `baseUrl`.
-- If `apiKey` is passed in the request body, it overrides `OPENAI_API_KEY` for that request.
-- In the default app UI flow, keys are typically provided server-side via env vars.
+Resolution precedence for provider/model/base URL is:
+1. Role-specific `RESEARCHIT_*` env vars
+2. Global `RESEARCHIT_*` env vars
+3. OpenAI-prefixed env aliases
+4. `ResearchConfig.models.*` values
+5. Built-in defaults
+
+Key handling:
+- Current app architecture is server-key only.
+- API key is read from env vars (`RESEARCHIT_*_API_KEY`, `RESEARCHIT_API_KEY`, `OPENAI_API_KEY`).
+- Request-body API keys are intentionally not used yet.
+- End-user BYOK UI will be added later without changing engine contracts.
 
 ### Install
 From repo root:
