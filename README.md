@@ -57,7 +57,7 @@ Engine design constraints:
 - dependency-injected transport for LLM/source calls
 
 ### configs/
-`configs/` contains concrete `ResearchConfig` objects (for this product: `configs/ai-use-case-prioritizer.js`).
+`configs/` contains concrete `ResearchConfig` objects (for this product: `configs/research-configurations.js`).
 
 ### Architecture Diagram
 
@@ -95,10 +95,13 @@ Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `ad
 Research behavior is configured through a `ResearchConfig` object.
 
 Primary config in this repo:
-- `configs/ai-use-case-prioritizer.js`
+- `configs/research-configurations.js`
 
-Default dimensions live in:
-- `engine/configs/ai-use-case-dims.js`
+Default single-config alias:
+- `configs/researchit-prioritizer.js`
+
+Engine-level default dimensions preset (legacy compatibility export) lives in:
+- `engine/configs/researchit-dimensions.js`
 
 Default system prompts live in:
 - `engine/prompts/defaults.js`
@@ -107,23 +110,19 @@ Default system prompts live in:
 
 ```js
 {
-  id: "ai-use-case-prioritizer",
-  name: "AI Use Case Prioritizer",
+  id: "startup-product-idea-validation",
+  name: "Startup / Product Idea Validation",
+  tabLabel: "Startup Validation", // UI label for tabbed config selection
   engineVersion: "1.0.0",
 
   dimensions: [
     {
-      id: "roi",
-      label: "ROI Magnitude",
-      weight: 18,
+      id: "problem-severity",
+      label: "Problem Severity",
+      weight: 22,
       enabled: true,
       brief: "...",
-      fullDef: "...",
-      polarityHint: "Higher score means ...",
-      researchHints: {
-        whereToLook: ["..."],
-        queryTemplates: ["${vertical} ..."]
-      }
+      fullDef: "..."
     }
   ],
 

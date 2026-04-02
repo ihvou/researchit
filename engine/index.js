@@ -4,7 +4,7 @@ export { handleFollowUp } from "./pipeline/followUp.js";
 export { createTransport } from "./lib/transport.js";
 export { callOpenAI } from "./providers/openai.js";
 
-export { DEFAULT_DIMS } from "./configs/ai-use-case-dims.js";
+export { DEFAULT_DIMS } from "./configs/researchit-dimensions.js";
 
 export * from "./lib/json.js";
 export * from "./lib/arguments.js";
