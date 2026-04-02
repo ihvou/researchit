@@ -584,7 +584,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
 
   return `
     <article class="page summary-page">
-      <div class="page-topline">📊 AI Use Case Analysis Report</div>
+      <div class="page-topline">📊 Researchit Analysis Report</div>
       <h1 class="uc-title">${escapeHtml(title)}</h1>
       <div class="score-hero">
         <div class="score-value" style="color:${escapeHtml(scoreColor)}">${weighted == null ? "-" : `${escapeHtml(weighted)}%`}</div>
@@ -1265,7 +1265,7 @@ function buildReportHtml(useCases, dims, options = {}) {
   const portfolioPage = `
     <article class="page">
       <div class="page-topline">📁 Portfolio Overview</div>
-      <h1 class="portfolio-title">AI Use Case Portfolio Summary</h1>
+      <h1 class="portfolio-title">Researchit Portfolio Summary</h1>
       <div class="small-text">Generated: ${escapeHtml(generated)} | Use cases: ${useCases.length}</div>
       ${buildPortfolioTable(useCases, dims)}
       ${section("How to read this report", "<div class=\"small-text\">Each use case has one intro page (problem + solution), one summary page, then one page per scoring dimension. Large typography highlights score and brief judgment. Smaller typography contains full reasoning, sources, and debate details.</div>")}
@@ -1285,7 +1285,7 @@ function buildReportHtml(useCases, dims, options = {}) {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>AI Use Case Analysis Report</title>
+        <title>Researchit Analysis Report</title>
         <style>${reportCss(mode)}</style>
       </head>
       <body>

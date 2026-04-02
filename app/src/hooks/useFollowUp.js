@@ -1,5 +1,5 @@
 import { handleFollowUp as handleEngineFollowUp } from "@researchit/engine";
-import defaultConfig from "../../../configs/ai-use-case-prioritizer.js";
+import defaultConfig from "../../../configs/research-configurations.js";
 import { appTransport } from "../lib/api";
 
 function mergeConfig(baseConfig, dims) {

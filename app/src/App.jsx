@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { DEFAULT_DIMS } from "./constants/dimensions";
+import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../configs/research-configurations.js";
 import { calcWeightedScore } from "./lib/scoring";
 import { getDimensionView } from "./lib/dimensionView";
 import { runAnalysis } from "./hooks/useAnalysis";
@@ -19,10 +19,35 @@ import ExpandedRow from "./components/ExpandedRow";
 import ConfidenceBadge from "./components/ConfidenceBadge";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
+const CHEMICAL_NUMBER = 75;
+
+function cloneDims(dims = []) {
+  return (dims || []).map((d) => ({ ...d }));
+}
+
+function buildRuntimeConfig(baseConfig, dims) {
+  return {
+    ...baseConfig,
+    dimensions: cloneDims(dims),
+    prompts: { ...(baseConfig?.prompts || {}) },
+    models: { ...(baseConfig?.models || {}) },
+    limits: {
+      ...(baseConfig?.limits || {}),
+      tokenLimits: {
+        ...(baseConfig?.limits?.tokenLimits || {}),
+      },
+    },
+  };
+}
 
 export default function App() {
   const [useCases, setUseCases] = useState([]);
-  const [dims, setDims] = useState(DEFAULT_DIMS);
+  const [activeConfigId, setActiveConfigId] = useState(DEFAULT_RESEARCH_CONFIG.id);
+  const [dimsByConfig, setDimsByConfig] = useState(() => (
+    Object.fromEntries(
+      RESEARCH_CONFIGS.map((config) => [config.id, cloneDims(config.dimensions)])
+    )
+  ));
   const [inputText, setInputText] = useState("");
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [showDimsPanel, setShowDimsPanel] = useState(false);
@@ -40,6 +65,21 @@ export default function App() {
   const importFileRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
 
+  const activeConfig = RESEARCH_CONFIGS.find((config) => config.id === activeConfigId)
+    || DEFAULT_RESEARCH_CONFIG;
+  const dims = dimsByConfig[activeConfig.id] || cloneDims(activeConfig.dimensions);
+
+  function setActiveDims(updater) {
+    setDimsByConfig((prev) => {
+      const current = cloneDims(prev[activeConfig.id] || activeConfig.dimensions);
+      const next = typeof updater === "function" ? updater(current) : updater;
+      return {
+        ...prev,
+        [activeConfig.id]: cloneDims(next),
+      };
+    });
+  }
+
   function updateUC(id, fn) {
     setUseCases(prev => prev.map(u => u.id === id ? fn(u) : u));
   }
@@ -48,9 +88,13 @@ export default function App() {
     setFuInputs(prev => ({ ...prev, [key]: val }));
   }
 
-  async function runNewAnalysis(descInput, origin = null) {
+  async function runNewAnalysis(descInput, origin = null, configOverride = null) {
     const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
+
+    const selectedConfig = configOverride || activeConfig;
+    const selectedDims = dimsByConfig[selectedConfig.id] || selectedConfig.dimensions;
+    const runtimeConfig = buildRuntimeConfig(selectedConfig, selectedDims);
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const initialPhase = "analyst_baseline";
@@ -58,6 +102,8 @@ export default function App() {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
       attributes: null, dimScores: null, critique: null, finalScores: null,
       debate: [], followUps: {}, errorMsg: null, discover: null, origin,
+      researchConfigId: selectedConfig.id,
+      researchConfigName: selectedConfig.name,
       analysisMeta: {
         analysisMode: INTERNAL_ANALYSIS_MODE,
         liveSearchRequested: true,
@@ -93,7 +139,11 @@ export default function App() {
     setGlobalAnalyzing(true);
 
     try {
-      await runAnalysis(desc, dims, updateUC, id, { analysisMode: INTERNAL_ANALYSIS_MODE, origin });
+      await runAnalysis(desc, selectedDims, updateUC, id, {
+        analysisMode: INTERNAL_ANALYSIS_MODE,
+        origin,
+        config: runtimeConfig,
+      });
     } catch (err) {
       console.error("Analysis error:", err);
       updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: err.message }));
@@ -114,7 +164,22 @@ export default function App() {
     setFuInput(fuKey, "");
 
     try {
-      await handleFollowUp(ucId, dimId, challenge, dims, ucRef, updateUC, options);
+      const targetUseCase = ucRef.current.find((u) => u.id === ucId);
+      const targetConfigId = targetUseCase?.researchConfigId || activeConfig.id;
+      const targetConfig = RESEARCH_CONFIGS.find((config) => config.id === targetConfigId) || activeConfig;
+      const targetDims = dimsByConfig[targetConfig.id] || targetConfig.dimensions;
+      await handleFollowUp(
+        ucId,
+        dimId,
+        challenge,
+        targetDims,
+        ucRef,
+        updateUC,
+        {
+          ...options,
+          config: buildRuntimeConfig(targetConfig, targetDims),
+        }
+      );
     } catch (err) {
       updateUC(ucId, u => ({
         ...u,
@@ -183,13 +248,15 @@ export default function App() {
   async function onAnalyzeRelated(parentUc, candidate) {
     const desc = (candidate?.analysisInput || candidate?.title || "").trim();
     if (!desc || globalAnalyzing) return;
+    const parentConfig = RESEARCH_CONFIGS.find((config) => config.id === parentUc?.researchConfigId)
+      || activeConfig;
     const origin = {
       type: "discover",
       fromUseCaseId: parentUc?.id,
       fromUseCaseTitle: parentUc?.attributes?.title || parentUc?.rawInput || "",
       candidateTitle: candidate?.title || "",
     };
-    await runNewAnalysis(desc, origin);
+    await runNewAnalysis(desc, origin, parentConfig);
   }
 
   async function runToolbarExport(kind, action) {
@@ -224,8 +291,13 @@ export default function App() {
       if (!parsed.useCases.length) {
         throw new Error("No completed use cases were found in this file.");
       }
-      setUseCases((prev) => [...prev, ...parsed.useCases]);
-      setExpandedId(parsed.useCases[parsed.useCases.length - 1].id);
+      const importedWithConfig = parsed.useCases.map((uc) => ({
+        ...uc,
+        researchConfigId: activeConfig.id,
+        researchConfigName: activeConfig.name,
+      }));
+      setUseCases((prev) => [...prev, ...importedWithConfig]);
+      setExpandedId(importedWithConfig[importedWithConfig.length - 1].id);
       setImportWarning(parsed.warning || "");
     } catch (err) {
       setImportError(err?.message || "Import failed.");
@@ -235,9 +307,13 @@ export default function App() {
     }
   }
 
+  const visibleUseCases = useCases.filter((u) => {
+    const configId = u?.researchConfigId || DEFAULT_RESEARCH_CONFIG.id;
+    return configId === activeConfig.id;
+  });
   const activeDims = dims.filter(d => d.enabled);
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
-  const completedCount = useCases.filter((u) => u.status === "complete").length;
+  const completedCount = visibleUseCases.filter((u) => u.status === "complete").length;
 
   const PHASE_LABEL_SHORT = {
     analyst: "Research...",
@@ -255,39 +331,89 @@ export default function App() {
       {/* HEADER */}
       <div style={{
         background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)",
-        padding: "11px 20px", display: "flex", alignItems: "center", gap: 12,
+        padding: "11px 20px", display: "flex", alignItems: "center", gap: 10,
         position: "sticky", top: 0, zIndex: 20, flexWrap: "wrap",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <img
-            src="https://www.ciklum.com/wp-content/uploads/2025/10/fav.png"
-            alt="Ciklum icon"
-            width={14}
-            height={14}
-            style={{ borderRadius: 3, flexShrink: 0 }}
-          />
-          <span className="brand-title" style={{ fontWeight: 800, fontSize: 16, color: "var(--ck-blue)" }}>AI Use Case Researcher</span>
-          <span style={{ color: "var(--ck-muted-soft)", fontSize: 12, marginLeft: 2 }}>
-            {"11 dimensions | evidence-first research | analyst/critic debate | per-dimension challenges"}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, width: "100%" }}>
+          <div style={{
+            position: "relative",
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            border: "1px solid var(--ck-line-strong)",
+            background: "var(--ck-surface-soft)",
+            display: "grid",
+            placeItems: "center",
+            flexShrink: 0,
+            fontWeight: 800,
+            color: "var(--ck-blue)",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.7)",
+          }}>
+            <span style={{ position: "absolute", top: 1, left: 3, fontSize: 8, color: "var(--ck-muted)" }}>{CHEMICAL_NUMBER}</span>
+            <span style={{ fontSize: 13, lineHeight: 1 }}>Re</span>
+          </div>
+          <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-blue)" }}>Researchit</span>
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+
+        <div style={{ width: "100%", overflowX: "auto", paddingBottom: 2 }}>
+          <div style={{ display: "inline-flex", gap: 8, minWidth: "max-content" }}>
+            {RESEARCH_CONFIGS.map((config) => {
+              const isActive = config.id === activeConfig.id;
+              return (
+                <button
+                  key={config.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveConfigId(config.id);
+                    setShowDimsPanel(false);
+                    setShowInputPanel(false);
+                    setExpandedId(null);
+                    exportMenuRef.current?.removeAttribute("open");
+                  }}
+                  style={{
+                    borderRadius: 8,
+                    padding: "6px 12px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: `1px solid ${isActive ? "var(--ck-blue)" : "var(--ck-line)"}`,
+                    background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                    color: isActive ? "var(--ck-blue)" : "var(--ck-muted)",
+                    whiteSpace: "nowrap",
+                  }}>
+                  {config.tabLabel || config.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ck-muted)", fontSize: 12, minWidth: 0 }}>
+            <span>{activeDims.length} dimensions</span>
+            <span style={{ color: "var(--ck-line-strong)" }}>|</span>
+            <span>{activeConfig.relatedDiscovery ? "related discovery on" : "related discovery off"}</span>
+            <span style={{ color: "var(--ck-line-strong)" }}>|</span>
+            <span>{visibleUseCases.length} researches</span>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           <details ref={exportMenuRef} style={{ position: "relative" }}>
             <summary
               onClick={(e) => {
-                if (!useCases.length || toolbarExportLoading || importLoading) e.preventDefault();
+                if (!visibleUseCases.length || toolbarExportLoading || importLoading) e.preventDefault();
               }}
               style={{
                 background: "var(--ck-surface)",
                 border: "1px solid var(--ck-line)",
-                color: useCases.length ? "var(--ck-blue)" : "#8b95b3",
+                color: visibleUseCases.length ? "var(--ck-blue)" : "#8b95b3",
                 padding: "6px 12px",
                 borderRadius: 8,
                 fontSize: 12,
                 fontWeight: 600,
-                opacity: useCases.length && !importLoading ? 1 : 0.5,
+                opacity: visibleUseCases.length && !importLoading ? 1 : 0.5,
                 listStyle: "none",
-                cursor: useCases.length && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
+                cursor: visibleUseCases.length && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
                 userSelect: "none",
               }}>
               {toolbarExportLoading ? "Exporting..." : "Export v"}
@@ -306,8 +432,8 @@ export default function App() {
               zIndex: 30,
             }}>
               {[
-                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml(useCases, dims) },
-                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf(useCases, dims) },
+                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml(visibleUseCases, dims) },
+                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf(visibleUseCases, dims) },
                 {
                   key: "portfolio-json",
                   label: "Portfolio JSON",
@@ -315,7 +441,7 @@ export default function App() {
                     if (!completedCount) {
                       throw new Error("No completed use cases available for portfolio JSON export.");
                     }
-                    return exportPortfolioJson(useCases, dims);
+                    return exportPortfolioJson(visibleUseCases, dims);
                   },
                 },
                 { key: "logs", label: "Logs JSON", action: () => downloadDebugLogsBundle() },
@@ -382,8 +508,9 @@ export default function App() {
           <button
             onClick={() => setShowInputPanel(v => !v)}
             style={{ background: "var(--ck-blue)", border: "none", color: "#fff", padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700 }}>
-            + Add Use Case
+            + Research
           </button>
+        </div>
         </div>
       </div>
 
@@ -391,7 +518,7 @@ export default function App() {
       {showDimsPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
-            Scoring Dimensions & Weights - toggle to exclude from weighted score
+            {activeConfig.tabLabel || activeConfig.name} - scoring dimensions & weights
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 10, marginBottom: 12 }}>
             {dims.map(d => (
@@ -402,7 +529,7 @@ export default function App() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                   <input
                     type="checkbox" checked={d.enabled}
-                    onChange={e => setDims(p => p.map(x => x.id === d.id ? { ...x, enabled: e.target.checked } : x))}
+                    onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
                     style={{ accentColor: "var(--ck-blue)", width: 14, height: 14 }} />
                   <span style={{ fontWeight: 600, fontSize: 12, color: d.enabled ? "var(--ck-text)" : "var(--ck-muted)" }}>{d.label}</span>
                   <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 12, color: "var(--ck-blue)", fontWeight: 700 }}>{d.weight}%</span>
@@ -411,7 +538,7 @@ export default function App() {
                 <input
                   type="range" min={1} max={40} step={1} value={d.weight}
                   disabled={!d.enabled}
-                  onChange={e => setDims(p => p.map(x => x.id === d.id ? { ...x, weight: +e.target.value } : x))}
+                  onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
                   style={{ width: "100%", accentColor: "var(--ck-blue)", marginTop: 4 }} />
               </div>
             ))}
@@ -427,7 +554,7 @@ export default function App() {
       {showInputPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
-            New Use Case - describe the problem or solution
+            New Research - describe the problem or solution
           </div>
           <textarea
             autoFocus
@@ -478,13 +605,13 @@ export default function App() {
             {importWarning}
           </div>
         )}
-        {useCases.length === 0 ? (
+        {visibleUseCases.length === 0 ? (
           <div style={{ textAlign: "left", padding: "40px 20px", maxWidth: 760, margin: "0 auto", background: "var(--ck-surface)", borderRadius: 14, border: "1px solid var(--ck-line)" }}>
             <div style={{ fontSize: 20, fontWeight: 800, color: "var(--ck-text)", marginBottom: 8, fontFamily: "Aileron, Inter, sans-serif" }}>
-              AI Use Case Researcher
+              Researchit
             </div>
             <div style={{ fontSize: 13, color: "var(--ck-muted)", marginBottom: 14 }}>
-              Add one use case and the tool will run a structured research workflow:
+              Add one research and the tool will run a structured workflow:
             </div>
             <ul style={{ listStyle: "none", margin: 0, padding: 0, color: "var(--ck-text)", fontSize: 13, lineHeight: 1.6, display: "grid", gap: 8 }}>
               <li style={{ display: "flex", gap: 8 }}>
@@ -501,7 +628,7 @@ export default function App() {
               </li>
               <li style={{ display: "flex", gap: 8 }}>
                 <span aria-hidden="true">📈</span>
-                <span><strong>Prioritization:</strong> computes weighted scores across 11 dimensions and tags each one with high/medium/low confidence.</span>
+                <span><strong>Prioritization:</strong> computes weighted scores across the active tab dimensions and tags each one with high/medium/low confidence.</span>
               </li>
             </ul>
             <div style={{
@@ -532,7 +659,7 @@ export default function App() {
                   padding: 0,
                   textDecoration: "underline",
                 }}>
-                + Add Use Case
+                + Research
               </button>{" "}
               to start.
             </div>
@@ -543,7 +670,7 @@ export default function App() {
               <thead>
                 <tr style={{ background: "var(--ck-surface-soft)", borderBottom: "2px solid var(--ck-line)" }}>
                   <th style={{ textAlign: "left", padding: "10px 14px", color: "var(--ck-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>
-                    Use Case
+                    Research
                   </th>
                   {activeDims.map(d => (
                     <th key={d.id} style={{ textAlign: "center", padding: "8px 4px", color: "var(--ck-muted)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" }}>
@@ -565,7 +692,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {useCases.map(uc => {
+                {visibleUseCases.map(uc => {
                   const score = calcWeightedScore(uc, dims);
                   const isExpanded = expandedId === uc.id;
                   return [
