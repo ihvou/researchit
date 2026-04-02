@@ -1,0 +1,8 @@
+{
+  "name": "researchit-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cd app && npm run build"
+  }
+}
