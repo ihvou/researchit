@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ChevronIcon from "./ChevronIcon";
 
 export default function DimRubricToggle({ dim }) {
   const [open, setOpen] = useState(false);
@@ -7,8 +8,9 @@ export default function DimRubricToggle({ dim }) {
       {dim.brief}{" "}
       <button
         onClick={e => { e.stopPropagation(); setOpen(v => !v); }}
-        style={{ background: "none", border: "none", color: "var(--ck-text)", fontSize: 11, padding: 0, cursor: "pointer", fontWeight: 600 }}>
-        {open ? "^ hide rubric" : "v scoring rubric"}
+        style={{ background: "none", border: "none", color: "var(--ck-text)", fontSize: 11, padding: 0, cursor: "pointer", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <ChevronIcon direction={open ? "up" : "down"} size={11} />
+        {open ? "hide rubric" : "scoring rubric"}
       </button>
       {open && (
         <pre style={{

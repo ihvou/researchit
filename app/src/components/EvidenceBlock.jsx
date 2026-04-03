@@ -1,5 +1,6 @@
 import { useState } from "react";
 import SourcesList from "./SourcesList";
+import ChevronIcon from "./ChevronIcon";
 
 function renderTextWithUrlAnchors(text) {
   if (!text) return null;
@@ -51,8 +52,9 @@ export default function EvidenceBlock({ brief, full, sources, risks }) {
         <>
           <button
             onClick={() => setExpanded(v => !v)}
-            style={{ background: "none", border: "none", color: "var(--ck-text)", fontSize: 11, fontWeight: 600, padding: 0, cursor: "pointer", marginBottom: expanded ? 10 : 0 }}>
-            {expanded ? "^ Collapse full analysis" : "v Full analysis & sources"}
+            style={{ background: "none", border: "none", color: "var(--ck-text)", fontSize: 11, fontWeight: 600, padding: 0, cursor: "pointer", marginBottom: expanded ? 10 : 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <ChevronIcon direction={expanded ? "up" : "down"} size={11} />
+            {expanded ? "Collapse full analysis" : "Full analysis & sources"}
           </button>
           {expanded && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--ck-line)" }}>

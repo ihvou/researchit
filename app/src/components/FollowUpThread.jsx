@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Spinner from "./Spinner";
 import SourcesList from "./SourcesList";
+import ChevronIcon from "./ChevronIcon";
 import { intentDisplayLabel, pmIntentLabel } from "../lib/followUpIntent";
 
 function proposalTone(status) {
@@ -45,10 +46,11 @@ export default function FollowUpThread({
         <div style={{ marginBottom: 8 }}>
           <button
             onClick={() => setCollapsed(v => !v)}
-            style={{ background: "none", border: "none", color: "var(--ck-muted)", fontSize: 11, padding: "0 0 6px", cursor: "pointer" }}>
+            style={{ background: "none", border: "none", color: "var(--ck-muted)", fontSize: 11, padding: "0 0 6px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <ChevronIcon direction={collapsed ? "right" : "down"} size={11} />
             {collapsed
-              ? `> ${thread.length} follow-up message${thread.length > 1 ? "s" : ""} - expand`
-              : "v Follow-up thread"}
+              ? `${thread.length} follow-up message${thread.length > 1 ? "s" : ""} - expand`
+              : "Follow-up thread"}
           </button>
           {!collapsed && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

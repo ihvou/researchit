@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import Spinner from "./Spinner";
-import OverviewTab from "./OverviewTab";
 import DimensionsTab from "./DimensionsTab";
 import DebateTab from "./DebateTab";
 import DiscoverTab from "./DiscoverTab";
@@ -35,16 +34,16 @@ export default function ExpandedRow({
   onAnalyzeRelated,
   globalAnalyzing = false,
 }) {
-  const [tab, setTab] = useState("progress");
+  const [tab, setTab] = useState("dimensions");
   const [exportLoading, setExportLoading] = useState("");
 
   useEffect(() => {
-    setTab("progress");
+    setTab("dimensions");
   }, [uc.id]);
 
   useEffect(() => {
     if (uc.status === "complete") {
-      setTab("overview");
+      setTab("dimensions");
     }
   }, [uc.status]);
 
@@ -73,7 +72,6 @@ export default function ExpandedRow({
     <div style={{ borderTop: "2px solid var(--ck-line-strong)", maxWidth: "100%", overflowX: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", padding: "0 16px", flexWrap: "wrap", rowGap: 4 }}>
         {[
-          { id: "overview", label: "Overview" },
           { id: "dimensions", label: "Dimensions" },
           { id: "debate", label: "Debate & Challenges" },
           { id: "discover", label: "Discover" },
@@ -208,7 +206,6 @@ export default function ExpandedRow({
             Warning: {uc.errorMsg}
           </div>
         )}
-        {tab === "overview" && <OverviewTab uc={uc} dims={dims} />}
         {tab === "dimensions" && <DimensionsTab uc={uc} dims={dims} />}
         {tab === "debate" && (
           <DebateTab

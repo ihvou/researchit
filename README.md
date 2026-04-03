@@ -132,6 +132,7 @@ Default system prompts live in:
   id: "startup-product-idea-validation",
   name: "Startup / Product Idea Validation",
   tabLabel: "Startup Validation", // UI label for tabbed config selection
+  methodology: "Methodological foundation and positioning notes shown in UI",
   engineVersion: "1.0.0",
 
   dimensions: [

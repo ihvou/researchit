@@ -43,7 +43,8 @@ const CONFIG_SPECS = [
   {
     "id": "startup-product-idea-validation",
     "name": "Startup / Product Idea Validation",
-    "relatedDiscovery": true,
+    "methodology": "This config is anchored in Jobs to Be Done and Outcome-Driven Innovation for problem selection and unmet need quality; Sequoia's Arc product-market fit framework for market, product, and customer fit; a16z's work on growth metrics and distribution moats for early evidence quality and go-to-market realism; Hamilton Helmer's *7 Powers* for whether a promising idea could ever become defensible; and Marty Cagan's *Transformed* for product discovery discipline and evidence over opinion. I weighted problem reality and demand evidence above \"idea quality,\" because current practitioner thinking treats false positives on demand as the most common early-stage decision error.",
+        "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "problem-severity",
@@ -107,7 +108,8 @@ const CONFIG_SPECS = [
   {
     "id": "market-entry-analysis",
     "name": "Market Entry Analysis",
-    "relatedDiscovery": true,
+    "methodology": "This config is grounded in McKinsey's current \"where to play\" and market-specific competitive-advantage work, especially its emphasis that advantage is context-specific at the intersection of offering, geography, and customer; BCG's strategy and sector work on uneven market conditions and local fit; Bain's strategic-fit logic; and classic strategy books that remain widely used in practice, especially Rumelt on diagnosis and coherent action. The result is not a generic \"country attractiveness\" template: it is a right-to-win test for a specific offer in a specific market.",
+        "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "market-attractiveness",
@@ -163,7 +165,8 @@ const CONFIG_SPECS = [
   {
     "id": "competitive-landscape",
     "name": "Competitive Landscape",
-    "relatedDiscovery": false,
+    "methodology": "This config draws on Helmer's durable-advantage lens, McKinsey's granular competitive-advantage approach, and practitioner venture thinking from a16z and Sequoia that focuses less on feature comparison and more on what actually drives customer choice, market power, and white space. I excluded generic checklist competitor matrices as the scoring backbone; the point here is to understand the structure of advantage, not just list vendors.",
+        "relatedDiscovery": false,
     "dimensions": [
       {
         "id": "category-structure",
@@ -219,7 +222,8 @@ const CONFIG_SPECS = [
   {
     "id": "build-vs-buy-technology-decision",
     "name": "Build vs. Buy / Technology Decision",
-    "relatedDiscovery": true,
+    "methodology": "This config uses BCG's current buy-and-build logic, which explicitly favors hybrid approaches when companies need both speed and differentiation; McKinsey's recent framing that build-versus-buy should be evaluated in light of competitive advantage and strategic flexibility; Bain's execution-first view that capabilities should be sequenced to deliver value while building lasting internal strengths; and SVPG's product-operating-model view that capabilities matter only when they materially affect product outcomes. This is why the config gives high weight to strategic criticality and time-to-value instead of treating the choice as a pure cost comparison.",
+        "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "strategic-criticality",
@@ -275,7 +279,8 @@ const CONFIG_SPECS = [
   {
     "id": "investment-m-and-a-screening",
     "name": "Investment / M&A Screening",
-    "relatedDiscovery": true,
+    "methodology": "This config combines current M&A practice from McKinsey, BCG, and Bain with venture-style quality filters from Sequoia and a16z. The consulting side contributes strategic fit, synergy logic, diligence beyond the standard legal-financial checklist, and repeated emphasis on experienced acquirers, value creation, and deeper diligence. The venture side contributes market quality, growth quality, and defensibility. I deliberately weight quality of advantage and value-creation logic above raw market excitement because practitioners are trying to avoid expensive false positives, not just find \"interesting\" assets.",
+        "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "strategic-fit",
@@ -331,7 +336,8 @@ const CONFIG_SPECS = [
   {
     "id": "product-expansion-new-feature-adjacent-segment-new-geography",
     "name": "Product Expansion (new feature, adjacent segment, new geography)",
-    "relatedDiscovery": true,
+    "methodology": "This config is based on McKinsey's current work on growing within and beyond the core, Bain's long-running but still practitioner-relevant adjacency and \"beyond the core\" logic, Sequoia's product-market-fit framing, and a16z's growth thinking around expansion metrics and land-and-expand behavior. I treat expansion as a transfer test: can the company carry real advantage from the core into a new feature, segment, or geography without destroying focus or economics?",
+        "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "core-strength-transferability",
@@ -393,6 +399,7 @@ export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   engineVersion: "1.0.0",
   dimensions: spec.dimensions,
   relatedDiscovery: spec.relatedDiscovery !== false,
+  methodology: spec.methodology || "",
   prompts: BASE_PROMPTS,
   models: SHARED_MODELS,
   limits: SHARED_LIMITS,
