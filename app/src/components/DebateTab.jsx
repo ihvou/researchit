@@ -35,23 +35,23 @@ export default function DebateTab({
     <div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
         {phaseInitial && (
-          <div style={{ background: "#edf2ff", border: "1px solid #c9d4ff", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "var(--ck-blue)", fontWeight: 700, marginBottom: 4 }}>ANALYST - INITIAL ASSESSMENT</div>
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>ANALYST - INITIAL ASSESSMENT</div>
             <p style={{ fontSize: 12, color: "var(--ck-blue-ink)", margin: 0, lineHeight: 1.55 }}>
               Scored all {dims.length} dimensions based on market knowledge. See Dimensions tab for per-dimension evidence and full analysis.
             </p>
           </div>
         )}
         {phaseCritique?.content?.overallFeedback && (
-          <div style={{ background: "var(--ck-warn-bg)", border: "1px solid var(--ck-warn-line)", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "#935f00", fontWeight: 700, marginBottom: 4 }}>CRITIC - PEER REVIEW</div>
-            <p style={{ fontSize: 12, color: "#694300", margin: 0, lineHeight: 1.55 }}>{phaseCritique.content.overallFeedback}</p>
+          <div style={{ background: "var(--ck-warn-bg)", border: "1px solid var(--ck-warn-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>CRITIC - PEER REVIEW</div>
+            <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: 0, lineHeight: 1.55 }}>{phaseCritique.content.overallFeedback}</p>
             <SourcesList sources={phaseCritique.content?.sources} />
           </div>
         )}
         {phaseResponse && (
-          <div style={{ background: "#edf2ff", border: "1px solid #c9d4ff", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, color: "var(--ck-blue)", fontWeight: 700, marginBottom: 4 }}>ANALYST - FINAL RESPONSE</div>
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>ANALYST - FINAL RESPONSE</div>
             <p style={{ fontSize: 12, color: "var(--ck-blue-ink)", margin: 0, lineHeight: 1.55 }}>
               {analystFinalText || "Analyst finalized per-dimension updates after critique. See dimension cards below."}
             </p>
@@ -60,7 +60,7 @@ export default function DebateTab({
         )}
       </div>
 
-      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
         Per-Dimension Exchanges & Follow-Up Challenges
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -96,7 +96,7 @@ export default function DebateTab({
           };
 
           return (
-            <div key={d.id} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, overflow: "hidden" }}>
+            <div key={d.id} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--ck-surface-soft)" }}>
                 <span style={{ fontWeight: 700, color: "var(--ck-text)", fontSize: 13 }}>{d.label}</span>
                 <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
@@ -112,7 +112,7 @@ export default function DebateTab({
                     <>
                       <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-&gt;</span>
                       <ScorePill score={pmAdjustedScore} revised={true} />
-                      <span style={{ fontSize: 10, color: "#935f00", fontWeight: 700 }}>PM-REVISED</span>
+                      <span style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700 }}>PM-REVISED</span>
                     </>
                   )}
                 </div>
@@ -138,17 +138,17 @@ export default function DebateTab({
 
               {crit && (
                 <div style={{ padding: "10px 14px", borderTop: "1px solid var(--ck-line)", background: "var(--ck-warn-bg)" }}>
-                  <div style={{ fontSize: 10, color: "#935f00", fontWeight: 700, marginBottom: 4 }}>
+                  <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>
                     CRITIC {!crit.scoreJustified ? `- suggests ${crit.suggestedScore}/5` : "- score justified"}
                   </div>
-                  <p style={{ fontSize: 12, color: "#694300", margin: 0, lineHeight: 1.6 }}>{crit.critique}</p>
+                  <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: 0, lineHeight: 1.6 }}>{crit.critique}</p>
                   <SourcesList sources={crit.sources} />
                 </div>
               )}
 
               {fin && (
-                <div style={{ padding: "10px 14px", borderTop: "1px solid var(--ck-line)", background: "#edf2ff" }}>
-                  <div style={{ fontSize: 10, color: "var(--ck-blue)", fontWeight: 700, marginBottom: 4 }}>ANALYST</div>
+                <div style={{ padding: "10px 14px", borderTop: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)" }}>
+                  <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>ANALYST</div>
                   <p style={{ fontSize: 12, color: "var(--ck-blue-ink)", margin: 0, lineHeight: 1.6 }}>{fin.response}</p>
                   <SourcesList sources={fin.sources} />
                 </div>

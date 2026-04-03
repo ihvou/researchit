@@ -171,7 +171,7 @@ function replaceUrlsWithSourceLabels(text, sources = []) {
   });
 }
 
-function safeFilePart(value, fallback = "use-case") {
+function safeFilePart(value, fallback = "research") {
   const raw = String(value || fallback).trim().toLowerCase();
   const cleaned = raw.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return cleaned || fallback;
@@ -236,37 +236,28 @@ function scoreTier(score) {
 
 function priorityIcon(score) {
   const n = Number(score);
-  if (!Number.isFinite(n)) return "❔";
-  if (n >= 80) return "🚀";
-  if (n >= 65) return "✅";
-  if (n >= 50) return "⚠️";
-  return "🧪";
-}
-
-function dimensionScoreIcon(score) {
-  const n = Number(score);
-  if (!Number.isFinite(n)) return "❔";
-  if (n >= 4.5) return "🏆";
-  if (n >= 3.5) return "✅";
-  if (n >= 2.5) return "⚠️";
-  return "❗";
+  if (!Number.isFinite(n)) return "N/A";
+  if (n >= 80) return "A";
+  if (n >= 65) return "B";
+  if (n >= 50) return "C";
+  return "D";
 }
 
 function sectionIcon(label) {
   const map = {
-    "Strategic Conclusion": "🎯",
-    "Supporting Evidence": "✅",
-    "Limiting Factors": "⚠️",
-    "Research Brief": "🧭",
-    "Full Analysis": "🧠",
-    "Risks": "⚠️",
-    "Sources": "🔎",
-    "Debate": "⚖️",
-    "Follow-up Thread": "💬",
-    "Critic Sources": "🧾",
-    "How to read this report": "🧭",
+    "Strategic Conclusion": "CONC",
+    "Supporting Evidence": "SUP",
+    "Limiting Factors": "LIM",
+    "Research Brief": "BRF",
+    "Full Analysis": "ANL",
+    "Risks": "RSK",
+    "Sources": "SRC",
+    "Debate": "DEB",
+    "Follow-up Thread": "THR",
+    "Critic Sources": "CRS",
+    "How to read this report": "GDE",
   };
-  return map[label] || "📌";
+  return map[label] || "SEC";
 }
 
 function normalizeConfidence(value) {
@@ -289,16 +280,15 @@ function confidenceChipHtml(level, reason = "", compact = false) {
   const normalized = normalizeConfidence(level);
   if (!normalized) return "";
   const tone = normalized === "high"
-    ? { bg: "#e9f8ee", line: "#b3e3c4", ink: "#12805c", icon: "🟢", short: "High" }
+    ? { bg: "#f7f7f6", line: "#d5d5d2", ink: "#121212", icon: "H", short: "High" }
     : normalized === "medium"
-      ? { bg: "#fff6e8", line: "#f5d7a3", ink: "#9a6507", icon: "🟡", short: "Med" }
-      : { bg: "#fff1ef", line: "#f3c2ba", ink: "#b42318", icon: "🔴", short: "Low" };
+      ? { bg: "#f7f7f6", line: "#d5d5d2", ink: "#4b4b48", icon: "M", short: "Med" }
+      : { bg: "#f7f7f6", line: "#b8b8b4", ink: "#4b4b48", icon: "L", short: "Low" };
   const title = reason ? `${confidenceLabel(normalized)}: ${reason}` : confidenceLabel(normalized);
 
   return `
     <span class="confidence-chip" title="${escapeHtml(title)}" style="background:${tone.bg};border-color:${tone.line};color:${tone.ink};">
-      <span>${tone.icon}</span>
-      <span>${escapeHtml(compact ? tone.short : `${tone.short} confidence`)}</span>
+      <span>${escapeHtml(compact ? tone.icon : `${tone.short} confidence`)}</span>
     </span>
   `;
 }
@@ -485,7 +475,7 @@ function section(label, body, className = "") {
   const icon = sectionIcon(label);
   return `
     <section class="section ${className}">
-      <div class="section-label"><span class="section-icon">${icon}</span><span>${escapeHtml(label)}</span></div>
+      <div class="section-label"><span class="section-code">${escapeHtml(icon)}</span><span>${escapeHtml(label)}</span></div>
       <div class="section-body">${body}</div>
     </section>
   `;
@@ -499,7 +489,7 @@ function renderUseCaseIntroPage(uc, dims, index) {
 
   return `
     <article class="page intro-page">
-      <div class="page-topline">🧭 Use Case Brief</div>
+      <div class="page-topline">Research Brief</div>
       <h1 class="uc-title">${escapeHtml(title)}</h1>
       <div class="intro-context">${escapeHtml(context)}</div>
       <section class="intro-block">
@@ -528,16 +518,15 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const title = uc.attributes?.title || uc.rawInput || `Use case ${index + 1}`;
   const weighted = calcWeightedScore(uc, dims);
   const tier = scoreTier(weighted);
-  const scoreColor = weighted ? totalScoreColor(weighted) : "#64748b";
+  const scoreColor = weighted ? totalScoreColor(weighted) : "#73736f";
   const baseCards = dims.map((d) => {
     const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
     const score = view.effectiveScore;
-    const color = score != null ? dimScoreColor(Number(score)) : "#64748b";
-    const dimIcon = dimensionScoreIcon(score);
+    const color = score != null ? dimScoreColor(Number(score)) : "#73736f";
     return `
       <div class="dim-card">
         <div class="dim-head-inline">
-          <span class="dim-name">${dimIcon} ${escapeHtml(d.label)}</span>
+          <span class="dim-name">${escapeHtml(d.label)}</span>
           <span class="dim-inline-meta">
             <span class="dim-score-inline" style="color:${escapeHtml(color)}">${score == null ? "-" : `${escapeHtml(score)}/5`}</span>
             ${confidenceChipHtml(view.confidence, view.confidenceReason, true)}
@@ -553,7 +542,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const fillerCard = fillerMissing
     ? `
       <div class="dim-card dim-card-filler" style="grid-column: span ${fillerMissing};">
-        <div class="dim-filler-title">🔎 Deep-Dive Slides</div>
+        <div class="dim-filler-title">Deep-Dive Slides</div>
         <div class="dim-filler-text">Dimension pages include full analysis, debate details, and compact source links.</div>
       </div>
     `
@@ -576,7 +565,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
   const lowConfidenceBanner = lowConfidence.length
     ? `
       <div class="confidence-alert">
-        <strong>🔴 Low-confidence dimensions: ${lowConfidence.length}</strong>
+        <strong>Low-confidence dimensions: ${lowConfidence.length}</strong>
         <span>${escapeHtml(lowConfidence.map((item) => item.dim.label).join(", "))}</span>
       </div>
     `
@@ -584,11 +573,11 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
 
   return `
     <article class="page summary-page">
-      <div class="page-topline">📊 Researchit Analysis Report</div>
+      <div class="page-topline">Researchit Analysis Report</div>
       <h1 class="uc-title">${escapeHtml(title)}</h1>
       <div class="score-hero">
         <div class="score-value" style="color:${escapeHtml(scoreColor)}">${weighted == null ? "-" : `${escapeHtml(weighted)}%`}</div>
-        <div class="score-tier">${priorityIcon(weighted)} ${escapeHtml(tier)}</div>
+        <div class="score-tier">Tier ${priorityIcon(weighted)} | ${escapeHtml(tier)}</div>
       </div>
       <div class="summary-desc">${escapeHtml(uc.attributes?.expandedDescription || uc.rawInput || "")}</div>
       ${summaryMeta}
@@ -603,8 +592,8 @@ function renderDimensionPage(uc, d, options = {}) {
   const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
   const critic = uc.critique?.dimensions?.[d.id];
   const score = view.effectiveScore;
-  const scoreColor = score != null ? dimScoreColor(Number(score)) : "#64748b";
-  const title = uc.attributes?.title || uc.rawInput || "Untitled use case";
+  const scoreColor = score != null ? dimScoreColor(Number(score)) : "#73736f";
+  const title = uc.attributes?.title || uc.rawInput || "Untitled research";
   const fullWithSourceLabels = replaceUrlsWithSourceLabels(
     view.full || "No full analysis available.",
     view.sources || []
@@ -621,11 +610,11 @@ function renderDimensionPage(uc, d, options = {}) {
 
   return `
     <article class="page dimension-page">
-      <div class="page-topline">🧩 ${escapeHtml(title)} - ${escapeHtml(d.label)}</div>
+      <div class="page-topline">${escapeHtml(title)} - ${escapeHtml(d.label)}</div>
       <div class="dim-page-head">
-        <h2 class="dim-page-title">${dimensionScoreIcon(score)} ${escapeHtml(d.label)}</h2>
+        <h2 class="dim-page-title">${escapeHtml(d.label)}</h2>
         <div class="dim-page-meta">
-          <div class="dim-page-weight">⚖️ Weight ${escapeHtml(d.weight)}%</div>
+          <div class="dim-page-weight">Weight ${escapeHtml(d.weight)}%</div>
           ${confidenceChipHtml(view.confidence, view.confidenceReason)}
         </div>
       </div>
@@ -657,7 +646,7 @@ function renderDimensionPage(uc, d, options = {}) {
 
 function buildPortfolioTable(useCases, dims) {
   if (!useCases.length) {
-    return "<div class=\"muted\">No use cases available.</div>";
+    return "<div class=\"muted\">No researches available.</div>";
   }
   const rows = useCases.map((uc, idx) => {
     const title = uc.attributes?.title || uc.rawInput || `Use case ${idx + 1}`;
@@ -678,9 +667,9 @@ function buildPortfolioTable(useCases, dims) {
       <thead>
         <tr>
           <th>#</th>
-          <th>🧩 Use Case</th>
-          <th>📈 Weighted Score</th>
-          <th>🎯 Strategic Conclusion</th>
+          <th>Research</th>
+          <th>Weighted Score</th>
+          <th>Strategic Conclusion</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -692,22 +681,23 @@ function reportCss(mode = "html") {
   const isPdf = mode === "pdf";
   return `
     ${isPdf ? "@page { size: A4 portrait; margin: 8mm; }" : ""}
+    @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap");
     :root {
       color-scheme: light;
-      --bg: #f6f8fc;
+      --bg: #f3f3f2;
       --panel: #ffffff;
-      --ink: #0f172a;
-      --muted: #475569;
-      --line: #dbe2f0;
-      --accent: #2563eb;
+      --ink: #121212;
+      --muted: #4b4b48;
+      --line: #d5d5d2;
+      --accent: #121212;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      line-height: 1.35;
+      font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.4;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
@@ -720,7 +710,7 @@ function reportCss(mode = "html") {
     .page {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 2px;
       padding: ${isPdf ? "20px 22px" : "24px 26px"};
       margin-bottom: 16px;
       page-break-after: always;
@@ -770,7 +760,7 @@ function reportCss(mode = "html") {
     }
     .summary-desc {
       font-size: ${isPdf ? "14px" : "15px"};
-      color: #1e293b;
+      color: #2e2e2b;
       margin: 8px 0 10px;
       font-weight: 500;
     }
@@ -783,20 +773,20 @@ function reportCss(mode = "html") {
     .meta-grid > div {
       display: flex;
       gap: 8px;
-      border-bottom: 1px solid #eef2ff;
+      border-bottom: 1px solid #d5d5d2;
       padding-bottom: 4px;
     }
     .intro-context {
       font-size: ${isPdf ? "14px" : "15px"};
-      color: #1e293b;
+      color: #2e2e2b;
       margin: 10px 0 12px;
       font-weight: 500;
       line-height: 1.4;
     }
     .intro-block {
-      border: 1px solid #dbe2f0;
-      background: #f9fbff;
-      border-radius: 10px;
+      border: 1px solid #d5d5d2;
+      background: #f7f7f6;
+      border-radius: 2px;
       padding: 10px 12px;
       margin-bottom: 10px;
     }
@@ -804,14 +794,14 @@ function reportCss(mode = "html") {
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: #1d4ed8;
+      color: #121212;
       font-weight: 700;
       margin-bottom: 5px;
     }
     .intro-text {
       font-size: ${isPdf ? "12px" : "13px"};
       line-height: 1.45;
-      color: #0f172a;
+      color: #121212;
       font-weight: 600;
       white-space: pre-wrap;
     }
@@ -824,28 +814,28 @@ function reportCss(mode = "html") {
     .intro-meta-grid > div {
       display: flex;
       gap: 8px;
-      border-bottom: 1px solid #eef2ff;
+      border-bottom: 1px solid #d5d5d2;
       padding-bottom: 4px;
     }
     .meta-k {
       min-width: 92px;
       font-size: 12px;
       text-transform: uppercase;
-      color: #64748b;
+      color: #73736f;
       font-weight: 700;
       letter-spacing: 0.04em;
     }
     .meta-v {
       font-size: 13px;
       font-weight: 600;
-      color: #0f172a;
+      color: #121212;
     }
     .confidence-alert {
       margin-bottom: 8px;
-      border: 1px solid #f5d7a3;
-      background: #fff6e8;
-      color: #7a4a00;
-      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #f7f7f6;
+      color: var(--muted);
+      border-radius: 2px;
       padding: 6px 10px;
       font-size: 11px;
       line-height: 1.35;
@@ -860,27 +850,27 @@ function reportCss(mode = "html") {
       gap: 6px;
     }
     .dim-card {
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
       padding: 7px 8px;
-      background: #fcfdff;
+      background: #f7f7f6;
     }
     .dim-card-filler {
       display: flex;
       flex-direction: column;
       justify-content: center;
       border-style: dashed;
-      background: #f8fbff;
+      background: #f7f7f6;
     }
     .dim-filler-title {
       font-size: 12px;
       font-weight: 800;
-      color: #1d4ed8;
+      color: #121212;
       margin-bottom: 4px;
     }
     .dim-filler-text {
       font-size: 10px;
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.35;
       font-weight: 600;
     }
@@ -902,7 +892,7 @@ function reportCss(mode = "html") {
       align-items: center;
       gap: 4px;
       border: 1px solid;
-      border-radius: 999px;
+      border-radius: 2px;
       font-size: 10px;
       font-weight: 700;
       line-height: 1.2;
@@ -912,7 +902,7 @@ function reportCss(mode = "html") {
     .dim-name {
       font-size: 12px;
       font-weight: 700;
-      color: #0f172a;
+      color: #121212;
       line-height: 1.15;
       min-width: 0;
       overflow: hidden;
@@ -921,7 +911,7 @@ function reportCss(mode = "html") {
     }
     .dim-weight {
       font-size: 11px;
-      color: #64748b;
+      color: #73736f;
       font-weight: 700;
     }
     .dim-score-inline {
@@ -934,7 +924,7 @@ function reportCss(mode = "html") {
     .dim-brief {
       font-size: ${isPdf ? "9.2px" : "9.8px"};
       font-weight: 700;
-      color: #1e293b;
+      color: #2e2e2b;
       line-height: 1.16;
       margin-top: 2px;
       white-space: normal;
@@ -960,7 +950,7 @@ function reportCss(mode = "html") {
     }
     .dim-page-weight {
       font-size: 14px;
-      color: #334155;
+      color: #4b4b48;
       font-weight: 700;
     }
     .score-brief-band {
@@ -968,9 +958,9 @@ function reportCss(mode = "html") {
       grid-template-columns: auto 1fr;
       gap: 10px;
       align-items: center;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      border-radius: 12px;
+      background: #f0f0ef;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
       padding: ${isPdf ? "9px 11px" : "10px 12px"};
       margin-bottom: 10px;
     }
@@ -985,19 +975,19 @@ function reportCss(mode = "html") {
       font-size: ${isPdf ? "15px" : "16px"};
       line-height: 1.18;
       font-weight: 800;
-      color: #0f172a;
+      color: #121212;
     }
     .confidence-detail {
       margin: -2px 0 8px;
       font-size: ${isPdf ? "10px" : "10.5px"};
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.28;
       font-weight: 700;
     }
     .section {
       margin-bottom: 6px;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
       padding: 7px 9px;
       background: #ffffff;
     }
@@ -1005,35 +995,38 @@ function reportCss(mode = "html") {
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: #64748b;
+      color: #73736f;
       font-weight: 700;
       margin-bottom: 4px;
       display: flex;
       align-items: center;
       gap: 6px;
     }
-    .section-icon {
-      font-size: 13px;
+    .section-code {
+      font-size: 10px;
       line-height: 1;
+      font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      letter-spacing: 0.02em;
+      color: #121212;
     }
     .small-text {
       font-size: ${isPdf ? "10px" : "10.5px"};
       line-height: 1.28;
-      color: #334155;
+      color: #4b4b48;
     }
     .arg-list {
       display: grid;
       gap: 5px;
     }
     .arg-item {
-      border: 1px solid #dbe2f0;
-      border-radius: 8px;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
       padding: 6px 8px;
-      background: #f8fbff;
+      background: #f7f7f6;
     }
     .arg-item-discarded {
       opacity: 0.72;
-      background: #f8fafc;
+      background: #f7f7f6;
     }
     .arg-item-discarded .arg-claim,
     .arg-item-discarded .arg-detail {
@@ -1043,19 +1036,19 @@ function reportCss(mode = "html") {
       font-size: ${isPdf ? "10.2px" : "10.6px"};
       line-height: 1.26;
       font-weight: 800;
-      color: #0f172a;
+      color: #121212;
     }
     .arg-detail {
       margin-top: 2px;
       font-size: ${isPdf ? "9.6px" : "10px"};
       line-height: 1.24;
-      color: #334155;
+      color: #4b4b48;
     }
     .arg-discard-note {
       margin-top: 3px;
       font-size: ${isPdf ? "9px" : "9.4px"};
       line-height: 1.2;
-      color: #935f00;
+      color: var(--muted);
       font-weight: 700;
     }
     .brief-list {
@@ -1064,7 +1057,7 @@ function reportCss(mode = "html") {
       display: grid;
       gap: 2px;
       font-size: ${isPdf ? "9.6px" : "10px"};
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.22;
     }
     .pre-wrap {
@@ -1079,10 +1072,10 @@ function reportCss(mode = "html") {
       display: inline-flex;
       align-items: center;
       padding: 2px 7px;
-      border: 1px solid #bfdbfe;
-      border-radius: 999px;
-      background: #eff6ff;
-      color: #2563eb;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
+      background: #f0f0ef;
+      color: #121212;
       text-decoration: none;
       font-size: 10px;
       font-weight: 700;
@@ -1092,9 +1085,9 @@ function reportCss(mode = "html") {
       text-decoration: underline;
     }
     .source-chip-static {
-      border-color: #cbd5e1;
-      background: #f8fafc;
-      color: #475569;
+      border-color: #d5d5d2;
+      background: #f7f7f6;
+      color: #4b4b48;
       text-decoration: none;
     }
     .thread-list {
@@ -1103,21 +1096,21 @@ function reportCss(mode = "html") {
     }
     .thread-item {
       padding: 6px 8px;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
+      background: #f7f7f6;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
     }
     .thread-role {
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: #475569;
+      color: #4b4b48;
       margin-bottom: 2px;
     }
     .thread-body {
       font-size: ${isPdf ? "10px" : "10.5px"};
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.22;
       white-space: pre-wrap;
     }
@@ -1127,32 +1120,32 @@ function reportCss(mode = "html") {
     }
     .discover-summary {
       font-size: ${isPdf ? "9.2px" : "9.6px"};
-      color: #1d4ed8;
+      color: #121212;
       font-weight: 700;
       line-height: 1.2;
       margin-bottom: 1px;
     }
     .discover-item {
-      border: 1px solid #dbe2f0;
-      background: #f9fbff;
-      border-radius: 8px;
+      border: 1px solid #d5d5d2;
+      background: #f7f7f6;
+      border-radius: 2px;
       padding: 6px 8px;
     }
     .discover-title {
       font-size: ${isPdf ? "10.5px" : "11px"};
       font-weight: 800;
-      color: #0f172a;
+      color: #121212;
       margin-bottom: 2px;
     }
     .discover-rationale {
       font-size: ${isPdf ? "9.4px" : "9.8px"};
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.25;
     }
     .discover-improves {
       margin-top: 3px;
       font-size: ${isPdf ? "9px" : "9.4px"};
-      color: #1d4ed8;
+      color: #121212;
       line-height: 1.2;
       font-weight: 700;
     }
@@ -1163,21 +1156,21 @@ function reportCss(mode = "html") {
     }
     .discover-target {
       font-size: ${isPdf ? "8.9px" : "9.3px"};
-      color: #334155;
+      color: #4b4b48;
       line-height: 1.2;
     }
     .discover-checks {
       margin-top: 4px;
-      border: 1px solid #dbe2f0;
-      border-radius: 7px;
-      background: #eff6ff;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
+      background: #f0f0ef;
       padding: 4px 6px;
       display: grid;
       gap: 2px;
     }
     .discover-check-title {
       font-size: ${isPdf ? "8.6px" : "9px"};
-      color: #1d4ed8;
+      color: #121212;
       line-height: 1.1;
       font-weight: 800;
       text-transform: uppercase;
@@ -1185,7 +1178,7 @@ function reportCss(mode = "html") {
     }
     .discover-check {
       font-size: ${isPdf ? "8.7px" : "9.1px"};
-      color: #1e293b;
+      color: #2e2e2b;
       line-height: 1.2;
     }
     .portfolio-title {
@@ -1202,18 +1195,18 @@ function reportCss(mode = "html") {
     .portfolio-table th,
     .portfolio-table td {
       text-align: left;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid #d5d5d2;
       padding: 7px 6px;
       vertical-align: top;
     }
     .portfolio-table th {
       font-size: 11px;
       text-transform: uppercase;
-      color: #64748b;
+      color: #73736f;
       letter-spacing: 0.04em;
     }
     .muted {
-      color: #64748b;
+      color: #73736f;
       font-size: 12px;
     }
     @media print {
@@ -1264,11 +1257,11 @@ function buildReportHtml(useCases, dims, options = {}) {
   const generated = new Date().toLocaleString();
   const portfolioPage = `
     <article class="page">
-      <div class="page-topline">📁 Portfolio Overview</div>
+      <div class="page-topline">Portfolio Overview</div>
       <h1 class="portfolio-title">Researchit Portfolio Summary</h1>
       <div class="small-text">Generated: ${escapeHtml(generated)} | Use cases: ${useCases.length}</div>
       ${buildPortfolioTable(useCases, dims)}
-      ${section("How to read this report", "<div class=\"small-text\">Each use case has one intro page (problem + solution), one summary page, then one page per scoring dimension. Large typography highlights score and brief judgment. Smaller typography contains full reasoning, sources, and debate details.</div>")}
+      ${section("How to read this report", "<div class=\"small-text\">Each research has one intro page (problem + solution), one summary page, then one page per scoring dimension. Large typography highlights score and brief judgment. Smaller typography contains full reasoning, sources, and debate details.</div>")}
     </article>
   `;
 
@@ -1371,7 +1364,7 @@ export function importUseCasesFromJsonText(text, currentDims, existingIds = []) 
 
 export function exportSingleUseCaseJson(uc, dims) {
   const payload = buildSingleUseCaseJsonPayload(uc, dims);
-  const slug = safeFilePart(uc?.attributes?.title || uc?.rawInput || uc?.id || "use-case");
+  const slug = safeFilePart(uc?.attributes?.title || uc?.rawInput || uc?.id || "research");
   downloadJson(`${slug}-${dateTag()}.json`, payload);
   return payload;
 }
@@ -1423,7 +1416,7 @@ export function exportSummaryCsv(useCases, dims) {
     return row;
   });
 
-  downloadCsv(`use-case-summary-${timestampTag()}.csv`, rowsToCsv(headers, rows));
+  downloadCsv(`research-summary-${timestampTag()}.csv`, rowsToCsv(headers, rows));
 }
 
 export function exportDetailCsv(useCases, dims) {
@@ -1495,7 +1488,7 @@ export function exportDetailCsv(useCases, dims) {
     });
   });
 
-  downloadCsv(`use-case-detail-${timestampTag()}.csv`, rowsToCsv(headers, rows));
+  downloadCsv(`research-detail-${timestampTag()}.csv`, rowsToCsv(headers, rows));
 }
 
 function printHtmlFromHiddenFrame(html) {
@@ -1560,7 +1553,7 @@ function printHtmlFromHiddenFrame(html) {
 
 export async function exportAnalysisHtml(useCases, dims) {
   const html = buildReportHtml(useCases, dims, { mode: "html", includePortfolio: true });
-  downloadHtml(`use-case-analysis-${timestampTag()}.html`, html);
+  downloadHtml(`research-analysis-${timestampTag()}.html`, html);
   return true;
 }
 
@@ -1571,10 +1564,10 @@ export async function exportAnalysisPdf(useCases, dims) {
 
 export async function exportSingleUseCaseHtml(uc, dims) {
   const html = buildSingleUseCaseReportHtml(uc, dims);
-  const tag = safeFilePart(uc?.attributes?.title || uc?.id || "use-case");
+  const tag = safeFilePart(uc?.attributes?.title || uc?.id || "research");
   const opened = openHtmlInNewTab(html);
   if (!opened) {
-    downloadHtml(`use-case-report-${tag}-${timestampTag()}.html`, html);
+    downloadHtml(`research-report-${tag}-${timestampTag()}.html`, html);
   }
   return true;
 }
@@ -1583,8 +1576,8 @@ export async function openSingleUseCaseHtml(uc, dims) {
   const html = buildSingleUseCaseReportHtml(uc, dims);
   const opened = openHtmlInNewTab(html);
   if (!opened) {
-    const tag = safeFilePart(uc?.attributes?.title || uc?.id || "use-case");
-    downloadHtml(`use-case-report-${tag}-${timestampTag()}.html`, html);
+    const tag = safeFilePart(uc?.attributes?.title || uc?.id || "research");
+    downloadHtml(`research-report-${tag}-${timestampTag()}.html`, html);
   }
   return true;
 }
@@ -1595,7 +1588,7 @@ export async function exportSingleUseCasePdf(uc, dims) {
 }
 
 export async function exportSingleUseCaseImagesZip(uc, dims) {
-  const title = uc?.attributes?.title || uc?.rawInput || uc?.id || "use-case";
+  const title = uc?.attributes?.title || uc?.rawInput || uc?.id || "research";
   const baseTag = safeFilePart(title);
   const html = buildReportHtml([uc], dims, { mode: "html", includePortfolio: false });
   const host = buildOffscreenReportHost(html);
@@ -1629,7 +1622,7 @@ export async function exportSingleUseCaseImagesZip(uc, dims) {
       compression: "DEFLATE",
       compressionOptions: { level: 6 },
     });
-    downloadBlob(`use-case-images-${baseTag}-${timestampTag()}.zip`, zipBlob);
+    downloadBlob(`research-images-${baseTag}-${timestampTag()}.zip`, zipBlob);
   } catch (err) {
     console.error("Image export failed:", err);
     window.alert(`Image export failed: ${err.message}`);

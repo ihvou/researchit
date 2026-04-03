@@ -34,9 +34,9 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
 
   if (uc.status === "analyzing" && uc.phase !== "discover") {
     return (
-      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, padding: "12px 14px" }}>
+      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "12px 14px" }}>
         <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
-          Related use case discovery starts after the main analysis and debate are complete.
+          Related research discovery starts after the main analysis and debate are complete.
         </div>
       </div>
     );
@@ -44,9 +44,9 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
 
   if (uc.status === "analyzing" && uc.phase === "discover") {
     return (
-      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, padding: "12px 14px" }}>
+      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "12px 14px" }}>
         <div style={{ fontSize: 12, color: "var(--ck-text)", fontWeight: 700, marginBottom: 4 }}>
-          Discovering targeted related use cases...
+          Discovering related research options...
         </div>
         <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
           Generating narrower variants designed to improve the weakest scoring dimensions.
@@ -57,15 +57,15 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, padding: "10px 12px" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>
-          Related Use Case Discovery
+      <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>
+          Related Research Discovery
         </div>
         <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
           These candidates are generated to improve weak dimensions from the completed analysis, then filtered through a lightweight pre-score check.
-          Click <strong>Analyse →</strong> to run a full scoring cycle for any candidate.
+          Click <strong>Analyze</strong> to run a full scoring cycle for any candidate.
           {generated > 0 && (
-            <span style={{ display: "block", marginTop: 4, color: "var(--ck-blue-ink)" }}>
+            <span style={{ display: "block", marginTop: 4, color: "var(--ck-text)" }}>
               Generated {generated} candidate{generated === 1 ? "" : "s"} | Validated {validated}
               {rejected ? ` | Filtered out ${rejected}` : ""}
             </span>
@@ -74,13 +74,13 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
       </div>
 
       {!candidates.length && !hasError && (
-        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "var(--ck-muted)" }}>
-          No related candidates were generated for this use case.
+        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "12px 14px", fontSize: 12, color: "var(--ck-muted)" }}>
+          No related candidates were generated for this research.
         </div>
       )}
 
       {hasError && (
-        <div style={{ background: "#fff0ee", border: "1px solid #f2c7be", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "#b42318", lineHeight: 1.5 }}>
+        <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", fontSize: 12, color: "var(--ck-text)", lineHeight: 1.5 }}>
           Discovery pass failed: {uc.discover.error}
         </div>
       )}
@@ -90,7 +90,7 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
         const targets = targetLabels(candidate, dimMap);
         const validationChecks = Array.isArray(candidate?.preValidation?.checks) ? candidate.preValidation.checks : [];
         return (
-          <div key={`${candidate.title}-${idx}`} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 10, padding: "12px 14px" }}>
+          <div key={`${candidate.title}-${idx}`} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "12px 14px" }}>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ck-text)", marginBottom: 5 }}>
@@ -112,10 +112,10 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
                         title={item.id}
                         style={{
                           fontSize: 10,
-                          color: "var(--ck-blue)",
-                          background: "var(--ck-blue-soft)",
-                          border: "1px solid #c5ceff",
-                          borderRadius: 999,
+                          color: "var(--ck-text)",
+                          background: "var(--ck-surface-soft)",
+                          border: "1px solid var(--ck-line)",
+                          borderRadius: 2,
                           padding: "2px 8px",
                           fontWeight: 700,
                         }}>
@@ -137,14 +137,14 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
                 {!!validationChecks.length && (
                   <div style={{
                     marginTop: 8,
-                    background: "var(--ck-blue-soft)",
-                    border: "1px solid #d9e3ff",
-                    borderRadius: 8,
+                    background: "var(--ck-surface-soft)",
+                    border: "1px solid var(--ck-line)",
+                    borderRadius: 2,
                     padding: "7px 8px",
                     display: "grid",
                     gap: 4,
                   }}>
-                    <div style={{ fontSize: 10, color: "var(--ck-blue-ink)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
                       Pre-score validation
                     </div>
                     {validationChecks.map((check, checkIdx) => {
@@ -166,10 +166,10 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
                 disabled={globalAnalyzing}
                 onClick={() => onAnalyzeRelated(candidate)}
                 style={{
-                  background: "var(--ck-blue)",
+                  background: "var(--ck-accent)",
                   border: "none",
-                  color: "#fff",
-                  borderRadius: 8,
+                  color: "var(--ck-accent-ink)",
+                  borderRadius: 2,
                   fontSize: 12,
                   fontWeight: 700,
                   padding: "7px 11px",
@@ -177,7 +177,7 @@ export default function DiscoverTab({ uc, dims, onAnalyzeRelated, globalAnalyzin
                   opacity: globalAnalyzing ? 0.55 : 1,
                   whiteSpace: "nowrap",
                 }}>
-                Analyse →
+                Analyze
               </button>
             </div>
           </div>

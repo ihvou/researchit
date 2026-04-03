@@ -20,7 +20,7 @@ const PHASE_LABELS = {
   analyst_targeted: "Targeted low-confidence search...",
   critic: "Critic reviewing...",
   finalizing: "Analyst responding...",
-  discover: "Discovering related use cases...",
+  discover: "Discovering related research...",
 };
 
 export default function ExpandedRow({
@@ -85,8 +85,8 @@ export default function ExpandedRow({
             style={{
               background: "none",
               border: "none",
-              borderBottom: tab === t.id ? "2px solid var(--ck-blue)" : "2px solid transparent",
-              color: tab === t.id ? "var(--ck-blue)" : "var(--ck-muted)",
+              borderBottom: tab === t.id ? "2px solid var(--ck-accent)" : "2px solid transparent",
+              color: tab === t.id ? "var(--ck-text)" : "var(--ck-muted)",
               padding: "9px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}>
             {t.label}
@@ -94,7 +94,7 @@ export default function ExpandedRow({
         ))}
         <div style={{ marginLeft: "auto", fontSize: 10, padding: "6px 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
           {uc.status === "analyzing"
-            ? <span style={{ color: "var(--ck-blue)", display: "flex", alignItems: "center", gap: 6 }}>
+            ? <span style={{ color: "var(--ck-text)", display: "flex", alignItems: "center", gap: 6 }}>
                 <Spinner size={10} /> {PHASE_LABELS[uc.phase] || "Processing..."}
               </span>
             : null}
@@ -107,8 +107,8 @@ export default function ExpandedRow({
                 style={{
                   background: "var(--ck-surface)",
                   border: "1px solid var(--ck-line)",
-                  color: "var(--ck-blue)",
-                  borderRadius: 6,
+                  color: "var(--ck-text)",
+                  borderRadius: 2,
                   fontSize: 11,
                   padding: "4px 8px",
                   cursor: exportLoading ? "not-allowed" : "pointer",
@@ -117,7 +117,7 @@ export default function ExpandedRow({
                   alignItems: "center",
                   gap: 5,
                 }}>
-                {exportLoading === "html" ? <Spinner size={9} color="var(--ck-blue)" /> : null}
+                {exportLoading === "html" ? <Spinner size={9} color="var(--ck-text)" /> : null}
                 {exportLoading === "html" ? "Export HTML..." : "Export HTML"}
               </button>
               <button
@@ -127,8 +127,8 @@ export default function ExpandedRow({
                 style={{
                   background: "var(--ck-surface)",
                   border: "1px solid var(--ck-line)",
-                  color: "var(--ck-blue)",
-                  borderRadius: 6,
+                  color: "var(--ck-text)",
+                  borderRadius: 2,
                   fontSize: 11,
                   padding: "4px 8px",
                   cursor: exportLoading ? "not-allowed" : "pointer",
@@ -137,7 +137,7 @@ export default function ExpandedRow({
                   alignItems: "center",
                   gap: 5,
                 }}>
-                {exportLoading === "pdf" ? <Spinner size={9} color="var(--ck-blue)" /> : null}
+                {exportLoading === "pdf" ? <Spinner size={9} color="var(--ck-text)" /> : null}
                 {exportLoading === "pdf" ? "Export PDF..." : "Export PDF"}
               </button>
               <button
@@ -147,8 +147,8 @@ export default function ExpandedRow({
                 style={{
                   background: "var(--ck-surface)",
                   border: "1px solid var(--ck-line)",
-                  color: "var(--ck-blue)",
-                  borderRadius: 6,
+                  color: "var(--ck-text)",
+                  borderRadius: 2,
                   fontSize: 11,
                   padding: "4px 8px",
                   cursor: exportLoading ? "not-allowed" : "pointer",
@@ -157,7 +157,7 @@ export default function ExpandedRow({
                   alignItems: "center",
                   gap: 5,
                 }}>
-                {exportLoading === "images" ? <Spinner size={9} color="var(--ck-blue)" /> : null}
+                {exportLoading === "images" ? <Spinner size={9} color="var(--ck-text)" /> : null}
                 {exportLoading === "images" ? "Export Images..." : "Export Images ZIP"}
               </button>
               <button
@@ -167,8 +167,8 @@ export default function ExpandedRow({
                 style={{
                   background: "var(--ck-surface)",
                   border: "1px solid var(--ck-line)",
-                  color: "var(--ck-blue)",
-                  borderRadius: 6,
+                  color: "var(--ck-text)",
+                  borderRadius: 2,
                   fontSize: 11,
                   padding: "4px 8px",
                   cursor: exportLoading ? "not-allowed" : "pointer",
@@ -177,7 +177,7 @@ export default function ExpandedRow({
                   alignItems: "center",
                   gap: 5,
                 }}>
-                {exportLoading === "json" ? <Spinner size={9} color="var(--ck-blue)" /> : null}
+                {exportLoading === "json" ? <Spinner size={9} color="var(--ck-text)" /> : null}
                 {exportLoading === "json" ? "Export JSON..." : "Export JSON"}
               </button>
             </div>
@@ -189,12 +189,12 @@ export default function ExpandedRow({
           <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
             Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence
             {uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
-              <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Low-confidence cycle: {uc.analysisMeta.lowConfidenceInitialCount} scanned, {uc.analysisMeta.lowConfidenceUpgradedCount || 0} upgraded, {uc.analysisMeta.lowConfidenceValidatedLowCount || 0} validated low
               </span>
             )}
             {uc.analysisMeta?.discoverCandidatesCount != null && uc.status === "complete" && (
-              <span style={{ marginLeft: 6, color: "var(--ck-blue-ink)" }}>
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Discover: {uc.analysisMeta.discoverCandidatesCount} candidates
               </span>
             )}
@@ -204,7 +204,7 @@ export default function ExpandedRow({
 
       <div style={{ padding: 16, background: "var(--ck-bg)" }}>
         {uc.status === "error" && (
-          <div style={{ background: "#fff0ee", border: "1px solid #f2c7be", borderRadius: 8, padding: "10px 14px", color: "#b42318", fontSize: 13, marginBottom: 14 }}>
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px", color: "var(--ck-text)", fontSize: 13, marginBottom: 14 }}>
             Warning: {uc.errorMsg}
           </div>
         )}

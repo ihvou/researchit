@@ -289,7 +289,7 @@ export default function App() {
       const text = await file.text();
       const parsed = importUseCasesFromJsonText(text, dims, useCases.map((u) => u.id));
       if (!parsed.useCases.length) {
-        throw new Error("No completed use cases were found in this file.");
+        throw new Error("No completed researches were found in this file.");
       }
       const importedWithConfig = parsed.useCases.map((uc) => ({
         ...uc,
@@ -327,7 +327,7 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", width: "100%", maxWidth: "100vw", overflowX: "hidden", background: "var(--ck-bg)", color: "var(--ck-text)", fontFamily: "Inter, 'Segoe UI', -apple-system, sans-serif", fontSize: 14 }}>
+    <div style={{ minHeight: "100vh", width: "100%", maxWidth: "100vw", overflowX: "hidden", background: "var(--ck-bg)", color: "var(--ck-text)", fontFamily: "IBM Plex Sans, 'Segoe UI', -apple-system, sans-serif", fontSize: 14 }}>
       {/* HEADER */}
       <div style={{
         background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)",
@@ -339,21 +339,20 @@ export default function App() {
             position: "relative",
             width: 28,
             height: 28,
-            borderRadius: 6,
+            borderRadius: 2,
             border: "1px solid var(--ck-line-strong)",
             background: "var(--ck-surface-soft)",
             display: "grid",
             placeItems: "center",
             flexShrink: 0,
             fontWeight: 800,
-            color: "var(--ck-blue)",
+            color: "var(--ck-text)",
             fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.7)",
           }}>
             <span style={{ position: "absolute", top: 1, left: 3, fontSize: 8, color: "var(--ck-muted)" }}>{CHEMICAL_NUMBER}</span>
             <span style={{ fontSize: 13, lineHeight: 1 }}>Re</span>
           </div>
-          <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-blue)" }}>Researchit</span>
+          <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
         </div>
 
         <div style={{ width: "100%", overflowX: "auto", paddingBottom: 2 }}>
@@ -372,14 +371,14 @@ export default function App() {
                     exportMenuRef.current?.removeAttribute("open");
                   }}
                   style={{
-                    borderRadius: 8,
+                    borderRadius: 2,
                     padding: "6px 12px",
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: "pointer",
-                    border: `1px solid ${isActive ? "var(--ck-blue)" : "var(--ck-line)"}`,
+                    border: `1px solid ${isActive ? "var(--ck-accent)" : "var(--ck-line)"}`,
                     background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                    color: isActive ? "var(--ck-blue)" : "var(--ck-muted)",
+                    color: isActive ? "var(--ck-text)" : "var(--ck-muted)",
                     whiteSpace: "nowrap",
                   }}>
                   {config.tabLabel || config.name}
@@ -406,9 +405,9 @@ export default function App() {
               style={{
                 background: "var(--ck-surface)",
                 border: "1px solid var(--ck-line)",
-                color: visibleUseCases.length ? "var(--ck-blue)" : "#8b95b3",
+                color: visibleUseCases.length ? "var(--ck-text)" : "var(--ck-muted-soft)",
                 padding: "6px 12px",
-                borderRadius: 8,
+                borderRadius: 2,
                 fontSize: 12,
                 fontWeight: 600,
                 opacity: visibleUseCases.length && !importLoading ? 1 : 0.5,
@@ -424,7 +423,7 @@ export default function App() {
               top: "calc(100% + 6px)",
               background: "var(--ck-surface)",
               border: "1px solid var(--ck-line)",
-              borderRadius: 8,
+              borderRadius: 2,
               minWidth: 185,
               padding: 6,
               display: "grid",
@@ -439,7 +438,7 @@ export default function App() {
                   label: "Portfolio JSON",
                   action: () => {
                     if (!completedCount) {
-                      throw new Error("No completed use cases available for portfolio JSON export.");
+                      throw new Error("No completed researches available for portfolio JSON export.");
                     }
                     return exportPortfolioJson(visibleUseCases, dims);
                   },
@@ -456,7 +455,7 @@ export default function App() {
                     border: "1px solid var(--ck-line)",
                     color: "var(--ck-text)",
                     textAlign: "left",
-                    borderRadius: 6,
+                    borderRadius: 2,
                     fontSize: 12,
                     padding: "6px 8px",
                     cursor: toolbarExportLoading || importLoading ? "not-allowed" : "pointer",
@@ -484,9 +483,9 @@ export default function App() {
             style={{
               background: "var(--ck-surface)",
               border: "1px solid var(--ck-line)",
-              color: "var(--ck-blue)",
+              color: "var(--ck-text)",
               padding: "6px 14px",
-              borderRadius: 8,
+              borderRadius: 2,
               fontSize: 12,
               fontWeight: 600,
               opacity: importLoading ? 0.6 : 1,
@@ -494,20 +493,20 @@ export default function App() {
               alignItems: "center",
               gap: 6,
             }}>
-            {importLoading ? <><Spinner size={10} color="var(--ck-blue)" /> Importing...</> : "Import JSON"}
+            {importLoading ? <><Spinner size={10} color="var(--ck-text)" /> Importing...</> : "Import JSON"}
           </button>
           <button
             onClick={() => setShowDimsPanel(v => !v)}
             style={{
               background: showDimsPanel ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-              border: "1px solid var(--ck-line)", color: "var(--ck-blue)",
-              padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+              border: "1px solid var(--ck-line)", color: "var(--ck-text)",
+              padding: "6px 14px", borderRadius: 2, fontSize: 12, fontWeight: 600,
             }}>
             Dimensions {showDimsPanel ? "^" : "v"}
           </button>
           <button
             onClick={() => setShowInputPanel(v => !v)}
-            style={{ background: "var(--ck-blue)", border: "none", color: "#fff", padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700 }}>
+            style={{ background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)", padding: "7px 16px", borderRadius: 2, fontSize: 13, fontWeight: 700 }}>
             + Research
           </button>
         </div>
@@ -517,34 +516,34 @@ export default function App() {
       {/* DIMENSIONS PANEL */}
       {showDimsPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
             {activeConfig.tabLabel || activeConfig.name} - scoring dimensions & weights
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 10, marginBottom: 12 }}>
             {dims.map(d => (
               <div key={d.id} style={{
                 background: "var(--ck-surface-soft)", border: `1px solid ${d.enabled ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
-                borderRadius: 8, padding: "10px 14px", opacity: d.enabled ? 1 : 0.5,
+                borderRadius: 2, padding: "10px 14px", opacity: d.enabled ? 1 : 0.5,
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                   <input
                     type="checkbox" checked={d.enabled}
                     onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
-                    style={{ accentColor: "var(--ck-blue)", width: 14, height: 14 }} />
+                    style={{ accentColor: "var(--ck-accent)", width: 14, height: 14 }} />
                   <span style={{ fontWeight: 600, fontSize: 12, color: d.enabled ? "var(--ck-text)" : "var(--ck-muted)" }}>{d.label}</span>
-                  <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 12, color: "var(--ck-blue)", fontWeight: 700 }}>{d.weight}%</span>
+                  <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 12, color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
                 </div>
                 <DimRubricToggle dim={d} />
                 <input
                   type="range" min={1} max={40} step={1} value={d.weight}
                   disabled={!d.enabled}
                   onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
-                  style={{ width: "100%", accentColor: "var(--ck-blue)", marginTop: 4 }} />
+                  style={{ width: "100%", accentColor: "var(--ck-accent)", marginTop: 4 }} />
               </div>
             ))}
           </div>
           <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>
-            Total weight: <span style={{ color: "var(--ck-blue)", fontWeight: 700 }}>{totalWeight}%</span>
+            Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
             <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
           </div>
         </div>
@@ -553,7 +552,7 @@ export default function App() {
       {/* INPUT PANEL */}
       {showInputPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
             New Research - describe the problem or solution
           </div>
           <textarea
@@ -564,7 +563,7 @@ export default function App() {
             onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startAnalysis(); }}
             style={{
               width: "100%", height: 90, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line-strong)",
-              borderRadius: 8, color: "var(--ck-text)", padding: "10px 14px", fontSize: 13,
+              borderRadius: 2, color: "var(--ck-text)", padding: "10px 14px", fontSize: 13,
               resize: "vertical", lineHeight: 1.5, outline: "none",
             }}
           />
@@ -573,12 +572,12 @@ export default function App() {
               onClick={startAnalysis}
               disabled={!inputText.trim() || globalAnalyzing}
               style={{
-                background: "var(--ck-blue)", border: "none", color: "#fff",
-                padding: "8px 20px", borderRadius: 8, fontWeight: 700, fontSize: 13,
+                background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)",
+                padding: "8px 20px", borderRadius: 2, fontWeight: 700, fontSize: 13,
                 opacity: !inputText.trim() || globalAnalyzing ? 0.5 : 1,
                 display: "flex", alignItems: "center", gap: 6,
               }}>
-              {globalAnalyzing ? <><Spinner size={11} color="#fff" /> Analyzing...</> : "Analyze - 3-phase debate"}
+              {globalAnalyzing ? <><Spinner size={11} color="var(--ck-accent-ink)" /> Analyzing...</> : "Analyze"}
             </button>
             <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>
               Hybrid reliability pipeline runs by default
@@ -586,7 +585,7 @@ export default function App() {
             <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>Cmd/Ctrl+Enter to submit</span>
             <button
               onClick={() => setShowInputPanel(false)}
-              style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--ck-line-strong)", color: "var(--ck-muted)", padding: "7px 14px", borderRadius: 8, fontSize: 12 }}>
+              style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--ck-line-strong)", color: "var(--ck-muted)", padding: "7px 14px", borderRadius: 2, fontSize: 12 }}>
               Cancel
             </button>
           </div>
@@ -596,18 +595,18 @@ export default function App() {
       {/* MAIN TABLE */}
       <div style={{ padding: 20 }}>
         {importError && (
-          <div style={{ marginBottom: 10, background: "#fff0ee", border: "1px solid #f2c7be", borderRadius: 8, padding: "9px 12px", color: "#b42318", fontSize: 12 }}>
+          <div style={{ marginBottom: 10, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "9px 12px", color: "var(--ck-text)", fontSize: 12 }}>
             {importError}
           </div>
         )}
         {importWarning && (
-          <div style={{ marginBottom: 10, background: "#fff8e8", border: "1px solid #f8dc9b", borderRadius: 8, padding: "9px 12px", color: "#935f00", fontSize: 12 }}>
+          <div style={{ marginBottom: 10, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "9px 12px", color: "var(--ck-muted)", fontSize: 12 }}>
             {importWarning}
           </div>
         )}
         {visibleUseCases.length === 0 ? (
-          <div style={{ textAlign: "left", padding: "40px 20px", maxWidth: 760, margin: "0 auto", background: "var(--ck-surface)", borderRadius: 14, border: "1px solid var(--ck-line)" }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "var(--ck-text)", marginBottom: 8, fontFamily: "Aileron, Inter, sans-serif" }}>
+          <div style={{ textAlign: "left", padding: "40px 20px", maxWidth: 760, margin: "0 auto", background: "var(--ck-surface)", borderRadius: 2, border: "1px solid var(--ck-line)" }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ck-text)", marginBottom: 8, fontFamily: "IBM Plex Sans, sans-serif" }}>
               Researchit
             </div>
             <div style={{ fontSize: 13, color: "var(--ck-muted)", marginBottom: 14 }}>
@@ -615,33 +614,33 @@ export default function App() {
             </div>
             <ul style={{ listStyle: "none", margin: 0, padding: 0, color: "var(--ck-text)", fontSize: 13, lineHeight: 1.6, display: "grid", gap: 8 }}>
               <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">🧠</span>
+                <span aria-hidden="true" className="mono">01</span>
                 <span><strong>Analyst LLM:</strong> builds the first draft with attributes, per-dimension scores, and rationale.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">🛡️</span>
+                <span aria-hidden="true" className="mono">02</span>
                 <span><strong>Critic LLM:</strong> audits Analyst claims with live web checks and challenges weak scoring.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">🌐</span>
+                <span aria-hidden="true" className="mono">03</span>
                 <span><strong>Evidence layer:</strong> combines model memory with web-search passes and shows auditable sources per dimension.</span>
               </li>
               <li style={{ display: "flex", gap: 8 }}>
-                <span aria-hidden="true">📈</span>
+                <span aria-hidden="true" className="mono">04</span>
                 <span><strong>Prioritization:</strong> computes weighted scores across the active tab dimensions and tags each one with high/medium/low confidence.</span>
               </li>
             </ul>
             <div style={{
               marginTop: 12,
               padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid #b8e8d0",
-              background: "#ebf8f0",
+              borderRadius: 2,
+              border: "1px solid var(--ck-line)",
+              background: "var(--ck-surface-soft)",
             }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "#0f7a55", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
-                💬 Interactive Challenge Loop
+              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+                Challenge Loop
               </div>
-              <div style={{ fontSize: 12, color: "#17583f", lineHeight: 1.55 }}>
+              <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.55 }}>
                 In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections for any dimension.
                 The Analyst LLM replies in-thread, can propose score updates, and you explicitly accept or dismiss each proposal.
               </div>
@@ -653,7 +652,7 @@ export default function App() {
                 style={{
                   background: "none",
                   border: "none",
-                  color: "var(--ck-blue)",
+                  color: "var(--ck-text)",
                   fontWeight: 800,
                   fontSize: 13,
                   padding: 0,
@@ -665,7 +664,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div style={{ overflowX: "auto", border: "1px solid var(--ck-line)", borderRadius: 12, background: "var(--ck-surface)" }}>
+          <div style={{ overflowX: "auto", border: "1px solid var(--ck-line)", borderRadius: 2, background: "var(--ck-surface)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "var(--ck-surface-soft)", borderBottom: "2px solid var(--ck-line)" }}>
@@ -685,7 +684,7 @@ export default function App() {
                       <span style={{ color: "var(--ck-muted-soft)", fontWeight: 400 }}>{d.weight}%</span>
                     </th>
                   ))}
-                  <th style={{ textAlign: "center", padding: "10px 14px", color: "var(--ck-blue)", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>
+                  <th style={{ textAlign: "center", padding: "10px 14px", color: "var(--ck-text)", fontSize: 11, fontWeight: 700, textTransform: "uppercase" }}>
                     Score
                   </th>
                   <th style={{ width: 28 }} />
@@ -704,7 +703,7 @@ export default function App() {
                         cursor: "pointer",
                         background: isExpanded ? "var(--ck-surface-soft)" : "transparent",
                       }}
-                      onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = "#f7f9ff"; }}
+                      onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = "var(--ck-surface-soft)"; }}
                       onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = "transparent"; }}>
                       <td style={{ padding: "12px 14px" }}>
                         <div style={{ fontWeight: 600, color: "var(--ck-text)", marginBottom: 4, lineHeight: 1.3 }}>
@@ -712,14 +711,14 @@ export default function App() {
                         </div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           {uc.attributes?.vertical && (
-                            <span style={{ fontSize: 11, color: "var(--ck-muted)", background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", padding: "1px 7px", borderRadius: 4 }}>
+                            <span style={{ fontSize: 11, color: "var(--ck-muted)", background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", padding: "1px 7px", borderRadius: 2 }}>
                               {uc.attributes.vertical}
                             </span>
                           )}
                           {uc.origin?.type === "discover" && (
                             <span
                               title={`Suggested from: ${uc.origin?.fromUseCaseTitle || "related analysis"}`}
-                              style={{ fontSize: 11, color: "#0f7a55", background: "#ebf8f0", border: "1px solid #b8e8d0", padding: "1px 7px", borderRadius: 4 }}>
+                              style={{ fontSize: 11, color: "var(--ck-muted)", background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", padding: "1px 7px", borderRadius: 2 }}>
                               related
                             </span>
                           )}
@@ -754,7 +753,7 @@ export default function App() {
                         {score
                           ? <TotalPill score={score} />
                           : uc.status === "error"
-                            ? <span style={{ color: "#ef4444", fontSize: 11 }}>Error</span>
+                            ? <span style={{ color: "var(--ck-text)", fontSize: 11 }}>Error</span>
                             : uc.status === "analyzing"
                               ? <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "..."}</span>
                               : "-"}

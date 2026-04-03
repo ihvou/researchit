@@ -2,7 +2,7 @@ const HYBRID_FLOW = [
   {
     key: "submitted",
     phase: "submitted",
-    title: "Use case submitted",
+    title: "Research submitted",
     detail: "The request is queued and the analysis pipeline started.",
   },
   {
@@ -44,7 +44,7 @@ const HYBRID_FLOW = [
   {
     key: "discover",
     phase: "discover",
-    title: "Related use case discovery",
+    title: "Related research discovery",
     detail: "Generates sharper variants targeting weak dimensions, grounded in the same evidence-first pipeline.",
   },
   {
@@ -82,17 +82,17 @@ function stateLabel(state) {
 }
 
 function stateColor(state) {
-  if (state === "done") return "#12805c";
-  if (state === "active") return "var(--ck-blue)";
-  if (state === "failed") return "#b42318";
+  if (state === "done") return "var(--ck-text)";
+  if (state === "active") return "var(--ck-text)";
+  if (state === "failed") return "var(--ck-text)";
   return "var(--ck-muted-soft)";
 }
 
 function stateBackground(state) {
-  if (state === "done") return "#e8f8f1";
-  if (state === "active") return "#e8ecff";
-  if (state === "failed") return "#fff0ee";
-  return "#f2f5ff";
+  if (state === "done") return "var(--ck-surface-soft)";
+  if (state === "active") return "var(--ck-surface-soft)";
+  if (state === "failed") return "var(--ck-surface-soft)";
+  return "var(--ck-surface-soft)";
 }
 
 export default function ProgressTab({ uc }) {
@@ -101,8 +101,8 @@ export default function ProgressTab({ uc }) {
   const currentIdx = rank[uc.phase] ?? 0;
 
   return (
-    <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 12, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 8 }}>
+    <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.9, marginBottom: 8 }}>
         Research Progress
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
@@ -121,11 +121,11 @@ export default function ProgressTab({ uc }) {
                 alignItems: "flex-start",
                 gap: 10,
                 padding: "9px 10px",
-                borderRadius: 8,
+                borderRadius: 2,
                 border: "1px solid var(--ck-line)",
                 background: "var(--ck-surface-soft)",
               }}>
-              <input type="checkbox" checked={state === "done"} readOnly style={{ marginTop: 2, accentColor: "var(--ck-blue)" }} />
+              <input type="checkbox" checked={state === "done"} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>{step.title}</div>
                 <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{step.detail}</div>
@@ -137,7 +137,7 @@ export default function ProgressTab({ uc }) {
                   color: stateColor(state),
                   background: stateBackground(state),
                   border: "1px solid var(--ck-line)",
-                  borderRadius: 999,
+                  borderRadius: 2,
                   padding: "2px 7px",
                   whiteSpace: "nowrap",
                 }}>
@@ -151,21 +151,21 @@ export default function ProgressTab({ uc }) {
       <div style={{
         marginTop: 12,
         padding: "10px 12px",
-        borderRadius: 10,
-        border: "1px solid #b8e8d0",
-        background: "#ebf8f0",
+        borderRadius: 2,
+        border: "1px solid var(--ck-line)",
+        background: "var(--ck-surface-soft)",
       }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: "#0f7a55", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
-          💬 Interactive Challenge Loop
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+          Challenge Loop
         </div>
-        <div style={{ fontSize: 12, color: "#17583f", lineHeight: 1.5 }}>
+        <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
           In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
           The Analyst LLM responds in-thread and may propose score updates; you explicitly accept or dismiss each proposal.
         </div>
       </div>
 
       {uc.status === "error" && (
-        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#fff0ee", border: "1px solid #f2c7be", color: "#b42318", fontSize: 12 }}>
+        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 2, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", color: "var(--ck-text)", fontSize: 12 }}>
           Analysis stopped: {uc.errorMsg || "Unexpected error."}
         </div>
       )}

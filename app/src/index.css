@@ -1,63 +1,28 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
-
-@font-face {
-  font-family: "Aileron";
-  src: url("https://www.ciklum.com/wp-content/themes/ciklum/assets/fonts/Aileron-Regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Aileron";
-  src: url("https://www.ciklum.com/wp-content/themes/ciklum/assets/fonts/Aileron-SemiBold.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Aileron";
-  src: url("https://www.ciklum.com/wp-content/themes/ciklum/assets/fonts/Aileron-Bold.woff2") format("woff2");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Aileron";
-  src: url("https://www.ciklum.com/wp-content/themes/ciklum/assets/fonts/Aileron-Black.woff2") format("woff2");
-  font-weight: 800;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Aileron";
-  src: url("https://www.ciklum.com/wp-content/themes/ciklum/assets/fonts/Aileron-Heavy.woff2") format("woff2");
-  font-weight: 900;
-  font-style: normal;
-  font-display: swap;
-}
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
 
 :root {
   color-scheme: light;
-  --ck-bg: #f5f6ff;
+  --ck-bg: #f3f3f2;
   --ck-surface: #ffffff;
-  --ck-surface-soft: #eff2ff;
-  --ck-line: #d7deef;
-  --ck-line-strong: #bcc8e2;
-  --ck-text: #001429;
-  --ck-muted: #495377;
-  --ck-muted-soft: #5f6b8b;
-  --ck-blue: #1324bf;
-  --ck-blue-ink: #0e1a95;
-  --ck-blue-soft: #e8ecff;
-  --ck-teal: #8cffc6;
-  --ck-warn-bg: #fff4df;
-  --ck-warn-line: #f2c14f;
-  --ck-risk-bg: #fff0eb;
-  --ck-risk-line: #f97316;
+  --ck-surface-soft: #f7f7f6;
+  --ck-surface-strong: #eeeeec;
+  --ck-line: #d5d5d2;
+  --ck-line-strong: #b8b8b4;
+  --ck-text: #121212;
+  --ck-muted: #4b4b48;
+  --ck-muted-soft: #73736f;
+  --ck-accent: #121212;
+  --ck-accent-ink: #ffffff;
+  --ck-accent-soft: #ececeb;
+  --ck-focus: #111111;
+  --ck-warn-bg: var(--ck-surface-soft);
+  --ck-warn-line: var(--ck-line);
+  --ck-risk-bg: var(--ck-surface-soft);
+  --ck-risk-line: var(--ck-line-strong);
+  --ck-blue: var(--ck-accent);
+  --ck-blue-ink: var(--ck-text);
+  --ck-blue-soft: var(--ck-accent-soft);
+  --ck-teal: var(--ck-accent);
 }
 
 @keyframes spin {
@@ -78,15 +43,24 @@ body,
 }
 
 body {
-  font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--ck-text);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 h1,
 h2,
 h3,
 .brand-title {
-  font-family: "Aileron", "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+code,
+pre,
+.mono {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
 }
 
 * {
@@ -98,17 +72,38 @@ h3,
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #bcc8e2;
-  border-radius: 6px;
+  background: #b8b8b8;
+  border-radius: 2px;
 }
 
 button {
   cursor: pointer;
   font-family: inherit;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+button:disabled {
+  cursor: not-allowed;
 }
 input,
 textarea {
   font-family: inherit;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+summary {
+  border-radius: 2px !important;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 1px solid var(--ck-focus);
+  outline-offset: 1px;
+}
+a {
+  color: var(--ck-accent);
 }
 a:hover {
   text-decoration: underline;

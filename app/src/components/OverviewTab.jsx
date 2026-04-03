@@ -28,9 +28,9 @@ export default function OverviewTab({ uc, dims }) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 }}>
-      <div style={{ background: "var(--ck-surface)", borderRadius: 10, padding: "14px 16px", border: "1px solid var(--ck-line)" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
-          Use Case Attributes
+      <div style={{ background: "var(--ck-surface)", borderRadius: 2, padding: "14px 16px", border: "1px solid var(--ck-line)" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
+          Research Attributes
         </div>
         {a ? (
           <>
@@ -54,8 +54,8 @@ export default function OverviewTab({ uc, dims }) {
             {(problemStatement || solutionStatement) && (
               <div style={{ marginTop: 12, borderTop: "1px solid var(--ck-line)", paddingTop: 12, display: "grid", gap: 8 }}>
                 {problemStatement && (
-                  <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 3 }}>
+                  <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 3 }}>
                       Problem Statement
                     </div>
                     <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55 }}>
@@ -64,8 +64,8 @@ export default function OverviewTab({ uc, dims }) {
                   </div>
                 )}
                 {solutionStatement && (
-                  <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 3 }}>
+                  <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 3 }}>
                       Solution Statement
                     </div>
                     <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55 }}>
@@ -81,16 +81,16 @@ export default function OverviewTab({ uc, dims }) {
         )}
       </div>
 
-      <div style={{ background: "var(--ck-surface)", borderRadius: 10, padding: "14px 16px", border: "1px solid var(--ck-line)" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-blue)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
+      <div style={{ background: "var(--ck-surface)", borderRadius: 2, padding: "14px 16px", border: "1px solid var(--ck-line)" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
           Score Summary
         </div>
         {!!lowConfidence.length && (
-          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 8, border: "1px solid #f5d7a3", background: "#fff6e8" }}>
-            <div style={{ fontSize: 11, color: "#935f00", fontWeight: 700, marginBottom: 2 }}>
+          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 2, border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)" }}>
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 2 }}>
               Low-confidence dimensions flagged: {lowConfidence.length}
             </div>
-            <div style={{ fontSize: 11, color: "#7a4a00", lineHeight: 1.45 }}>
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
               Hover each confidence badge for the reason. Each low-confidence dimension now includes a targeted research brief below.
             </div>
           </div>
@@ -98,8 +98,8 @@ export default function OverviewTab({ uc, dims }) {
         {!!lowConfidence.length && (
           <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
             {lowConfidence.map(({ dim, view }) => (
-              <div key={`${dim.id}-brief`} style={{ border: "1px solid #f5d7a3", borderRadius: 8, background: "#fffdf6", padding: "7px 8px" }}>
-                <div style={{ fontSize: 10, color: "#935f00", fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
+              <div key={`${dim.id}-brief`} style={{ border: "1px solid var(--ck-line)", borderRadius: 2, background: "var(--ck-surface-soft)", padding: "7px 8px" }}>
+                <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
                   {dim.label}
                 </div>
                 <ResearchBriefBlock brief={view.researchBrief} compact={true} />
@@ -133,14 +133,14 @@ export default function OverviewTab({ uc, dims }) {
                   </div>
                 )}
                 {view.stage !== "initial" && (
-                  <div style={{ fontSize: 10, color: "var(--ck-blue)", marginTop: 1 }}>{view.stageLabel}</div>
+                  <div style={{ fontSize: 10, color: "var(--ck-muted)", marginTop: 1 }}>{view.stageLabel}</div>
                 )}
               </div>
             </div>
           );
         })}
         {uc.finalScores?.conclusion && (
-          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--ck-surface-soft)", borderRadius: 8, fontSize: 12, color: "var(--ck-muted)", borderLeft: "3px solid var(--ck-blue)", lineHeight: 1.7 }}>
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--ck-surface-soft)", borderRadius: 2, fontSize: 12, color: "var(--ck-muted)", border: "1px solid var(--ck-line)", lineHeight: 1.7 }}>
             {uc.finalScores.conclusion}
           </div>
         )}

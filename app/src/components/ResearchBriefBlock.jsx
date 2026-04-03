@@ -6,21 +6,21 @@ export default function ResearchBriefBlock({ brief, compact = false }) {
   const textSize = compact ? 10 : 11;
 
   return (
-    <div style={{ border: "1px solid #f5d7a3", background: "#fff8e8", borderRadius: 8, padding: compact ? "7px 8px" : "8px 10px" }}>
-      <div style={{ fontSize: compact ? 10 : 11, fontWeight: 700, color: "#935f00", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 5 }}>
+    <div style={{ border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, padding: compact ? "7px 8px" : "8px 10px" }}>
+      <div style={{ fontSize: compact ? 10 : 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 5 }}>
         Research Brief (Low Confidence)
       </div>
       {missingEvidence && (
-        <div style={{ fontSize: textSize, color: "#7a4a00", lineHeight: 1.45, marginBottom: 6 }}>
+        <div style={{ fontSize: textSize, color: "var(--ck-muted)", lineHeight: 1.45, marginBottom: 6 }}>
           <strong>Missing evidence:</strong> {missingEvidence}
         </div>
       )}
       {!!whereToLook.length && (
         <div style={{ marginBottom: 6 }}>
-          <div style={{ fontSize: textSize, fontWeight: 700, color: "#7a4a00", marginBottom: 3 }}>Where to look</div>
+          <div style={{ fontSize: textSize, fontWeight: 700, color: "var(--ck-muted)", marginBottom: 3 }}>Where to look</div>
           <ul style={{ margin: 0, paddingLeft: 16, display: "grid", gap: 2 }}>
             {whereToLook.map((item, idx) => (
-              <li key={idx} style={{ fontSize: textSize, color: "#7a4a00", lineHeight: 1.4 }}>
+              <li key={idx} style={{ fontSize: textSize, color: "var(--ck-muted)", lineHeight: 1.4 }}>
                 {item}
               </li>
             ))}
@@ -29,18 +29,18 @@ export default function ResearchBriefBlock({ brief, compact = false }) {
       )}
       {!!suggestedQueries.length && (
         <div>
-          <div style={{ fontSize: textSize, fontWeight: 700, color: "#7a4a00", marginBottom: 3 }}>Suggested queries</div>
+          <div style={{ fontSize: textSize, fontWeight: 700, color: "var(--ck-muted)", marginBottom: 3 }}>Suggested queries</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
             {suggestedQueries.map((q, idx) => (
               <span
                 key={idx}
                 style={{
-                  border: "1px solid #f0c87a",
-                  background: "#fff3d5",
-                  borderRadius: 999,
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface-soft)",
+                  borderRadius: 2,
                   padding: "2px 8px",
                   fontSize: textSize,
-                  color: "#7a4a00",
+                  color: "var(--ck-muted)",
                   lineHeight: 1.3,
                 }}>
                 {q}

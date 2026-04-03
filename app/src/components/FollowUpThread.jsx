@@ -5,12 +5,12 @@ import { intentDisplayLabel, pmIntentLabel } from "../lib/followUpIntent";
 
 function proposalTone(status) {
   if (status === "accepted") {
-    return { bg: "#ebf8f0", border: "#b8e8d0", text: "#17583f", label: "Accepted" };
+    return { bg: "var(--ck-surface-soft)", border: "var(--ck-line-strong)", text: "var(--ck-text)", label: "Accepted" };
   }
   if (status === "dismissed") {
-    return { bg: "#fff8e8", border: "#f8dc9b", text: "#935f00", label: "Dismissed" };
+    return { bg: "var(--ck-surface-soft)", border: "var(--ck-line)", text: "var(--ck-muted)", label: "Dismissed" };
   }
-  return { bg: "#edf2ff", border: "#c9d4ff", text: "var(--ck-blue-ink)", label: "Pending PM decision" };
+  return { bg: "var(--ck-surface-soft)", border: "var(--ck-line)", text: "var(--ck-text)", label: "Pending PM decision" };
 }
 
 function argumentUpdateText(msg) {
@@ -56,19 +56,19 @@ export default function FollowUpThread({
                 const isPM = msg.role === "pm";
                 return (
                   <div key={i} style={{
-                    background: isPM ? "#edf2ff" : "#ebf8f0",
-                    border: `1px solid ${isPM ? "#c9d4ff" : "#bddfcd"}`,
-                    borderRadius: 8, padding: "8px 12px",
+                    background: isPM ? "var(--ck-surface-soft)" : "var(--ck-surface-soft)",
+                    border: `1px solid ${isPM ? "var(--ck-line)" : "var(--ck-line)"}`,
+                    borderRadius: 2, padding: "8px 12px",
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: isPM ? "var(--ck-blue)" : "#0f7a55" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: isPM ? "var(--ck-text)" : "var(--ck-muted)" }}>
                       {isPM ? pmIntentLabel(msg.intent) : `Analyst - ${intentDisplayLabel(msg.intent)}`}
                       {!isPM && msg.scoreAdjusted && msg.newScore != null && (
-                        <span style={{ color: "#935f00", marginLeft: 8, fontWeight: 700 }}>
+                        <span style={{ color: "var(--ck-muted)", marginLeft: 8, fontWeight: 700 }}>
                           - Score now {msg.newScore}/5
                         </span>
                       )}
                     </div>
-                    <p style={{ fontSize: 12, color: isPM ? "var(--ck-blue-ink)" : "#17583f", margin: "0 0 4px", lineHeight: 1.65 }}>
+                    <p style={{ fontSize: 12, color: isPM ? "var(--ck-blue-ink)" : "var(--ck-muted)", margin: "0 0 4px", lineHeight: 1.65 }}>
                       {msg.text || msg.response}
                     </p>
                     {!isPM && msg.scoreProposal?.newScore != null && (
@@ -76,7 +76,7 @@ export default function FollowUpThread({
                         margin: "6px 0 6px",
                         border: `1px solid ${proposalTone(msg.scoreProposal.status).border}`,
                         background: proposalTone(msg.scoreProposal.status).bg,
-                        borderRadius: 8,
+                        borderRadius: 2,
                         padding: "7px 9px",
                       }}>
                         <div style={{ fontSize: 10, fontWeight: 700, color: proposalTone(msg.scoreProposal.status).text, marginBottom: 3 }}>
@@ -92,10 +92,10 @@ export default function FollowUpThread({
                               type="button"
                               onClick={() => onResolveProposal?.(msg.id, "accept")}
                               style={{
-                                border: "1px solid #8fd4b3",
-                                background: "#e2f5ea",
-                                color: "#0f7a55",
-                                borderRadius: 6,
+                                border: "1px solid var(--ck-line)",
+                                background: "var(--ck-surface-soft)",
+                                color: "var(--ck-muted)",
+                                borderRadius: 2,
                                 fontSize: 11,
                                 fontWeight: 700,
                                 padding: "4px 8px",
@@ -107,10 +107,10 @@ export default function FollowUpThread({
                               type="button"
                               onClick={() => onResolveProposal?.(msg.id, "dismiss")}
                               style={{
-                                border: "1px solid #f8dc9b",
-                                background: "#fff8e8",
-                                color: "#935f00",
-                                borderRadius: 6,
+                                border: "1px solid var(--ck-line)",
+                                background: "var(--ck-surface-soft)",
+                                color: "var(--ck-muted)",
+                                borderRadius: 2,
                                 fontSize: 11,
                                 fontWeight: 700,
                                 padding: "4px 8px",
@@ -123,7 +123,7 @@ export default function FollowUpThread({
                       </div>
                     )}
                     {!isPM && argumentUpdateText(msg) && (
-                      <div style={{ margin: "4px 0 2px", fontSize: 10, color: "var(--ck-blue-ink)", fontWeight: 700 }}>
+                      <div style={{ margin: "4px 0 2px", fontSize: 10, color: "var(--ck-text)", fontWeight: 700 }}>
                         {argumentUpdateText(msg)}
                       </div>
                     )}
@@ -144,7 +144,7 @@ export default function FollowUpThread({
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && inputVal?.trim() && !loading) onSubmit();
           }}
           style={{
-            flex: 1, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line-strong)", borderRadius: 7,
+            flex: 1, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line-strong)", borderRadius: 2,
             color: "var(--ck-text)", padding: "7px 10px", fontSize: 11, resize: "none",
             minHeight: 50, lineHeight: 1.5, outline: "none", fontFamily: "inherit",
           }}
@@ -153,13 +153,13 @@ export default function FollowUpThread({
           onClick={onSubmit}
           disabled={!inputVal?.trim() || loading}
           style={{
-            background: inputVal?.trim() && !loading ? "var(--ck-blue)" : "var(--ck-surface-soft)",
+            background: inputVal?.trim() && !loading ? "var(--ck-accent)" : "var(--ck-surface-soft)",
             border: "none",
-            color: inputVal?.trim() && !loading ? "#fff" : "var(--ck-muted)",
-            padding: "8px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600,
+            color: inputVal?.trim() && !loading ? "var(--ck-accent-ink)" : "var(--ck-muted)",
+            padding: "8px 14px", borderRadius: 2, fontSize: 12, fontWeight: 600,
             flexShrink: 0, display: "flex", alignItems: "center", gap: 5,
           }}>
-          {loading ? <><Spinner size={10} color="var(--ck-blue)" /><span style={{ color: "var(--ck-blue)" }}>...</span></> : "Send ->"}
+          {loading ? <><Spinner size={10} color="var(--ck-text)" /><span style={{ color: "var(--ck-text)" }}>...</span></> : "Send"}
         </button>
       </div>
     </div>

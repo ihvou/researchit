@@ -8,37 +8,37 @@ export function confidenceLabel(level) {
 export function confidenceTone(level) {
   if (level === "high") {
     return {
-      bg: "#e9f8ee",
-      line: "#b3e3c4",
-      ink: "#12805c",
+      bg: "var(--ck-surface-soft)",
+      line: "var(--ck-line)",
+      ink: "var(--ck-text)",
       short: "High",
-      icon: "🟢",
+      icon: "H",
     };
   }
   if (level === "medium") {
     return {
-      bg: "#fff6e8",
-      line: "#f5d7a3",
-      ink: "#9a6507",
+      bg: "var(--ck-surface-soft)",
+      line: "var(--ck-line)",
+      ink: "var(--ck-muted)",
       short: "Med",
-      icon: "🟡",
+      icon: "M",
     };
   }
   if (level === "low") {
     return {
-      bg: "#fff1ef",
-      line: "#f3c2ba",
-      ink: "#b42318",
+      bg: "var(--ck-surface-soft)",
+      line: "var(--ck-line-strong)",
+      ink: "var(--ck-muted)",
       short: "Low",
-      icon: "🔴",
+      icon: "L",
     };
   }
   return {
-    bg: "#f3f4f6",
-    line: "#d1d5db",
-    ink: "#6b7280",
+    bg: "var(--ck-surface-soft)",
+    line: "var(--ck-line)",
+    ink: "var(--ck-muted-soft)",
     short: "N/A",
-    icon: "⚪",
+    icon: "-",
   };
 }
 
