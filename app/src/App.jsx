@@ -478,7 +478,9 @@ export default function App() {
             </div>
 
             <div className="dimension-descriptions-scroll">
-              <div className="dimension-descriptions-row">
+              <div
+                className="dimension-descriptions-row"
+                style={{ "--dimension-count": Math.max(dims.length, 1) }}>
                 {dims.length ? dims.map((d) => (
                   <div
                     key={`${d.id}-desc`}
@@ -513,7 +515,7 @@ export default function App() {
                           value={d.weight}
                           disabled={!d.enabled}
                           onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
-                          style={{ width: "100%", accentColor: "var(--ck-accent)" }} />
+                          style={{ width: "100%", minWidth: 0, accentColor: "var(--ck-accent)" }} />
                       </div>
                     )}
                   </div>

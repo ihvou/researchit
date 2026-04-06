@@ -189,16 +189,17 @@ a:hover {
 
 .dimension-descriptions-scroll {
   margin-top: 10px;
-  overflow-x: auto;
-  padding-bottom: 2px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .dimension-descriptions-row {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(180px, 1fr);
+  grid-template-columns: repeat(var(--dimension-count, 1), minmax(0, 1fr));
   gap: 14px;
-  min-width: max-content;
+  width: 100%;
+  min-width: 0;
+  align-items: start;
 }
 
 .dimension-description-card {
@@ -207,6 +208,7 @@ a:hover {
   border-radius: 0;
   padding: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .dimension-config-grid {
