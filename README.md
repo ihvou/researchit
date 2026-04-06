@@ -135,6 +135,30 @@ Default system prompts live in:
   methodology: "Methodological foundation and positioning notes shown in UI",
   engineVersion: "1.0.0",
 
+  inputSpec: {
+    label: "New Research - describe the startup or product idea",
+    placeholder: "E.g. AI co-pilot for insurance claims adjusters in US mid-market carriers.",
+    description: "What this research type expects as input. Broad input is allowed."
+  },
+
+  framingFields: [
+    {
+      id: "researchObject",
+      label: "Research Object",
+      description: "What is being evaluated"
+    },
+    {
+      id: "decisionQuestion",
+      label: "Decision Question",
+      description: "What decision the research should inform"
+    },
+    {
+      id: "scopeContext",
+      label: "Scope / Context",
+      description: "Explicit segment, geography, timeframe, constraints (or unspecified)"
+    }
+  ],
+
   dimensions: [
     {
       id: "problem-severity",
@@ -182,6 +206,23 @@ Default system prompts live in:
       followUpChallenge: 2100,
       intentClassification: 450
     }
+  }
+}
+```
+
+`attributes` now also includes an `inputFrame` block used by UI:
+
+```js
+{
+  inputFrame: {
+    providedInput: "<verbatim user input>",
+    framingFields: {
+      researchObject: "<value or 'unspecified'>",
+      decisionQuestion: "<value or 'unspecified'>",
+      scopeContext: "<value or 'unspecified'>"
+    },
+    assumptionsUsed: [],
+    confidenceLimits: "<what cannot be concluded from current input/evidence>"
   }
 }
 ```

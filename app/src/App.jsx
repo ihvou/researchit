@@ -48,6 +48,14 @@ function trimText(text, max = 170) {
   return `${str.slice(0, max - 1).trimEnd()}...`;
 }
 
+function normalizeAssumptions(values) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
 export default function App() {
   const [useCases, setUseCases] = useState([]);
   const [activeConfigId, setActiveConfigId] = useState(DEFAULT_RESEARCH_CONFIG.id);
@@ -340,6 +348,13 @@ export default function App() {
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
   const completedCount = visibleUseCases.filter((u) => u.status === "complete").length;
   const methodology = activeConfig?.methodology || "";
+  const activeInputSpec = activeConfig?.inputSpec || {};
+  const inputPanelLabel = String(activeInputSpec?.label || "New Research - describe what should be researched").trim();
+  const inputPanelPlaceholder = String(
+    activeInputSpec?.placeholder
+    || "Describe what you want to research. Broad or detailed inputs are both acceptable."
+  ).trim();
+  const inputPanelDescription = String(activeInputSpec?.description || "").trim();
 
   const PHASE_LABEL_SHORT = {
     analyst: "Research...",
@@ -646,13 +661,18 @@ export default function App() {
       {showInputPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
-            New Research - describe the problem or solution
+            {inputPanelLabel}
           </div>
+          {inputPanelDescription ? (
+            <div style={{ fontSize: 12, color: "var(--ck-muted)", marginBottom: 8 }}>
+              {inputPanelDescription}
+            </div>
+          ) : null}
           <textarea
             autoFocus
             value={inputText}
             onChange={e => setInputText(e.target.value)}
-            placeholder={'Vague and high-level is fine. E.g. "AI for insurance claims processing" or "automate contract review for legal teams in financial services"'}
+            placeholder={inputPanelPlaceholder}
             onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startAnalysis(); }}
             style={{
               width: "100%", height: 90, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line-strong)",
@@ -714,9 +734,17 @@ export default function App() {
               const score = calcWeightedScore(uc, dims);
               const isExpanded = expandedId === uc.id;
               const title = uc.attributes?.title || trimText(uc.rawInput, 80) || "Untitled research";
-              const summary = trimText(uc.attributes?.expandedDescription || uc.rawInput, 260);
-              const problem = trimText(uc.attributes?.problemStatement || uc.rawInput, 220);
-              const solution = trimText(uc.attributes?.solutionStatement || uc.attributes?.expandedDescription || "", 220);
+              const ucConfig = RESEARCH_CONFIGS.find((config) => config.id === (uc?.researchConfigId || activeConfig.id))
+                || activeConfig;
+              const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
+              const inputFrame = uc.attributes?.inputFrame || {};
+              const providedInput = trimText(inputFrame?.providedInput || uc.rawInput, 420);
+              const frameValues = inputFrame?.framingFields && typeof inputFrame.framingFields === "object"
+                ? inputFrame.framingFields
+                : {};
+              const assumptions = normalizeAssumptions(inputFrame?.assumptionsUsed);
+              const confidenceLimits = trimText(inputFrame?.confidenceLimits || "", 220);
+              const analysisSummary = trimText(uc.attributes?.expandedDescription || "", 240);
 
               return (
                 <article
@@ -759,17 +787,52 @@ export default function App() {
                   <div className="research-card-summary">
                     <div className="research-definition">
                       <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
-                        Definition
+                        Provided Input
                       </div>
-                      <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55 }}>{summary || "-"}</div>
+                      <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                        {providedInput || "-"}
+                      </div>
+                      {analysisSummary ? (
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                            Analysis Framing
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{analysisSummary}</div>
+                        </div>
+                      ) : null}
+                      {framingFieldDefs.length ? (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
+                          {framingFieldDefs.map((field) => {
+                            const value = trimText(frameValues?.[field.id] || "unspecified", 140);
+                            return (
+                              <div key={`${uc.id}-frame-${field.id}`}>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                                  {field.label || field.id}
+                                </div>
+                                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                                  {value || "unspecified"}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
                         <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>Problem Statement</div>
-                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{problem || "-"}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                            Assumptions Used
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                            {assumptions.length ? assumptions.join(" | ") : "None."}
+                          </div>
                         </div>
                         <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>Solution Statement</div>
-                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{solution || "-"}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                            Confidence Limits
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                            {confidenceLimits || "No explicit limits were captured."}
+                          </div>
                         </div>
                       </div>
                     </div>

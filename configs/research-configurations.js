@@ -39,6 +39,89 @@ const BASE_PROMPTS = {
   followUp: SYS_FOLLOWUP,
 };
 
+const DEFAULT_INPUT_SPEC = {
+  label: "New Research - describe what should be researched",
+  placeholder: "Describe what you want to research. Broad or detailed inputs are both acceptable.",
+  description: "Accept broad or detailed input. Do not infer missing specifics unless explicitly provided.",
+};
+
+const INPUT_SPEC_BY_CONFIG = {
+  "startup-product-idea-validation": {
+    label: "New Research - describe the startup or product idea",
+    placeholder: "E.g. AI co-pilot for insurance claims adjusters in US mid-market carriers.",
+    description: "Describe the startup/product idea and the problem it aims to solve. Segment and geography are optional.",
+  },
+  "market-entry-analysis": {
+    label: "New Research - describe the market entry question",
+    placeholder: "E.g. Should a US B2B payroll SaaS expand into Germany in 2026?",
+    description: "Describe the offer and target market entry decision. Include geography and segment if known.",
+  },
+  "competitive-landscape": {
+    label: "New Research - describe the category or competitor set",
+    placeholder: "E.g. Competitive landscape for AI contract lifecycle management for enterprise legal teams.",
+    description: "Describe the category, focal company/product, or competitive question to map advantage structure.",
+  },
+  "build-vs-buy-technology-decision": {
+    label: "New Research - describe the build vs buy decision",
+    placeholder: "E.g. Build in-house RAG stack vs buy managed platform for regulated customer support workflows.",
+    description: "Describe the capability under decision and the realistic build/buy/hybrid options.",
+  },
+  "investment-m-and-a-screening": {
+    label: "New Research - describe the investment or M&A target",
+    placeholder: "E.g. Evaluate acquisition of a vertical AI coding assistant company for strategic expansion.",
+    description: "Describe the target and strategic rationale. Valuation details are optional at initial pass.",
+  },
+  "product-expansion-new-feature-adjacent-segment-new-geography": {
+    label: "New Research - describe the expansion move",
+    placeholder: "E.g. Expand core SMB invoicing product into AP automation for upper-mid-market finance teams.",
+    description: "Describe the current core and proposed expansion (feature, segment, or geography).",
+  },
+};
+
+const DEFAULT_FRAMING_FIELDS = [
+  {
+    id: "researchObject",
+    label: "Research Object",
+    description: "What is being evaluated (idea, offer, target, capability, or expansion move).",
+  },
+  {
+    id: "decisionQuestion",
+    label: "Decision Question",
+    description: "What decision this research should inform.",
+  },
+  {
+    id: "scopeContext",
+    label: "Scope / Context",
+    description: "Explicit boundaries such as segment, geography, timeframe, and constraints.",
+  },
+];
+
+function normalizeInputSpec(inputSpec = {}) {
+  return {
+    label: String(inputSpec?.label || DEFAULT_INPUT_SPEC.label).trim() || DEFAULT_INPUT_SPEC.label,
+    placeholder: String(inputSpec?.placeholder || DEFAULT_INPUT_SPEC.placeholder).trim() || DEFAULT_INPUT_SPEC.placeholder,
+    description: String(inputSpec?.description || DEFAULT_INPUT_SPEC.description).trim() || DEFAULT_INPUT_SPEC.description,
+  };
+}
+
+function normalizeFramingFields(framingFields = []) {
+  const normalized = Array.isArray(framingFields)
+    ? framingFields
+      .map((field, idx) => {
+        const rawId = String(field?.id || "").trim();
+        const fallbackId = `field_${idx + 1}`;
+        const id = (rawId || fallbackId).replace(/[^a-zA-Z0-9_-]/g, "");
+        return {
+          id: id || fallbackId,
+          label: String(field?.label || rawId || fallbackId).trim() || fallbackId,
+          description: String(field?.description || "").trim(),
+        };
+      })
+      .filter((field) => field.id)
+    : [];
+  return normalized.length ? normalized : DEFAULT_FRAMING_FIELDS;
+}
+
 const CONFIG_SPECS = [
   {
     "id": "startup-product-idea-validation",
@@ -397,6 +480,8 @@ export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   name: spec.name,
   tabLabel: spec.tabLabel || spec.name,
   engineVersion: "1.0.0",
+  inputSpec: normalizeInputSpec(spec.inputSpec || INPUT_SPEC_BY_CONFIG[spec.id] || {}),
+  framingFields: normalizeFramingFields(spec.framingFields || DEFAULT_FRAMING_FIELDS),
   dimensions: spec.dimensions,
   relatedDiscovery: spec.relatedDiscovery !== false,
   methodology: spec.methodology || "",

@@ -110,20 +110,81 @@ function buildDimEvidenceJsonTemplate(dims, condensed = false) {
   ).join(",\n    ");
 }
 
-function buildAttributesTemplate(condensed = false) {
+const DEFAULT_PROMPT_FRAMING_FIELDS = [
+  { id: "researchObject", label: "Research Object", description: "What is being evaluated." },
+  { id: "decisionQuestion", label: "Decision Question", description: "What decision this research informs." },
+  { id: "scopeContext", label: "Scope / Context", description: "Explicit segment/geo/timeframe/constraint boundaries." },
+];
+
+function normalizePromptFramingFields(fields = []) {
+  const input = Array.isArray(fields) ? fields : [];
+  const normalized = input
+    .map((field, idx) => {
+      const rawId = String(field?.id || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+      const fallbackId = `field_${idx + 1}`;
+      const id = rawId || fallbackId;
+      return {
+        id,
+        label: String(field?.label || rawId || fallbackId).trim() || fallbackId,
+        description: String(field?.description || "").trim(),
+      };
+    })
+    .filter((field) => field.id);
+  return normalized.length ? normalized : DEFAULT_PROMPT_FRAMING_FIELDS;
+}
+
+function buildFramingFieldsTemplate(framingFields, condensed = false) {
+  const fields = normalizePromptFramingFields(framingFields);
   if (condensed) {
-    return `{"title": "<max 8 words>", "problemStatement": "<adaptive: 1-8 sentences based on input detail>", "solutionStatement": "<adaptive: 1-8 sentences based on input detail>", "expandedDescription": "<2 sentences>", "vertical": "<industry>", "buyerPersona": "<role>", "aiSolutionType": "<AI/ML type>", "typicalTimeline": "<estimate>", "deliveryModel": "<engagement type>"}`;
+    return fields
+      .map((field) => `"${field.id}": "<extracted value or unspecified>"`)
+      .join(", ");
+  }
+  return fields
+    .map((field) => `        "${field.id}": "<extracted value or unspecified>"`)
+    .join(",\n");
+}
+
+function buildInputFramingRulesBlock(inputSpec = {}, framingFields = []) {
+  const description = String(inputSpec?.description || "").trim();
+  const fields = normalizePromptFramingFields(framingFields);
+  const fieldLines = fields
+    .map((field) => `- ${field.label} (${field.id}): ${field.description || "extract only from explicit user input; otherwise set to \"unspecified\"."}`)
+    .join("\n");
+
+  return `INPUT FRAMING RULES:
+- Input expectation for this research type: ${description || "Accept broad or detailed user input."}
+- Preserve user wording in "attributes.inputFrame.providedInput" (verbatim, do not rewrite).
+- Never invent specifics (segment, buyer, geography, timeline, budget, metrics). If not explicitly stated, set field value to "unspecified".
+- "assumptionsUsed" must be [] unless an assumption is strictly necessary; any assumption must be explicit and minimal.
+- "confidenceLimits" must describe what cannot be concluded due to missing specificity or evidence.
+- Populate "attributes.inputFrame.framingFields" using:
+${fieldLines}`;
+}
+
+function buildAttributesTemplate({ condensed = false, framingFields = [] } = {}) {
+  const framingFieldsTemplate = buildFramingFieldsTemplate(framingFields, condensed);
+  if (condensed) {
+    return `{"title":"<max 8 words>","problemStatement":"<adaptive 1-8 sentences>","solutionStatement":"<adaptive 1-8 sentences>","expandedDescription":"<2 sentences>","vertical":"<industry or unspecified>","buyerPersona":"<role or unspecified>","aiSolutionType":"<AI/ML type or unspecified>","typicalTimeline":"<estimate or unspecified>","deliveryModel":"<engagement type or unspecified>","inputFrame":{"providedInput":"<exact user input>","framingFields":{${framingFieldsTemplate}},"assumptionsUsed":[],"confidenceLimits":"<what remains unknown>"}}`;
   }
   return `{
     "title": "<descriptive title, max 8 words>",
     "problemStatement": "<adaptive detail: short input => 1-2 sentences; detailed input => 6-8 sentences (business pain, constraints, impact)>",
-    "solutionStatement": "<adaptive detail: short input => 1-2 sentences; detailed input => 6-8 sentences (AI approach, workflow, value path)>",
-    "expandedDescription": "<2-3 sentences: what the AI does, how it creates value, why an outsourcer should care>",
-    "vertical": "<primary industry vertical>",
-    "buyerPersona": "<job title of primary decision maker>",
-    "aiSolutionType": "<specific AI/ML technology type>",
-    "typicalTimeline": "<realistic end-to-end delivery estimate>",
-    "deliveryModel": "<how outsourcer engages: build-and-transfer, managed service, etc>"
+    "solutionStatement": "<adaptive detail: short input => 1-2 sentences; detailed input => 6-8 sentences (approach, workflow, value path)>",
+    "expandedDescription": "<2-3 sentences: neutral summary of what is being evaluated>",
+    "vertical": "<primary industry vertical or unspecified>",
+    "buyerPersona": "<primary decision maker role or unspecified>",
+    "aiSolutionType": "<specific AI/ML technology type or unspecified>",
+    "typicalTimeline": "<realistic end-to-end estimate or unspecified>",
+    "deliveryModel": "<engagement type or unspecified>",
+    "inputFrame": {
+      "providedInput": "<repeat user input verbatim>",
+      "framingFields": {
+${framingFieldsTemplate}
+      },
+      "assumptionsUsed": [],
+      "confidenceLimits": "<what cannot be concluded from provided input/evidence>"
+    }
   }`;
 }
 
@@ -186,7 +247,12 @@ function buildDynamicSearchPlan(dims, topCount = 3) {
   }).join("\n");
 }
 
-function buildPhase1EvidencePrompt(desc, dims, { liveSearch = false, condensed = false } = {}) {
+function buildPhase1EvidencePrompt(desc, dims, {
+  liveSearch = false,
+  condensed = false,
+  inputSpec = {},
+  framingFields = [],
+} = {}) {
   const mandatorySearchPlan = buildDynamicSearchPlan(dims, 3);
 
   const liveSearchBlock = liveSearch
@@ -200,10 +266,11 @@ ${mandatorySearchPlan}
     : "";
 
   const evidenceTemplate = buildDimEvidenceJsonTemplate(dims, condensed);
-  const attributesTemplate = buildAttributesTemplate(condensed);
+  const attributesTemplate = buildAttributesTemplate({ condensed, framingFields });
+  const framingRules = buildInputFramingRulesBlock(inputSpec, framingFields);
 
   return `Step 1 of 2 - EVIDENCE ENUMERATION ONLY.
-Analyze this AI use case for an outsourcing company that builds CUSTOM AI solutions for enterprise clients:
+Analyze this strategic research input:
 
 "${desc}"
 
@@ -213,6 +280,7 @@ PROBLEM / SOLUTION DETAIL RULE:
 - Keep statements proportional to user input detail.
 - If input is short/high-level, keep each statement concise (1-2 sentences).
 - If input is detailed, summarize with richer detail (6-8 sentences per statement).
+${framingRules}
 
 Rules for this step:
 - Enumerate evidence only: verifiable facts, deployments, metrics, market signals, and caveats.
@@ -224,7 +292,7 @@ Rules for this step:
   - sourceType "independent": peer-reviewed, benchmark, audit, neutral analyst research.
 - If a dimension relies mostly on vendor claims, state that clearly in "missingEvidence" and request independent corroboration.
 
-Return ONLY this JSON structure, fully populated for ALL 11 dimension IDs (${dims.map((d) => d.id).join(", ")}):
+Return ONLY this JSON structure, fully populated for ALL dimension IDs (${dims.map((d) => d.id).join(", ")}):
 
 {
   "attributes": ${attributesTemplate},
@@ -234,9 +302,13 @@ Return ONLY this JSON structure, fully populated for ALL 11 dimension IDs (${dim
 }`;
 }
 
-function buildPhase1ScoringPrompt(desc, dims, evidencePayload, { condensed = false, passLabel = "initial analyst pass" } = {}) {
+function buildPhase1ScoringPrompt(desc, dims, evidencePayload, {
+  condensed = false,
+  passLabel = "initial analyst pass",
+  framingFields = [],
+} = {}) {
   const dimTemplate = buildDimJsonTemplate(dims, condensed);
-  const attrsTemplate = buildAttributesTemplate(condensed);
+  const attrsTemplate = buildAttributesTemplate({ condensed, framingFields });
 
   return `Step 2 of 2 - RUBRIC SCORING FROM ENUMERATED EVIDENCE.
 Use case:
@@ -261,6 +333,9 @@ Hard rules:
 - Do NOT add new facts, deployments, or claims not present in Step 1 evidence.
 - If evidence is weak or mixed, score conservatively and explain limits.
 - Keep attributes consistent with Step 1 unless a clear correction is needed.
+- Keep "attributes.inputFrame.providedInput" verbatim.
+- Do not infer missing specifics in framing fields; keep "unspecified" where missing.
+- Keep "assumptionsUsed" explicit and minimal (empty array when none).
 
 Return ONLY this JSON:
 {
@@ -361,6 +436,43 @@ function normalizeStringList(values, maxItems = 6, maxLen = 180) {
     .map((v) => v.slice(0, maxLen));
 }
 
+function normalizeInputFrame(rawInput, frame, framingFields = []) {
+  const inputFrame = frame && typeof frame === "object" ? frame : {};
+  const fields = normalizePromptFramingFields(framingFields);
+  const rawValues = inputFrame?.framingFields && typeof inputFrame.framingFields === "object"
+    ? inputFrame.framingFields
+    : {};
+
+  const normalizedValues = {};
+  fields.forEach((field) => {
+    const value = String(rawValues?.[field.id] || "").trim();
+    normalizedValues[field.id] = value || "unspecified";
+  });
+
+  return {
+    providedInput: String(inputFrame?.providedInput || rawInput || "").trim() || String(rawInput || "").trim(),
+    framingFields: normalizedValues,
+    assumptionsUsed: normalizeStringList(inputFrame?.assumptionsUsed, 5, 220),
+    confidenceLimits: String(inputFrame?.confidenceLimits || "").trim()
+      || "Input and evidence limits leave parts of this assessment uncertain.",
+  };
+}
+
+function normalizeAttributesShape(rawAttributes, rawInput, framingFields = []) {
+  const attrs = rawAttributes && typeof rawAttributes === "object" ? { ...rawAttributes } : {};
+  attrs.title = String(attrs.title || "").trim();
+  attrs.problemStatement = String(attrs.problemStatement || "").trim();
+  attrs.solutionStatement = String(attrs.solutionStatement || "").trim();
+  attrs.expandedDescription = String(attrs.expandedDescription || "").trim();
+  attrs.vertical = String(attrs.vertical || "").trim();
+  attrs.buyerPersona = String(attrs.buyerPersona || "").trim();
+  attrs.aiSolutionType = String(attrs.aiSolutionType || "").trim();
+  attrs.typicalTimeline = String(attrs.typicalTimeline || "").trim();
+  attrs.deliveryModel = String(attrs.deliveryModel || "").trim();
+  attrs.inputFrame = normalizeInputFrame(rawInput, attrs.inputFrame, framingFields);
+  return attrs;
+}
+
 function normalizeEvidenceSourceType(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
@@ -376,7 +488,7 @@ function defaultTargetedQueries(desc, dimLabel, gapHint, attributes = {}) {
   const vertical = String(attributes?.vertical || "").trim();
   const aiType = String(attributes?.aiSolutionType || "").trim();
   const dim = String(dimLabel || "").trim() || "dimension";
-  const base = title || desc || "enterprise AI use case";
+  const base = title || desc || "strategic research input";
   const market = vertical || "target industry";
   const ai = aiType || "AI solution";
   const gap = String(gapHint || "").trim();
@@ -468,7 +580,10 @@ function sourceSummary(sources = []) {
     .join("; ");
 }
 
-function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, condensed = false) {
+function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
+  condensed = false,
+  framingFields = [],
+} = {}) {
   const comparison = dims.map((d) => {
     const b = baseline?.dimensions?.[d.id] || {};
     const w = web?.dimensions?.[d.id] || {};
@@ -492,7 +607,7 @@ function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, condensed
   }).join("\n\n");
 
   const evidenceTemplate = buildDimEvidenceJsonTemplate(dims, condensed);
-  const attrsTemplate = buildAttributesTemplate(condensed);
+  const attrsTemplate = buildAttributesTemplate({ condensed, framingFields });
 
   return `Step 1 of 2 - EVIDENCE ENUMERATION ONLY (HYBRID RECONCILE).
 You are a reliability reviewer combining two analyst drafts for the same use case.
@@ -516,7 +631,8 @@ Rules:
 - When both drafts flag the same missing evidence, preserve that gap.
 - When one draft fills a gap that the other flags, include the gap-filling evidence.
 - Enumerate evidence only. Do NOT output scores or confidence in this step.
-- Keep the same outsourcing-delivery framing and coherent attributes.
+- Keep coherent attributes across drafts.
+- Preserve inputFrame.providedInput verbatim and keep missing framing fields as "unspecified".
 
 Return ONLY this JSON:
 {
@@ -552,7 +668,7 @@ function buildCriticPrompt(desc, dims, p1, { liveSearch = false } = {}) {
 - Challenge with realistic incumbent/SaaS pressure where relevant, and state uncertainty when verification is limited.
 - Do not re-research from scratch; focus on adversarial review of analyst evidence.`;
 
-  return `Audit this analyst assessment of the AI use case: "${p1?.attributes?.title || desc}"
+  return `Audit this analyst assessment: "${p1?.attributes?.title || desc}"
 
 Use case description:
 "${desc}"
@@ -1930,16 +2046,34 @@ async function runAnalystPass({
   }
 }
 
-async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits = {}) {
+async function runHybridPhase1(
+  desc,
+  dims,
+  updateUC,
+  id,
+  analysisMeta,
+  debugSession,
+  tokenLimits = {},
+  {
+    inputSpec = {},
+    framingFields = [],
+  } = {}
+) {
   const evidenceMaxTokens = Number(tokenLimits.phase1Evidence) || 10000;
   const scoringMaxTokens = Number(tokenLimits.phase1Scoring) || 12000;
   const debugContext = { useCaseId: id, analysisMode: analysisMeta.analysisMode };
   updateUC(id, (u) => ({ ...u, phase: "analyst_baseline" }));
   const baseline = await runAnalystPass({
-    evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, { liveSearch: false, condensed }),
+    evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
+      liveSearch: false,
+      condensed,
+      inputSpec,
+      framingFields,
+    }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "baseline analyst pass (memory-only)",
+      framingFields,
     }),
     dims,
     analysisMeta,
@@ -1953,10 +2087,16 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
 
   updateUC(id, (u) => ({ ...u, phase: "analyst_web" }));
   const web = await runAnalystPass({
-    evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, { liveSearch: true, condensed }),
+    evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
+      liveSearch: true,
+      condensed,
+      inputSpec,
+      framingFields,
+    }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "web-assisted analyst pass",
+      framingFields,
     }),
     dims,
     analysisMeta,
@@ -1970,10 +2110,14 @@ async function runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSess
 
   updateUC(id, (u) => ({ ...u, phase: "analyst_reconcile" }));
   const reconciled = await runAnalystPass({
-    evidencePromptBuilder: (condensed) => buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, condensed),
+    evidencePromptBuilder: (condensed) => buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
+      condensed,
+      framingFields,
+    }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "hybrid reliability reconcile (score from merged evidence)",
+      framingFields,
     }),
     dims,
     analysisMeta,
@@ -2264,6 +2408,8 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
   const criticLiveSearch = true;
   const downloadDebugLog = !!options.downloadDebugLog;
   const relatedDiscoveryEnabled = options.relatedDiscovery !== false;
+  const inputSpec = options?.inputSpec || {};
+  const framingFields = normalizePromptFramingFields(options?.framingFields || []);
   const prompts = {
     analyst: options?.prompts?.analyst || SYS_ANALYST,
     critic: options?.prompts?.critic || SYS_CRITIC,
@@ -2327,7 +2473,11 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
   try {
     // Phase 1: Analyst
     updateUC(id, (u) => ({ ...u, phase: "analyst_baseline" }));
-    const p1Base = await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits);
+    const p1Base = await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
+      inputSpec,
+      framingFields,
+    });
+    p1Base.attributes = normalizeAttributesShape(p1Base?.attributes, desc, framingFields);
     let p1 = p1Base;
 
     try {
@@ -2350,6 +2500,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
       });
       p1 = p1Base;
     }
+    p1.attributes = normalizeAttributesShape(p1?.attributes, desc, framingFields);
 
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
@@ -2743,6 +2894,8 @@ STRICT JSON RULES:
         error: consistencyErr.message || String(consistencyErr),
       });
     }
+    finalResponse = finalResponse && typeof finalResponse === "object" ? finalResponse : {};
+    finalResponse.attributes = normalizeAttributesShape(finalResponse?.attributes, desc, framingFields);
 
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
@@ -3032,6 +3185,8 @@ export async function runAnalysis(input, config, callbacks = {}) {
         downloadDebugLog: !!input?.options?.downloadDebugLog,
         prompts: config?.prompts || {},
         limits: config?.limits || {},
+        inputSpec: config?.inputSpec || {},
+        framingFields: Array.isArray(config?.framingFields) ? config.framingFields : [],
         relatedDiscovery: config?.relatedDiscovery !== false,
         onDebugSession: callbacks?.onDebugSession,
       }
