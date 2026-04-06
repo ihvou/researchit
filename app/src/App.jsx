@@ -376,9 +376,9 @@ export default function App() {
             </div>
             <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
           </div>
-          <div style={{ minWidth: 0, flex: 1, marginLeft: 16 }}>
+          <div style={{ minWidth: 0, flex: 1, marginLeft: 16, display: "flex", justifyContent: "flex-end" }}>
             <div className="scroll-row">
-              <div className="scroll-row-inner" style={{ alignItems: "center" }}>
+              <div className="scroll-row-inner" style={{ alignItems: "center", marginLeft: "auto" }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
                   Researches Available:
                 </span>
@@ -477,58 +477,57 @@ export default function App() {
               </button>
             </div>
 
-            <div className="dimension-descriptions-grid">
-              {activeDims.length ? activeDims.map((d) => (
-                <div key={`${d.id}-desc`} className="dimension-description-card">
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)" }}>{d.label}</span>
-                    <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{d.weight}%</span>
+            <div className="dimension-descriptions-scroll">
+              <div className="dimension-descriptions-row">
+                {dims.length ? dims.map((d) => (
+                  <div
+                    key={`${d.id}-desc`}
+                    className="dimension-description-card"
+                    style={{ opacity: d.enabled ? 1 : 0.6 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)" }}>{d.label}</span>
+                      {showDimsPanel && <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{d.weight}%</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                      {d.brief}
+                    </div>
+                    {showDimsPanel && (
+                      <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={d.enabled}
+                            onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
+                            style={{ accentColor: "var(--ck-accent)", width: 14, height: 14 }} />
+                          <span style={{ fontSize: 11, color: "var(--ck-muted)", fontWeight: 600 }}>
+                            {d.enabled ? "included" : "excluded"}
+                          </span>
+                          <span className="mono" style={{ marginLeft: "auto", fontSize: 11, color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
+                        </div>
+                        <DimRubricToggle dim={d} />
+                        <input
+                          type="range"
+                          min={1}
+                          max={40}
+                          step={1}
+                          value={d.weight}
+                          disabled={!d.enabled}
+                          onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
+                          style={{ width: "100%", accentColor: "var(--ck-accent)" }} />
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                    {d.brief}
-                  </div>
-                </div>
-              )) : (
-                <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>Enable dimensions in Configure Dimensions.</div>
-              )}
+                )) : (
+                  <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>No dimensions configured for this research type.</div>
+                )}
+              </div>
             </div>
 
             {showDimsPanel && (
-              <>
-                <div style={{ marginTop: 12, fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                  Dimension Rubrics & Weights
-                </div>
-                <div className="dimension-config-grid">
-                  {dims.map(d => (
-                    <div key={d.id} style={{
-                      background: "var(--ck-surface)",
-                      border: `1px solid ${d.enabled ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
-                      borderRadius: 2,
-                      padding: "10px 12px",
-                      opacity: d.enabled ? 1 : 0.55,
-                    }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                        <input
-                          type="checkbox" checked={d.enabled}
-                          onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
-                          style={{ accentColor: "var(--ck-accent)", width: 14, height: 14 }} />
-                        <span style={{ fontWeight: 600, fontSize: 12, color: d.enabled ? "var(--ck-text)" : "var(--ck-muted)" }}>{d.label}</span>
-                        <span className="mono" style={{ marginLeft: "auto", fontSize: 12, color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
-                      </div>
-                      <DimRubricToggle dim={d} />
-                      <input
-                        type="range" min={1} max={40} step={1} value={d.weight}
-                        disabled={!d.enabled}
-                        onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
-                        style={{ width: "100%", accentColor: "var(--ck-accent)", marginTop: 4 }} />
-                    </div>
-                  ))}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--ck-muted)", marginTop: 10 }}>
-                  Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
-                  <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
-                </div>
-              </>
+              <div style={{ fontSize: 11, color: "var(--ck-muted)", marginTop: 10 }}>
+                Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
+                <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
+              </div>
             )}
           </div>
         )}
