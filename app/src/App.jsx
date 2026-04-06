@@ -59,7 +59,7 @@ export default function App() {
   const [inputText, setInputText] = useState("");
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [showDimsPanel, setShowDimsPanel] = useState(false);
-  const [showMethodologyFull, setShowMethodologyFull] = useState(false);
+  const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [globalAnalyzing, setGlobalAnalyzing] = useState(false);
   const [fuInputs, setFuInputs] = useState({});
@@ -74,7 +74,10 @@ export default function App() {
   const exportMenuRef = useRef(null);
   const importFileRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
-  useEffect(() => { setShowMethodologyFull(false); }, [activeConfigId]);
+  useEffect(() => {
+    setShowDimsPanel(false);
+    setShowDetailsPanel(true);
+  }, [activeConfigId]);
 
   const activeConfig = RESEARCH_CONFIGS.find((config) => config.id === activeConfigId)
     || DEFAULT_RESEARCH_CONFIG;
@@ -337,15 +340,6 @@ export default function App() {
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
   const completedCount = visibleUseCases.filter((u) => u.status === "complete").length;
   const methodology = activeConfig?.methodology || "";
-  const dimensionSnapshot = activeDims.map((d) => {
-    const scored = visibleUseCases
-      .map((u) => getDimensionView(u, d.id, { dimLabel: d.label, dim: d }).effectiveScore)
-      .filter((v) => v != null);
-    const avg = scored.length
-      ? (scored.reduce((sum, v) => sum + Number(v), 0) / scored.length).toFixed(1)
-      : null;
-    return { ...d, avg };
-  });
 
   const PHASE_LABEL_SHORT = {
     analyst: "Research...",
@@ -361,293 +355,292 @@ export default function App() {
   return (
     <div className="app-shell">
       <div className="app-header">
-        <div className="header-row">
-          <div style={{
-            position: "relative",
-            width: 28,
-            height: 28,
-            borderRadius: 2,
-            border: "1px solid var(--ck-line-strong)",
-            background: "var(--ck-surface-soft)",
-            display: "grid",
-            placeItems: "center",
-            flexShrink: 0,
-            fontWeight: 800,
-            color: "var(--ck-text)",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-          }}>
-            <span style={{ position: "absolute", top: 1, left: 3, fontSize: 8, color: "var(--ck-muted)" }}>{CHEMICAL_NUMBER}</span>
-            <span style={{ fontSize: 13, lineHeight: 1 }}>Re</span>
-          </div>
-          <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <details ref={exportMenuRef} style={{ position: "relative" }}>
-              <summary
-                onClick={(e) => {
-                  if (!visibleUseCases.length || toolbarExportLoading || importLoading) e.preventDefault();
-                }}
-                style={{
-                  background: "var(--ck-surface)",
-                  border: "1px solid var(--ck-line)",
-                  color: visibleUseCases.length ? "var(--ck-text)" : "var(--ck-muted-soft)",
-                  padding: "6px 10px",
-                  borderRadius: 2,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  opacity: visibleUseCases.length && !importLoading ? 1 : 0.5,
-                  cursor: visibleUseCases.length && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
-                  userSelect: "none",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}>
-                <span>{toolbarExportLoading ? "Exporting..." : "Export"}</span>
-                <ChevronIcon direction="down" size={12} />
-              </summary>
-              <div style={{
-                position: "absolute",
-                right: 0,
-                top: "calc(100% + 6px)",
-                background: "var(--ck-surface)",
-                border: "1px solid var(--ck-line)",
-                borderRadius: 2,
-                minWidth: 185,
-                padding: 6,
-                display: "grid",
-                gap: 4,
-                zIndex: 30,
-              }}>
-                {[
-                  { key: "html", label: "HTML Report", action: () => exportAnalysisHtml(visibleUseCases, dims) },
-                  { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf(visibleUseCases, dims) },
-                  {
-                    key: "portfolio-json",
-                    label: "Portfolio JSON",
-                    action: () => {
-                      if (!completedCount) {
-                        throw new Error("No completed researches available for portfolio JSON export.");
-                      }
-                      return exportPortfolioJson(visibleUseCases, dims);
-                    },
-                  },
-                  { key: "logs", label: "Logs JSON", action: () => downloadDebugLogsBundle() },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => { void runToolbarExport(item.key, item.action); }}
-                    disabled={!!toolbarExportLoading || importLoading}
-                    style={{
-                      background: "var(--ck-surface-soft)",
-                      border: "1px solid var(--ck-line)",
-                      color: "var(--ck-text)",
-                      textAlign: "left",
-                      borderRadius: 2,
-                      fontSize: 12,
-                      padding: "6px 8px",
-                      opacity: toolbarExportLoading && toolbarExportLoading !== item.key ? 0.55 : 1,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}>
-                    {toolbarExportLoading === item.key ? <Spinner size={10} /> : null}
-                    <span>{toolbarExportLoading === item.key ? `${item.label}...` : item.label}</span>
-                  </button>
-                ))}
-              </div>
-            </details>
-            <input
-              ref={importFileRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={onImportJsonChange}
-              style={{ display: "none" }}
-            />
-            <button
-              onClick={triggerImportJson}
-              disabled={importLoading}
-              style={{
-                background: "var(--ck-surface)",
-                border: "1px solid var(--ck-line)",
-                color: "var(--ck-text)",
-                padding: "6px 12px",
-                borderRadius: 2,
-                fontSize: 12,
-                fontWeight: 600,
-                opacity: importLoading ? 0.6 : 1,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-              {importLoading ? <><Spinner size={10} color="var(--ck-text)" /> Importing...</> : "Import JSON"}
-            </button>
-            <button
-              onClick={() => setShowDimsPanel(v => !v)}
-              style={{
-                background: showDimsPanel ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                border: "1px solid var(--ck-line)",
-                color: "var(--ck-text)",
-                padding: "6px 12px",
-                borderRadius: 2,
-                fontSize: 12,
-                fontWeight: 600,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-              <span>Dimensions</span>
-              <ChevronIcon direction={showDimsPanel ? "up" : "down"} size={12} />
-            </button>
-            <button
-              onClick={() => setShowInputPanel(v => !v)}
-              style={{ background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)", padding: "7px 14px", borderRadius: 2, fontSize: 13, fontWeight: 700 }}>
-              + Research
-            </button>
-          </div>
-        </div>
-
-        <div className="scroll-row">
-          <div className="scroll-row-inner">
-            {RESEARCH_CONFIGS.map((config) => {
-              const isActive = config.id === activeConfig.id;
-              return (
-                <button
-                  key={config.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveConfigId(config.id);
-                    setShowInputPanel(false);
-                    setExpandedId(null);
-                    exportMenuRef.current?.removeAttribute("open");
-                  }}
-                  style={{
-                    padding: "6px 11px",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    border: `1px solid ${isActive ? "var(--ck-accent)" : "var(--ck-line)"}`,
-                    background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                    color: isActive ? "var(--ck-text)" : "var(--ck-muted)",
-                    whiteSpace: "nowrap",
-                  }}>
-                  {config.tabLabel || config.name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="methodology-panel">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-              Methodology / Description
+        <div className="header-row" style={{ justifyContent: "space-between" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              position: "relative",
+              width: 28,
+              height: 28,
+              borderRadius: 2,
+              border: "1px solid var(--ck-line-strong)",
+              background: "var(--ck-surface-soft)",
+              display: "grid",
+              placeItems: "center",
+              flexShrink: 0,
+              fontWeight: 800,
+              color: "var(--ck-text)",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            }}>
+              <span style={{ position: "absolute", top: 1, left: 3, fontSize: 8, color: "var(--ck-muted)" }}>{CHEMICAL_NUMBER}</span>
+              <span style={{ fontSize: 13, lineHeight: 1 }}>Re</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowMethodologyFull((v) => !v)}
-              style={{ border: "none", background: "transparent", color: "var(--ck-muted)", padding: 0, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600 }}>
-              <ChevronIcon direction={showMethodologyFull ? "up" : "down"} size={11} />
-              {showMethodologyFull ? "less" : "more"}
-            </button>
+            <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
           </div>
-          <p
-            className="methodology-text"
-            style={!showMethodologyFull ? {
-              display: "-webkit-box",
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            } : undefined}>
-            {methodology || "No methodology description is available for this configuration yet."}
-          </p>
-        </div>
-
-        <div className="scroll-row">
-          <div className="scroll-row-inner">
-            {dimensionSnapshot.map((d) => (
-              <div key={d.id} className="dimension-strip-item">
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-                  {d.label}
-                </div>
-                <div style={{ marginTop: 2, display: "flex", gap: 6, alignItems: "center", fontSize: 11 }}>
-                  <span className="mono" style={{ color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
-                  <span style={{ color: "var(--ck-muted-soft)" }}>|</span>
-                  <span style={{ color: "var(--ck-muted)" }}>{d.avg ? `avg ${d.avg}/5` : "no scores yet"}</span>
-                </div>
+          <div style={{ minWidth: 0, flex: 1, marginLeft: 16 }}>
+            <div className="scroll-row">
+              <div className="scroll-row-inner" style={{ alignItems: "center" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
+                  Researches Available:
+                </span>
+                {RESEARCH_CONFIGS.map((config) => {
+                  const isActive = config.id === activeConfig.id;
+                  return (
+                    <button
+                      key={config.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveConfigId(config.id);
+                        setShowInputPanel(false);
+                        setExpandedId(null);
+                        exportMenuRef.current?.removeAttribute("open");
+                      }}
+                      style={{
+                        padding: "7px 14px",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        border: `1px solid ${isActive ? "var(--ck-accent)" : "var(--ck-line)"}`,
+                        background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                        color: isActive ? "var(--ck-text)" : "var(--ck-muted)",
+                        whiteSpace: "nowrap",
+                      }}>
+                      {config.tabLabel || config.name}
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-            {!dimensionSnapshot.length && (
-              <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>Enable at least one dimension in the Dimensions panel.</div>
-            )}
-          </div>
-        </div>
-
-        <div className="scroll-row">
-          <div className="scroll-row-inner">
-            {visibleUseCases.length ? visibleUseCases.map((uc) => {
-              const title = uc.attributes?.title || trimText(uc.rawInput, 44) || "Untitled research";
-              const score = calcWeightedScore(uc, dims);
-              const active = expandedId === uc.id;
-              return (
-                <button
-                  key={`tab-${uc.id}`}
-                  type="button"
-                  onClick={() => focusResearch(uc.id, { forceOpen: true })}
-                  style={{
-                    padding: "5px 8px",
-                    border: `1px solid ${active ? "var(--ck-accent)" : "var(--ck-line)"}`,
-                    background: active ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                    color: "var(--ck-text)",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    maxWidth: 260,
-                  }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
-                  <span style={{ color: "var(--ck-muted-soft)" }}>|</span>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{score != null ? `${score}%` : PHASE_LABEL_SHORT[uc.phase] || "-"}</span>
-                </button>
-              );
-            }) : (
-              <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>No researches in this configuration yet.</span>
-            )}
+            </div>
           </div>
         </div>
       </div>
 
-      {showDimsPanel && (
-        <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>
-            {activeConfig.tabLabel || activeConfig.name} - dimension definitions, rubrics, weights
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 10, marginBottom: 12 }}>
-            {dims.map(d => (
-              <div key={d.id} style={{
-                background: "var(--ck-surface-soft)", border: `1px solid ${d.enabled ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
-                borderRadius: 2, padding: "10px 14px", opacity: d.enabled ? 1 : 0.5,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                  <input
-                    type="checkbox" checked={d.enabled}
-                    onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
-                    style={{ accentColor: "var(--ck-accent)", width: 14, height: 14 }} />
-                  <span style={{ fontWeight: 600, fontSize: 12, color: d.enabled ? "var(--ck-text)" : "var(--ck-muted)" }}>{d.label}</span>
-                  <span className="mono" style={{ marginLeft: "auto", fontSize: 12, color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
-                </div>
-                <DimRubricToggle dim={d} />
-                <input
-                  type="range" min={1} max={40} step={1} value={d.weight}
-                  disabled={!d.enabled}
-                  onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
-                  style={{ width: "100%", accentColor: "var(--ck-accent)", marginTop: 4 }} />
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>
-            Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
-            <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
-          </div>
+      <div className="research-type-area">
+        <div className="header-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <h1 style={{ margin: 0, fontSize: "clamp(32px,4vw,44px)", lineHeight: 1.1, fontWeight: 700, color: "var(--ck-text)" }}>
+            {activeConfig.tabLabel || activeConfig.name}
+          </h1>
+          <button
+            type="button"
+            onClick={() => {
+              setShowDetailsPanel((v) => {
+                const next = !v;
+                if (!next) setShowDimsPanel(false);
+                return next;
+              });
+            }}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--ck-muted)",
+              fontWeight: 700,
+              fontSize: 12,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              padding: 0,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}>
+            <span>{showDetailsPanel ? "Hide details" : "Show details"}</span>
+            <ChevronIcon direction={showDetailsPanel ? "up" : "down"} size={12} />
+          </button>
         </div>
-      )}
+
+        {showDetailsPanel && (
+          <div className="methodology-panel" style={{ marginTop: 12, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 5 }}>
+              Methodology / Description
+            </div>
+            <p className="methodology-text" style={{ fontSize: 13, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+              {methodology || "No methodology description is available for this configuration yet."}
+            </p>
+
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                Dimensions
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDimsPanel((v) => !v)}
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: showDimsPanel ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  padding: "6px 10px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}>
+                <span>{showDimsPanel ? "Hide Configuration" : "Configure Dimensions"}</span>
+                <ChevronIcon direction={showDimsPanel ? "up" : "down"} size={12} />
+              </button>
+            </div>
+
+            <div className="dimension-descriptions-grid">
+              {activeDims.length ? activeDims.map((d) => (
+                <div key={`${d.id}-desc`} className="dimension-description-card">
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)" }}>{d.label}</span>
+                    <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{d.weight}%</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                    {d.brief}
+                  </div>
+                </div>
+              )) : (
+                <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>Enable dimensions in Configure Dimensions.</div>
+              )}
+            </div>
+
+            {showDimsPanel && (
+              <>
+                <div style={{ marginTop: 12, fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                  Dimension Rubrics & Weights
+                </div>
+                <div className="dimension-config-grid">
+                  {dims.map(d => (
+                    <div key={d.id} style={{
+                      background: "var(--ck-surface)",
+                      border: `1px solid ${d.enabled ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                      borderRadius: 2,
+                      padding: "10px 12px",
+                      opacity: d.enabled ? 1 : 0.55,
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                        <input
+                          type="checkbox" checked={d.enabled}
+                          onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, enabled: e.target.checked } : x)))}
+                          style={{ accentColor: "var(--ck-accent)", width: 14, height: 14 }} />
+                        <span style={{ fontWeight: 600, fontSize: 12, color: d.enabled ? "var(--ck-text)" : "var(--ck-muted)" }}>{d.label}</span>
+                        <span className="mono" style={{ marginLeft: "auto", fontSize: 12, color: "var(--ck-text)", fontWeight: 700 }}>{d.weight}%</span>
+                      </div>
+                      <DimRubricToggle dim={d} />
+                      <input
+                        type="range" min={1} max={40} step={1} value={d.weight}
+                        disabled={!d.enabled}
+                        onChange={e => setActiveDims((p) => p.map((x) => (x.id === d.id ? { ...x, weight: +e.target.value } : x)))}
+                        style={{ width: "100%", accentColor: "var(--ck-accent)", marginTop: 4 }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ck-muted)", marginTop: 10 }}>
+                  Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
+                  <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="header-row panel-actions" style={{ marginTop: 12 }}>
+          <button
+            onClick={() => setShowInputPanel(v => !v)}
+            style={{ background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)", padding: "8px 14px", borderRadius: 2, fontSize: 13, fontWeight: 700 }}>
+            + Research
+          </button>
+          <details ref={exportMenuRef} style={{ position: "relative" }}>
+            <summary
+              onClick={(e) => {
+                if (!visibleUseCases.length || toolbarExportLoading || importLoading) e.preventDefault();
+              }}
+              style={{
+                background: "var(--ck-surface)",
+                border: "1px solid var(--ck-line)",
+                color: visibleUseCases.length ? "var(--ck-text)" : "var(--ck-muted-soft)",
+                padding: "6px 10px",
+                borderRadius: 2,
+                fontSize: 12,
+                fontWeight: 600,
+                opacity: visibleUseCases.length && !importLoading ? 1 : 0.5,
+                cursor: visibleUseCases.length && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
+                userSelect: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}>
+              <span>{toolbarExportLoading ? "Exporting..." : "Export"}</span>
+              <ChevronIcon direction="down" size={12} />
+            </summary>
+            <div style={{
+              position: "absolute",
+              left: 0,
+              top: "calc(100% + 6px)",
+              background: "var(--ck-surface)",
+              border: "1px solid var(--ck-line)",
+              borderRadius: 2,
+              minWidth: 185,
+              padding: 6,
+              display: "grid",
+              gap: 4,
+              zIndex: 30,
+            }}>
+              {[
+                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml(visibleUseCases, dims) },
+                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf(visibleUseCases, dims) },
+                {
+                  key: "portfolio-json",
+                  label: "Portfolio JSON",
+                  action: () => {
+                    if (!completedCount) {
+                      throw new Error("No completed researches available for portfolio JSON export.");
+                    }
+                    return exportPortfolioJson(visibleUseCases, dims);
+                  },
+                },
+                { key: "logs", label: "Logs JSON", action: () => downloadDebugLogsBundle() },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => { void runToolbarExport(item.key, item.action); }}
+                  disabled={!!toolbarExportLoading || importLoading}
+                  style={{
+                    background: "var(--ck-surface-soft)",
+                    border: "1px solid var(--ck-line)",
+                    color: "var(--ck-text)",
+                    textAlign: "left",
+                    borderRadius: 2,
+                    fontSize: 12,
+                    padding: "6px 8px",
+                    opacity: toolbarExportLoading && toolbarExportLoading !== item.key ? 0.55 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}>
+                  {toolbarExportLoading === item.key ? <Spinner size={10} /> : null}
+                  <span>{toolbarExportLoading === item.key ? `${item.label}...` : item.label}</span>
+                </button>
+              ))}
+            </div>
+          </details>
+          <input
+            ref={importFileRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={onImportJsonChange}
+            style={{ display: "none" }}
+          />
+          <button
+            onClick={triggerImportJson}
+            disabled={importLoading}
+            style={{
+              background: "var(--ck-surface)",
+              border: "1px solid var(--ck-line)",
+              color: "var(--ck-text)",
+              padding: "6px 12px",
+              borderRadius: 2,
+              fontSize: 12,
+              fontWeight: 600,
+              opacity: importLoading ? 0.6 : 1,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}>
+            {importLoading ? <><Spinner size={10} color="var(--ck-text)" /> Importing...</> : "Import JSON"}
+          </button>
+        </div>
+      </div>
 
       {showInputPanel && (
         <div style={{ background: "var(--ck-surface)", borderBottom: "1px solid var(--ck-line)", padding: "16px 20px" }}>

@@ -128,8 +128,9 @@ a:hover {
   background: var(--ck-surface);
   border-bottom: 1px solid var(--ck-line);
   padding: 11px 20px;
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   position: sticky;
   top: 0;
   z-index: 20;
@@ -176,6 +177,37 @@ a:hover {
   border-radius: 2px;
   padding: 5px 8px;
   min-width: 140px;
+}
+
+.research-type-area {
+  padding: 16px 20px 0;
+  display: grid;
+  gap: 0;
+}
+
+.dimension-descriptions-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.dimension-description-card {
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  border-radius: 2px;
+  padding: 8px 10px;
+}
+
+.dimension-config-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 8px;
+}
+
+.panel-actions {
+  gap: 8px;
 }
 
 .research-list {
@@ -240,6 +272,9 @@ a:hover {
 @media (max-width: 900px) {
   .app-header {
     padding: 10px 12px;
+  }
+  .research-type-area {
+    padding: 12px 12px 0;
   }
   .header-row {
     gap: 6px;
