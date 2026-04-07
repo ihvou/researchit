@@ -1,10 +1,10 @@
+import { getDimensionView } from "@researchit/engine";
 import ScorePill from "./ScorePill";
 import SourcesList from "./SourcesList";
 import FollowUpThread from "./FollowUpThread";
 import ConfidenceBadge from "./ConfidenceBadge";
 import ArgumentList from "./ArgumentList";
 import ResearchBriefBlock from "./ResearchBriefBlock";
-import { getDimensionView } from "../lib/dimensionView";
 import { getLatestAcceptedFollowUpAdjustment } from "../lib/scoring";
 
 export default function DebateTab({

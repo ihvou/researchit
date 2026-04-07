@@ -47,12 +47,12 @@ researchit/
 runAnalysis(input, config, callbacks)
 // input:     { description, id, origin? }
 // config:    ResearchConfig object
-// callbacks: { transport, onProgress, onDebugEvent? }
+// callbacks: { transport, onProgress, onDebugSession? }
 
 handleFollowUp(input, config, callbacks)
 // input:     { ucId, dimId, challenge, ucState, options? }
 // config:    ResearchConfig object
-// callbacks: { transport, onProgress, onDebugEvent? }
+// callbacks: { transport, onProgress }
 ```
 
 ### app/ — Product Shell
@@ -62,8 +62,8 @@ handleFollowUp(input, config, callbacks)
 **Constraints:**
 - Imports engine only via `@researchit/engine` (resolved as `file:../engine`).
 - All LLM calls go through the engine's transport abstraction — app provides the `callFn` implementation.
-- Serverless API routes (`app/api/*`) are thin wrappers around engine's `callOpenAI`.
-- UI components are pure — zero API calls, all data via props.
+- `analyst.js` / `critic.js` are thin wrappers around engine's `callOpenAI`; `providerConfig.js` and `fetch-source.js` handle host-only concerns.
+- UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
 
 **Internal structure:**
 | Directory | Contents |
@@ -97,7 +97,7 @@ Transport (dependency-injected callFn)
   ↓
 App's callFn → fetch("/api/analyst" | "/api/critic" | "/api/fetch-source")
   ↓
-Serverless route → engine's callOpenAI() → OpenAI API
+Serverless route (`analyst` / `critic`) → engine's callOpenAI() → OpenAI API
   ↓
 Results flow back through callbacks.onProgress → React state → UI
 ```
@@ -203,5 +203,5 @@ These invariants must hold across all future changes:
 2. **Engine never calls `fetch()`, DOM APIs, or React APIs.** All external I/O goes through injected transport.
 3. **Engine never references specific dimension IDs.** All dimension-specific behavior reads from the config object's dimension fields.
 4. **Prompts in `engine/prompts/defaults.js` contain no product-specific language.** Products customize via `ResearchConfig.prompts`.
-5. **UI components are pure.** Zero API calls — all data flows through props.
-6. **Serverless routes are thin wrappers.** Business logic lives in engine, not in API handlers.
+5. **UI components never call APIs directly.** Data fetching/orchestration stays in hooks and app lib adapters.
+6. **LLM routes stay thin.** Business logic lives in engine; non-LLM API handlers are limited to host concerns (provider/env resolution and source fetch sanitization).

@@ -20,6 +20,8 @@ Baseline: ~18 API calls per analysis run.
 
 ## Engine Extraction — Remaining Gaps
 
+Status update (2026-04-08): EE-01, EE-02, and EE-03 are implemented; table retained for historical traceability.
+
 Residual items from the engine extraction plan (Steps 1–11 complete).
 
 | ID | Type | Problem | Solution | Impact | Extra calls | Cost +% | Priority |

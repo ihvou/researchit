@@ -43,42 +43,19 @@ function inferMissingEvidence({ explicitGap, confidenceReason, risks, sourceCoun
   return `Evidence is still thin for ${cleanText(dimLabel) || "this dimension"} in ${market}. ${sourceHint}`;
 }
 
-function whereToLookByDimension(dim, dimId, vertical, aiType) {
+function whereToLookByDimension(dim, _dimId, vertical, aiType) {
   const v = cleanText(vertical) || "target vertical";
   const ai = cleanText(aiType) || "the solution type";
   const generic = [
     `Independent analyst reports and benchmark studies focused on ${v}.`,
     `Named deployment case studies from operators in ${v}, not only vendor blogs.`,
-    "Internal delivery post-mortems, client references, or implementation retrospectives.",
+    `Implementation retrospectives for ${ai} programs with measurable outcomes.`,
   ];
 
   const configured = normalizeList(dim?.researchHints?.whereToLook, 6);
   if (configured.length) return configured.slice(0, 3);
 
-  const map = {
-    roi: [
-      "Public filings / annual reports with quantified cost or revenue impact.",
-      "Independent benchmark reports comparing baseline vs post-deployment economics.",
-      ...generic.slice(2),
-    ],
-    evidence: [
-      "Peer-reviewed or audited deployments with measurable production outcomes.",
-      "Industry publications citing named implementations, metrics, and timeline.",
-      ...generic.slice(2),
-    ],
-    build_vs_buy: [
-      `Current product pages, pricing docs, and release notes for incumbent ${ai} vendors.`,
-      `Third-party competitive analyses for ${v} solutions and implementation scope.`,
-      ...generic.slice(2),
-    ],
-    change_mgmt: [
-      "Transformation case studies describing adoption blockers and rollout metrics.",
-      "Operations playbooks from teams that moved from pilot to scaled production.",
-      ...generic.slice(2),
-    ],
-  };
-
-  return normalizeList(map[dimId] || generic, 3);
+  return normalizeList(generic, 3);
 }
 
 function renderTemplate(template, vars) {

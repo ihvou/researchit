@@ -1,9 +1,9 @@
+import { getDimensionView } from "@researchit/engine";
 import ScorePill from "./ScorePill";
 import TotalPill from "./TotalPill";
 import ConfidenceBadge from "./ConfidenceBadge";
 import ResearchBriefBlock from "./ResearchBriefBlock";
 import { calcWeightedScore } from "../lib/scoring";
-import { getDimensionView } from "../lib/dimensionView";
 
 function fallbackProblem(uc) {
   return uc.attributes?.problemStatement

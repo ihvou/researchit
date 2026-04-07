@@ -394,12 +394,24 @@ const DEFAULT_RESEARCH_HINTS = {
     whereToLook: [
       "Public filings / annual reports with quantified cost or revenue impact.",
       "Independent benchmark reports comparing baseline vs post-deployment economics.",
-      "Internal delivery post-mortems and implementation retrospectives.",
+      "Implementation retrospectives with before/after operational and financial metrics.",
     ],
     queryTemplates: [
       "${title} ${vertical} deployment ROI metrics",
       "${vertical} AI audited outcomes financial impact",
-      "${missingEvidence} ${vertical} source",
+      "${title} ${vertical} baseline vs post implementation cost impact",
+    ],
+  },
+  ai_fit: {
+    whereToLook: [
+      "Technical evaluations comparing AI approaches vs non-AI alternatives for the same workflow.",
+      "Case studies showing measurable quality/throughput lift from AI deployment.",
+      "Failure analyses where rules engines or manual workflows outperformed AI.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} AI vs rules baseline comparison",
+      "${vertical} ${aiType} deployment accuracy throughput improvement",
+      "${missingEvidence} ${vertical} AI applicability evidence",
     ],
   },
   evidence: {
@@ -414,6 +426,54 @@ const DEFAULT_RESEARCH_HINTS = {
       "${missingEvidence} ${vertical} independent source",
     ],
   },
+  ttv: {
+    whereToLook: [
+      "Implementation case studies with explicit project start-to-value timelines.",
+      "Postmortems documenting integration effort and timeline blockers.",
+      "Customer stories with first measurable KPI improvement dates.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} time to value deployment timeline",
+      "${vertical} AI implementation duration first ROI metrics",
+      "${missingEvidence} ${vertical} rollout timeline source",
+    ],
+  },
+  data_readiness: {
+    whereToLook: [
+      "Architecture writeups showing required data sources, schema, and data quality constraints.",
+      "Case studies describing data preparation effort for similar deployments.",
+      "Compliance guidance on data access constraints in the target vertical.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} required data sources quality constraints",
+      "${vertical} AI data readiness integration effort case study",
+      "${missingEvidence} ${vertical} data availability evidence",
+    ],
+  },
+  feasibility: {
+    whereToLook: [
+      "Engineering implementation notes detailing stack, integrations, and failure modes.",
+      "Talent and delivery benchmark reports for similar AI system builds.",
+      "Reliability and operations postmortems for comparable production deployments.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} implementation complexity integration requirements",
+      "${vertical} ${aiType} production deployment challenges postmortem",
+      "${missingEvidence} ${vertical} technical feasibility evidence",
+    ],
+  },
+  market_size: {
+    whereToLook: [
+      "Market sizing reports with segment-level buyer counts and spend intensity.",
+      "Industry filings or analyst notes estimating reachable buyer populations.",
+      "Procurement and budget trend reports in the target segment.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} reachable buyer count spending benchmarks",
+      "${vertical} AI budget adoption segment size analysis",
+      "${missingEvidence} ${vertical} addressable market source",
+    ],
+  },
   build_vs_buy: {
     whereToLook: [
       "Incumbent product pages, release notes, and implementation docs.",
@@ -423,7 +483,43 @@ const DEFAULT_RESEARCH_HINTS = {
     queryTemplates: [
       "${title} ${vertical} build vs buy implementation complexity",
       "${vertical} ${aiType} vendor comparison enterprise implementation",
-      "${missingEvidence} ${vertical} market source",
+      "${title} ${vertical} SaaS coverage gaps customization evidence",
+    ],
+  },
+  regulatory: {
+    whereToLook: [
+      "Primary regulatory guidance and enforcement updates relevant to the deployment context.",
+      "Compliance implementation playbooks and audit requirements from sector bodies.",
+      "Case studies describing timeline/cost impacts from compliance obligations.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} AI compliance requirements deployment risk",
+      "${vertical} regulatory approval timeline AI system implementation",
+      "${missingEvidence} ${vertical} compliance burden source",
+    ],
+  },
+  change_mgmt: {
+    whereToLook: [
+      "Transformation case studies describing adoption blockers and rollout metrics.",
+      "Practitioner reports on workforce/process change for similar AI deployments.",
+      "Post-deployment usage and retention metrics tied to organizational adoption.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} AI adoption change management outcomes",
+      "${vertical} workflow redesign resistance AI rollout case study",
+      "${missingEvidence} ${vertical} adoption friction evidence",
+    ],
+  },
+  reusability: {
+    whereToLook: [
+      "Multi-client platform case studies showing reusable architecture components.",
+      "Implementation notes on connector/evaluation reuse across customers.",
+      "Evidence of repeatability across segments with similar integration patterns.",
+    ],
+    queryTemplates: [
+      "${title} ${vertical} reusable architecture multi client deployment",
+      "${vertical} AI solution productization repeatable implementation pattern",
+      "${missingEvidence} ${vertical} reuse potential evidence",
     ],
   },
 };

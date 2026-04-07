@@ -1,4 +1,5 @@
-import { confidenceTone, confidenceTitle, normalizeConfidenceLevel } from "../lib/confidence";
+import { normalizeConfidenceLevel } from "@researchit/engine";
+import { confidenceTone, confidenceTitle } from "../lib/confidenceUI";
 
 export default function ConfidenceBadge({ level, reason, compact = false }) {
   const normalized = normalizeConfidenceLevel(level);

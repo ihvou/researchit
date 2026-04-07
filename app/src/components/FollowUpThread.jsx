@@ -1,8 +1,8 @@
 import { useState } from "react";
+import { intentDisplayLabel, pmIntentLabel } from "@researchit/engine";
 import Spinner from "./Spinner";
 import SourcesList from "./SourcesList";
 import ChevronIcon from "./ChevronIcon";
-import { intentDisplayLabel, pmIntentLabel } from "../lib/followUpIntent";
 
 function proposalTone(status) {
   if (status === "accepted") {

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { getDimensionView } from "@researchit/engine";
 import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../configs/research-configurations.js";
 import { calcWeightedScore } from "./lib/scoring";
-import { getDimensionView } from "./lib/dimensionView";
 import { runAnalysis } from "./hooks/useAnalysis";
 import { handleFollowUp } from "./hooks/useFollowUp";
 import {

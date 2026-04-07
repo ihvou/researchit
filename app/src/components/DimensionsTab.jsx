@@ -1,10 +1,10 @@
+import { getDimensionView } from "@researchit/engine";
 import ScorePill from "./ScorePill";
 import DimRubricToggle from "./DimRubricToggle";
 import EvidenceBlock from "./EvidenceBlock";
 import ConfidenceBadge from "./ConfidenceBadge";
 import ArgumentList from "./ArgumentList";
 import ResearchBriefBlock from "./ResearchBriefBlock";
-import { getDimensionView } from "../lib/dimensionView";
 
 export default function DimensionsTab({ uc, dims }) {
   return (

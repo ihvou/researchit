@@ -1,5 +1,5 @@
 import { calcWeightedScore, dimScoreColor, totalScoreColor } from "./scoring";
-import { getDimensionView, formatSourcesForCell } from "./dimensionView";
+import { getDimensionView, formatSourcesForCell } from "@researchit/engine";
 import {
   buildSingleUseCaseJsonPayload as buildSingleUseCaseJsonPayloadCore,
   buildPortfolioJsonPayload as buildPortfolioJsonPayloadCore,
