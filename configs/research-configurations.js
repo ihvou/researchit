@@ -76,6 +76,31 @@ const INPUT_SPEC_BY_CONFIG = {
     placeholder: "E.g. Expand core SMB invoicing product into AP automation for upper-mid-market finance teams.",
     description: "Describe the current core and proposed expansion (feature, segment, or geography).",
   },
+  "market-sizing-tam-sam-som": {
+    label: "New Research - describe the market and sizing hypothesis",
+    placeholder: "E.g. Market sizing for AI copilot for US mid-market insurance claims operations.",
+    description: "Describe the target problem/offer and initial market boundaries for TAM/SAM/SOM evaluation.",
+  },
+  "channel-gtm-analysis-scorecard": {
+    label: "New Research - describe your GTM strategy hypothesis",
+    placeholder: "E.g. Sales-led motion to enterprise IT directors via partner ecosystem in DACH.",
+    description: "Describe the proposed GTM strategy you want to pressure-test end-to-end.",
+  },
+  "icp-customer-persona-matrix": {
+    label: "New Research - define the ICP/persona question",
+    placeholder: "E.g. Compare which initial customer segment is the strongest wedge for an AI legal assistant.",
+    description: "Describe what decision this persona comparison should inform.",
+  },
+  "competitors-comparison-matrix": {
+    label: "New Research - define the competitive comparison question",
+    placeholder: "E.g. Compare top competitors for AI contract lifecycle management in enterprise legal.",
+    description: "Describe what competitive decision this comparison should support.",
+  },
+  "channel-gtm-analysis-matrix": {
+    label: "New Research - define the channel comparison question",
+    placeholder: "E.g. Compare SEO, outbound, and community-led motions for early traction.",
+    description: "Describe what channel prioritization decision this matrix should support.",
+  },
 };
 
 const DEFAULT_FRAMING_FIELDS = [
@@ -120,6 +145,99 @@ function normalizeFramingFields(framingFields = []) {
       .filter((field) => field.id)
     : [];
   return normalized.length ? normalized : DEFAULT_FRAMING_FIELDS;
+}
+
+function normalizeOutputMode(value) {
+  return String(value || "").trim().toLowerCase() === "matrix" ? "matrix" : "scorecard";
+}
+
+function normalizeMatrixLayout(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "subjects-as-rows" || raw === "subjects-as-columns") return raw;
+  return "auto";
+}
+
+function sanitizeId(value, fallbackId) {
+  const raw = String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  return raw || fallbackId;
+}
+
+function normalizeSubjectsSpec(subjects = null) {
+  if (!subjects || typeof subjects !== "object") return null;
+  const minCount = Math.max(2, Number(subjects.minCount) || 2);
+  const maxCount = Math.max(minCount, Number(subjects.maxCount) || Math.max(4, minCount));
+  const examples = Array.isArray(subjects.examples)
+    ? subjects.examples.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 8)
+    : [];
+  return {
+    label: String(subjects.label || "Subjects").trim() || "Subjects",
+    inputPrompt: String(subjects.inputPrompt || "List the subjects to compare").trim() || "List the subjects to compare",
+    examples,
+    minCount,
+    maxCount,
+  };
+}
+
+function normalizeAttributeList(attributes = []) {
+  if (!Array.isArray(attributes)) return [];
+  return attributes
+    .map((attr, idx) => {
+      const fallbackId = `attribute_${idx + 1}`;
+      return {
+        id: sanitizeId(attr?.id || attr?.label, fallbackId),
+        label: String(attr?.label || fallbackId).trim() || fallbackId,
+        brief: String(attr?.brief || attr?.description || "").trim(),
+        derived: !!attr?.derived,
+      };
+    })
+    .filter((attr) => attr.id && attr.label);
+}
+
+function normalizeDimensionsList(dimensions = []) {
+  if (!Array.isArray(dimensions)) return [];
+  return dimensions.map((dim, idx) => ({
+    id: sanitizeId(dim?.id || dim?.label, `dimension_${idx + 1}`),
+    label: String(dim?.label || `Dimension ${idx + 1}`).trim(),
+    weight: Number(dim?.weight) || 1,
+    enabled: dim?.enabled !== false,
+    brief: String(dim?.brief || "").trim(),
+    fullDef: String(dim?.fullDef || "").trim(),
+  }));
+}
+
+function normalizeResearchConfigSpec(spec) {
+  const outputMode = normalizeOutputMode(spec?.outputMode);
+  const dimensions = normalizeDimensionsList(spec?.dimensions || []);
+  const attributesFromSpec = normalizeAttributeList(spec?.attributes || []);
+  const attributes = attributesFromSpec.length
+    ? attributesFromSpec
+    : (outputMode === "matrix"
+      ? normalizeAttributeList(dimensions.map((dim) => ({
+        id: dim.id,
+        label: dim.label,
+        brief: dim.brief,
+      })))
+      : []);
+  const subjects = outputMode === "matrix" ? normalizeSubjectsSpec(spec?.subjects) : null;
+  const matrixLayout = outputMode === "matrix" ? normalizeMatrixLayout(spec?.matrixLayout) : null;
+
+  if (outputMode === "scorecard" && !dimensions.length) {
+    throw new Error(`Research config "${spec?.id || spec?.name || "unknown"}" requires at least one dimension in scorecard mode.`);
+  }
+  if (outputMode === "matrix" && !attributes.length) {
+    throw new Error(`Research config "${spec?.id || spec?.name || "unknown"}" requires at least one attribute in matrix mode.`);
+  }
+  if (outputMode === "matrix" && !subjects) {
+    throw new Error(`Research config "${spec?.id || spec?.name || "unknown"}" requires a subjects spec in matrix mode.`);
+  }
+
+  return {
+    outputMode,
+    dimensions,
+    attributes,
+    subjects,
+    matrixLayout,
+  };
 }
 
 const CONFIG_SPECS = [
@@ -472,17 +590,210 @@ const CONFIG_SPECS = [
       }
     ],
     "tabLabel": "Product Expansion"
+  },
+  {
+    "id": "market-sizing-tam-sam-som",
+    "name": "Market Sizing (TAM/SAM/SOM)",
+    "tabLabel": "Market Sizing",
+    "outputMode": "scorecard",
+    "methodology": "This type of research is anchored in bottom-up market sizing and triangulation practices used by Sequoia and a16z, with explicit pressure-testing of segment definition and reachability assumptions before trusting topline TAM claims.",
+    "relatedDiscovery": true,
+    "dimensions": [
+      {
+        "id": "demand-evidence-quality",
+        "label": "Demand Evidence Quality",
+        "weight": 22,
+        "enabled": true,
+        "brief": "How well demand is evidenced via behavioral signals rather than stated intent.",
+        "fullDef": "Higher score means demand is supported by observable behavior such as spending, workarounds, search intent, hiring signals, and repeated buyer pull."
+      },
+      {
+        "id": "market-definition-clarity",
+        "label": "Market Definition Clarity",
+        "weight": 18,
+        "enabled": true,
+        "brief": "How precisely segment boundaries are defined (role, company type, geo, trigger).",
+        "fullDef": "Higher score means tightly scoped market definition with explicit boundaries; lower score means broad labels that hide real constraints."
+      },
+      {
+        "id": "size-estimation-methodology",
+        "label": "Size Estimation Methodology",
+        "weight": 18,
+        "enabled": true,
+        "brief": "Whether sizing is built bottom-up with clear assumptions vs top-down headline extrapolation.",
+        "fullDef": "Higher score means explicit bottom-up logic and triangulation; lower score means weak methodology and unsupported assumptions."
+      },
+      {
+        "id": "growth-trajectory",
+        "label": "Growth Trajectory",
+        "weight": 12,
+        "enabled": true,
+        "brief": "Whether demand trajectory is expanding, stable, or contracting with credible evidence.",
+        "fullDef": "Higher score means durable growth tailwinds and credible trend evidence; lower score means stagnation or decline risk."
+      },
+      {
+        "id": "reachability",
+        "label": "Reachability",
+        "weight": 18,
+        "enabled": true,
+        "brief": "Whether this market can be reached realistically with current GTM, budget, and channel access.",
+        "fullDef": "Higher score means the target segment is reachable with plausible acquisition motion; lower score means market may be large but inaccessible."
+      },
+      {
+        "id": "competitive-density",
+        "label": "Competitive Density",
+        "weight": 12,
+        "enabled": true,
+        "brief": "How crowded the space is with credible alternatives competing for the same budget.",
+        "fullDef": "Higher score means competitive pressure is manageable relative to differentiation and entry position; lower score means heavy crowding and weak share-capture odds."
+      }
+    ]
+  },
+  {
+    "id": "icp-customer-persona-matrix",
+    "name": "ICP / Customer Persona",
+    "tabLabel": "ICP / Persona",
+    "outputMode": "matrix",
+    "matrixLayout": "subjects-as-columns",
+    "methodology": "This type of research applies Jobs-to-be-Done and modern product discovery practice to compare customer segments based on behavioral evidence, triggers, and willingness to pay.",
+    "relatedDiscovery": true,
+    "subjects": {
+      "label": "Customer Segments",
+      "inputPrompt": "Describe 2-4 distinct customer segments or personas you want to profile",
+      "examples": ["Early-stage SaaS founders", "Enterprise IT Directors", "Bootstrapped agency owners"],
+      "minCount": 2,
+      "maxCount": 4
+    },
+    "attributes": [
+      { "id": "company-context", "label": "Company / Context", "brief": "Company type, size, stage, industry, and operating model." },
+      { "id": "buyer-role", "label": "Buyer Role", "brief": "Decision-maker role and daily end-user role(s)." },
+      { "id": "core-pain", "label": "Core Pain", "brief": "Specific behavioral problem this segment experiences." },
+      { "id": "current-workarounds", "label": "Current Workarounds", "brief": "What they do today instead of buying your product." },
+      { "id": "decision-trigger", "label": "Decision Trigger", "brief": "What event/threshold moves them to active buying." },
+      { "id": "willingness-to-pay", "label": "Willingness to Pay", "brief": "Evidence-based pricing range, model preference, and procurement friction." },
+      { "id": "acquisition-channels", "label": "Acquisition Channels", "brief": "Where this persona is most reachable with high intent." },
+      { "id": "editorial-priority", "label": "Editorial Priority", "brief": "Directional wedge recommendation and rationale.", "derived": true }
+    ]
+  },
+  {
+    "id": "competitors-comparison-matrix",
+    "name": "Competitors Comparison",
+    "tabLabel": "Competitors Comparison",
+    "outputMode": "matrix",
+    "matrixLayout": "auto",
+    "methodology": "This type of research compares competitors by actual customer choice structure and advantage quality, avoiding feature-checklist analysis.",
+    "relatedDiscovery": false,
+    "subjects": {
+      "label": "Competitors",
+      "inputPrompt": "List the competitors to analyze - direct and indirect",
+      "examples": ["Notion", "Coda", "Confluence", "Linear"],
+      "minCount": 2,
+      "maxCount": 8
+    },
+    "attributes": [
+      { "id": "target-icp", "label": "Target ICP", "brief": "Who they actually sell to by segment and buyer role." },
+      { "id": "core-positioning", "label": "Core Positioning", "brief": "Primary value claim and job-to-be-done focus." },
+      { "id": "pricing-model", "label": "Pricing Model", "brief": "Pricing structure, tiers, and approximate price points." },
+      { "id": "key-strengths", "label": "Key Strengths", "brief": "Durable advantages: distribution, switching costs, ecosystem, data." },
+      { "id": "key-weaknesses", "label": "Key Weaknesses", "brief": "Structural gaps, common complaints, and failure modes." },
+      { "id": "pmf-signal", "label": "PMF Signal", "brief": "Evidence of adoption quality beyond funding headlines." },
+      { "id": "gaps-opportunities", "label": "Gaps / Opportunities", "brief": "Underserved needs or segments with evidence." },
+      { "id": "moat-assessment", "label": "Moat Assessment", "brief": "How defensible current position is under attack.", "derived": true }
+    ]
+  },
+  {
+    "id": "channel-gtm-analysis-scorecard",
+    "name": "Channel / GTM Analysis (Scorecard)",
+    "tabLabel": "GTM Strategy",
+    "outputMode": "scorecard",
+    "methodology": "This type of research pressure-tests overall GTM strategy quality across ICP-channel fit, unit economics, and time-to-signal constraints.",
+    "relatedDiscovery": true,
+    "dimensions": [
+      {
+        "id": "icp-channel-fit",
+        "label": "ICP-Channel Fit",
+        "weight": 22,
+        "enabled": true,
+        "brief": "Whether target ICP actually inhabits and responds to the proposed channels.",
+        "fullDef": "Higher score means channel reach assumptions are grounded in behavioral evidence for the exact ICP."
+      },
+      {
+        "id": "distribution-advantage",
+        "label": "Distribution Advantage",
+        "weight": 20,
+        "enabled": true,
+        "brief": "Whether founder/company has structural head-start in the chosen channel mix.",
+        "fullDef": "Higher score means tangible founder/company leverage (audience, trust, relationships, authority)."
+      },
+      {
+        "id": "cac-sustainability",
+        "label": "CAC Sustainability",
+        "weight": 18,
+        "enabled": true,
+        "brief": "Whether expected CAC is compatible with likely unit economics.",
+        "fullDef": "Higher score means acquisition economics remain viable under realistic conversion assumptions."
+      },
+      {
+        "id": "channel-product-fit",
+        "label": "Channel-Product Fit",
+        "weight": 15,
+        "enabled": true,
+        "brief": "Whether product complexity, price, and buying process match channel constraints.",
+        "fullDef": "Higher score means the proposed channel supports the actual product and sales motion."
+      },
+      {
+        "id": "competitive-channel-density",
+        "label": "Competitive Channel Density",
+        "weight": 13,
+        "enabled": true,
+        "brief": "How crowded proposed channels are with capable competitors for the same ICP.",
+        "fullDef": "Higher score means crowding is manageable relative to expected differentiation and costs."
+      },
+      {
+        "id": "time-to-first-signal",
+        "label": "Time to First Signal",
+        "weight": 12,
+        "enabled": true,
+        "brief": "How quickly the proposed approach can produce actionable learning signals.",
+        "fullDef": "Higher score means strategy generates meaningful signal in weeks rather than quarters."
+      }
+    ]
+  },
+  {
+    "id": "channel-gtm-analysis-matrix",
+    "name": "Channel / GTM Analysis (Matrix)",
+    "tabLabel": "GTM Channels",
+    "outputMode": "matrix",
+    "matrixLayout": "subjects-as-rows",
+    "methodology": "This type of research compares channel options directly to prioritize where to invest first based on evidence density, economics, and founder advantage.",
+    "relatedDiscovery": true,
+    "subjects": {
+      "label": "Channels",
+      "inputPrompt": "List the acquisition channels or GTM motions to compare",
+      "examples": ["Product Hunt launch", "SEO / content", "LinkedIn outbound", "Community-led", "Paid social"],
+      "minCount": 2,
+      "maxCount": 8
+    },
+    "attributes": [
+      { "id": "icp-reach", "label": "ICP Reach", "brief": "Whether channel contains the target ICP in meaningful density." },
+      { "id": "estimated-cac", "label": "Estimated CAC", "brief": "Evidence-based CAC range with assumptions and caveats." },
+      { "id": "competitive-density", "label": "Competitive Density", "brief": "Intensity of competitor activity in this channel for the same ICP." },
+      { "id": "founder-advantage", "label": "Founder Advantage", "brief": "Structural team advantage in this channel." },
+      { "id": "time-to-first-signal", "label": "Time to First Signal", "brief": "How quickly this channel yields actionable data." },
+      { "id": "channel-product-fit", "label": "Channel-Product Fit", "brief": "Fit between product complexity/price and channel mechanics." },
+      { "id": "verdict", "label": "Verdict", "brief": "Prioritize / test small / deprioritize recommendation.", "derived": true }
+    ]
   }
 ];
 
 export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
+  ...normalizeResearchConfigSpec(spec),
   id: spec.id,
   name: spec.name,
   tabLabel: spec.tabLabel || spec.name,
   engineVersion: "1.0.0",
   inputSpec: normalizeInputSpec(spec.inputSpec || INPUT_SPEC_BY_CONFIG[spec.id] || {}),
   framingFields: normalizeFramingFields(spec.framingFields || DEFAULT_FRAMING_FIELDS),
-  dimensions: spec.dimensions,
   relatedDiscovery: spec.relatedDiscovery !== false,
   methodology: spec.methodology || "",
   prompts: BASE_PROMPTS,

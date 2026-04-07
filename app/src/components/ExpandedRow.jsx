@@ -4,6 +4,7 @@ import DimensionsTab from "./DimensionsTab";
 import DebateTab from "./DebateTab";
 import DiscoverTab from "./DiscoverTab";
 import ProgressTab from "./ProgressTab";
+import MatrixTab from "./MatrixTab";
 
 const PHASE_LABELS = {
   analyst: "Analyst researching...",
@@ -14,6 +15,11 @@ const PHASE_LABELS = {
   critic: "Critic reviewing...",
   finalizing: "Analyst responding...",
   discover: "Discovering related research...",
+  matrix_plan: "Planning matrix...",
+  matrix_evidence: "Collecting matrix evidence...",
+  matrix_critic: "Critic auditing matrix...",
+  matrix_summary: "Finalizing matrix...",
+  matrix_discover: "Discovering missing subjects/attributes...",
 };
 
 export default function ExpandedRow({
@@ -27,28 +33,38 @@ export default function ExpandedRow({
   onResolveFollowUpProposal,
   onAnalyzeRelated,
   globalAnalyzing = false,
+  outputMode = "scorecard",
 }) {
-  const [tab, setTab] = useState("dimensions");
+  const isMatrixMode = outputMode === "matrix";
+  const defaultTab = isMatrixMode ? "matrix" : "dimensions";
+  const [tab, setTab] = useState(defaultTab);
 
   useEffect(() => {
-    setTab("dimensions");
-  }, [uc.id]);
+    setTab(defaultTab);
+  }, [uc.id, defaultTab]);
 
   useEffect(() => {
     if (uc.status === "complete") {
-      setTab("dimensions");
+      setTab(defaultTab);
     }
-  }, [uc.status]);
+  }, [uc.status, defaultTab]);
+
+  const tabs = isMatrixMode
+    ? [
+      { id: "matrix", label: "Matrix" },
+      { id: "progress", label: "Progress" },
+    ]
+    : [
+      { id: "dimensions", label: "Dimensions" },
+      { id: "debate", label: "Debate & Challenges" },
+      { id: "discover", label: "Discover" },
+      { id: "progress", label: "Progress" },
+    ];
 
   return (
     <div style={{ borderTop: "2px solid var(--ck-line-strong)", maxWidth: "100%", overflowX: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", padding: "0 16px", flexWrap: "wrap", rowGap: 4 }}>
-        {[
-          { id: "dimensions", label: "Dimensions" },
-          { id: "debate", label: "Debate & Challenges" },
-          { id: "discover", label: "Discover" },
-          { id: "progress", label: "Progress" },
-        ].map(t => (
+        {tabs.map(t => (
           <button
             key={t.id}
             onClick={e => { e.stopPropagation(); setTab(t.id); }}
@@ -73,15 +89,22 @@ export default function ExpandedRow({
       {uc.status !== "analyzing" && (
         <div style={{ padding: "7px 16px", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", minWidth: 0 }}>
           <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
-            Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence
-            {uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
+            {isMatrixMode
+              ? "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence"
+              : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence"}
+            {!isMatrixMode && uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Low-confidence cycle: {uc.analysisMeta.lowConfidenceInitialCount} scanned, {uc.analysisMeta.lowConfidenceUpgradedCount || 0} upgraded, {uc.analysisMeta.lowConfidenceValidatedLowCount || 0} validated low
               </span>
             )}
-            {uc.analysisMeta?.discoverCandidatesCount != null && uc.status === "complete" && (
+            {!isMatrixMode && uc.analysisMeta?.discoverCandidatesCount != null && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Discover: {uc.analysisMeta.discoverCandidatesCount} candidates
+              </span>
+            )}
+            {isMatrixMode && uc.matrix?.coverage?.totalCells != null && uc.status === "complete" && (
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
+                | Cells: {uc.matrix.coverage.totalCells} | Low confidence: {uc.matrix.coverage.lowConfidenceCells || 0} | Critic flags: {uc.matrix.coverage.contestedCells || 0}
               </span>
             )}
           </div>
@@ -94,8 +117,9 @@ export default function ExpandedRow({
             Warning: {uc.errorMsg}
           </div>
         )}
+        {tab === "matrix" && <MatrixTab uc={uc} />}
         {tab === "dimensions" && <DimensionsTab uc={uc} dims={dims} />}
-        {tab === "debate" && (
+        {tab === "debate" && !isMatrixMode && (
           <DebateTab
             uc={uc} dims={dims}
             fuInputs={fuInputs} onFuInputChange={onFuInputChange}
@@ -104,7 +128,7 @@ export default function ExpandedRow({
             onResolveFollowUpProposal={onResolveFollowUpProposal}
           />
         )}
-        {tab === "discover" && (
+        {tab === "discover" && !isMatrixMode && (
           <DiscoverTab
             uc={uc}
             dims={dims}
@@ -112,7 +136,7 @@ export default function ExpandedRow({
             globalAnalyzing={globalAnalyzing}
           />
         )}
-        {tab === "progress" && <ProgressTab uc={uc} />}
+        {tab === "progress" && <ProgressTab uc={uc} outputMode={outputMode} />}
       </div>
     </div>
   );

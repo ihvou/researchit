@@ -124,6 +124,7 @@ Default system prompts live in:
   id: "startup-product-idea-validation",
   name: "Startup / Product Idea Validation",
   tabLabel: "Startup Validation", // UI label for tabbed config selection
+  outputMode: "scorecard", // "scorecard" | "matrix"
   methodology: "Methodological foundation and positioning notes shown in UI",
   engineVersion: "1.0.0",
 
@@ -151,6 +152,7 @@ Default system prompts live in:
     }
   ],
 
+  // scorecard mode
   dimensions: [
     {
       id: "problem-severity",
@@ -159,6 +161,24 @@ Default system prompts live in:
       enabled: true,
       brief: "...",
       fullDef: "..."
+    }
+  ],
+
+  // matrix mode
+  matrixLayout: "auto", // "subjects-as-rows" | "subjects-as-columns" | "auto" (UI default hint)
+  subjects: {
+    label: "Competitors",
+    inputPrompt: "List the competitors to analyze",
+    examples: ["Notion", "Coda", "Confluence"],
+    minCount: 2,
+    maxCount: 8
+  },
+  attributes: [
+    {
+      id: "pricing-model",
+      label: "Pricing Model",
+      brief: "Pricing structure and tiering",
+      derived: false // optional
     }
   ],
 
@@ -202,7 +222,7 @@ Default system prompts live in:
 }
 ```
 
-`attributes` now also includes an `inputFrame` block used by UI:
+In scorecard mode, analysis `attributes` also include an `inputFrame` block used by UI:
 
 ```js
 {

@@ -55,6 +55,51 @@ const HYBRID_FLOW = [
   },
 ];
 
+const MATRIX_FLOW = [
+  {
+    key: "submitted",
+    phase: "submitted",
+    title: "Research submitted",
+    detail: "The matrix request is queued and execution started.",
+  },
+  {
+    key: "matrix_plan",
+    phase: "matrix_plan",
+    title: "Matrix planning",
+    detail: "Validates subject list and builds subject × attribute coverage plan.",
+  },
+  {
+    key: "matrix_evidence",
+    phase: "matrix_evidence",
+    title: "Analyst matrix evidence pass",
+    detail: "Builds evidence-backed findings for each matrix cell with confidence tags.",
+  },
+  {
+    key: "matrix_critic",
+    phase: "matrix_critic",
+    title: "Critic matrix audit",
+    detail: "Flags weak or contradictory cells and adjusts confidence where needed.",
+  },
+  {
+    key: "matrix_summary",
+    phase: "matrix_summary",
+    title: "Editorial summaries",
+    detail: "Generates per-subject summaries and cross-matrix observations.",
+  },
+  {
+    key: "matrix_discover",
+    phase: "matrix_discover",
+    title: "Missing coverage discovery",
+    detail: "Suggests missed subjects and attributes for completeness.",
+  },
+  {
+    key: "complete",
+    phase: "complete",
+    title: "Final matrix ready",
+    detail: "All matrix cells and confidence flags are ready.",
+  },
+];
+
 function phaseRankMap(flow) {
   const map = {};
   flow.forEach((step, idx) => {
@@ -95,8 +140,8 @@ function stateBackground(state) {
   return "var(--ck-surface-soft)";
 }
 
-export default function ProgressTab({ uc }) {
-  const flow = HYBRID_FLOW;
+export default function ProgressTab({ uc, outputMode = "scorecard" }) {
+  const flow = outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW;
   const rank = phaseRankMap(flow);
   const currentIdx = rank[uc.phase] ?? 0;
 
@@ -106,7 +151,9 @@ export default function ProgressTab({ uc }) {
         Research Progress
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
-        Live view of the pipeline under the hood: baseline evidence pass, web evidence pass, reconcile, targeted low-confidence re-check, critic audit, and final score update.
+        {outputMode === "matrix"
+          ? "Live view of the matrix pipeline: planning, evidence harvest, critic audit, and cross-matrix synthesis."
+          : "Live view of the pipeline under the hood: baseline evidence pass, web evidence pass, reconcile, targeted low-confidence re-check, critic audit, and final score update."}
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -148,21 +195,23 @@ export default function ProgressTab({ uc }) {
         })}
       </div>
 
-      <div style={{
-        marginTop: 12,
-        padding: "10px 12px",
-        borderRadius: 2,
-        border: "1px solid var(--ck-line)",
-        background: "var(--ck-surface-soft)",
-      }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
-          Challenge Loop
+      {outputMode !== "matrix" && (
+        <div style={{
+          marginTop: 12,
+          padding: "10px 12px",
+          borderRadius: 2,
+          border: "1px solid var(--ck-line)",
+          background: "var(--ck-surface-soft)",
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+            Challenge Loop
+          </div>
+          <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+            In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
+            The Analyst LLM responds in-thread and may propose score updates; you explicitly accept or dismiss each proposal.
+          </div>
         </div>
-        <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-          In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
-          The Analyst LLM responds in-thread and may propose score updates; you explicitly accept or dismiss each proposal.
-        </div>
-      </div>
+      )}
 
       {uc.status === "error" && (
         <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 2, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", color: "var(--ck-text)", fontSize: 12 }}>

@@ -8,13 +8,24 @@ function isPlainObject(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
-function dimensionConfigSnapshot(dims = []) {
-  return (dims || []).map((d) => ({
-    id: d.id,
-    label: d.label,
-    weight: d.weight,
-    enabled: !!d.enabled,
-  }));
+function normalizeMode(value) {
+  return String(value || "").trim().toLowerCase() === "matrix" ? "matrix" : "scorecard";
+}
+
+function getUseCaseMode(uc) {
+  return normalizeMode(uc?.outputMode || (uc?.matrix ? "matrix" : "scorecard"));
+}
+
+function dimensionConfigSnapshot(items = []) {
+  return (items || []).map((item) => {
+    const weight = Number(item?.weight);
+    return {
+      id: item?.id,
+      label: item?.label,
+      weight: Number.isFinite(weight) ? weight : null,
+      enabled: item?.enabled !== false,
+    };
+  });
 }
 
 function isCompletedUseCase(uc) {
@@ -26,6 +37,16 @@ function validateUseCaseShape(uc) {
   if (typeof uc.id !== "string" || !uc.id.trim()) throw new Error("Use case is missing a valid id.");
   if (typeof uc.rawInput !== "string") throw new Error(`Use case ${uc.id} is missing rawInput.`);
   if (uc.status !== "complete") throw new Error(`Use case ${uc.id} is not completed.`);
+
+  const mode = getUseCaseMode(uc);
+  if (mode === "matrix") {
+    if (!isPlainObject(uc.matrix)) throw new Error(`Use case ${uc.id} is missing matrix results.`);
+    if (!Array.isArray(uc.matrix.subjects)) throw new Error(`Use case ${uc.id} has invalid matrix subjects.`);
+    if (!Array.isArray(uc.matrix.attributes)) throw new Error(`Use case ${uc.id} has invalid matrix attributes.`);
+    if (!Array.isArray(uc.matrix.cells)) throw new Error(`Use case ${uc.id} has invalid matrix cells.`);
+    return;
+  }
+
   if (!isPlainObject(uc.dimScores)) throw new Error(`Use case ${uc.id} is missing dimScores.`);
   if (!isPlainObject(uc.finalScores)) throw new Error(`Use case ${uc.id} is missing finalScores.`);
   if (!Array.isArray(uc.debate)) throw new Error(`Use case ${uc.id} has invalid debate history.`);
@@ -34,15 +55,28 @@ function validateUseCaseShape(uc) {
   }
 }
 
-function compareDimensionConfigs(importedConfig = [], currentDims = []) {
-  const current = dimensionConfigSnapshot(currentDims);
+function compareConfigMode(envelopeMode, currentMode) {
+  const a = normalizeMode(envelopeMode);
+  const b = normalizeMode(currentMode);
+  return a === b;
+}
+
+function sameFiniteNumber(a, b) {
+  const an = Number(a);
+  const bn = Number(b);
+  if (!Number.isFinite(an) && !Number.isFinite(bn)) return true;
+  return an === bn;
+}
+
+function compareDimensionConfigs(importedConfig = [], currentItems = [], outputMode = "scorecard") {
+  const current = dimensionConfigSnapshot(currentItems);
   if (!Array.isArray(importedConfig) || importedConfig.length !== current.length) return false;
   for (let i = 0; i < importedConfig.length; i += 1) {
     const a = importedConfig[i];
     const b = current[i];
     if (!a || !b) return false;
     if (a.id !== b.id) return false;
-    if (Number(a.weight) !== Number(b.weight)) return false;
+    if (normalizeMode(outputMode) === "scorecard" && !sameFiniteNumber(a.weight, b.weight)) return false;
     if (!!a.enabled !== !!b.enabled) return false;
   }
   return true;
@@ -96,6 +130,7 @@ export function buildSingleUseCaseJsonPayload(uc, dims, options = {}) {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     appVersion: options.appVersion || "",
     exportedAt: new Date().toISOString(),
+    outputMode: getUseCaseMode(uc),
     dimensionConfig: dimensionConfigSnapshot(dims),
     useCase: deepClone(uc),
   };
@@ -109,12 +144,13 @@ export function buildPortfolioJsonPayload(useCases, dims, options = {}) {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     appVersion: options.appVersion || "",
     exportedAt: new Date().toISOString(),
+    outputMode: normalizeMode(options.outputMode || ""),
     dimensionConfig: dimensionConfigSnapshot(dims),
     useCases: deepClone(completed),
   };
 }
 
-export function importUseCasesFromJsonText(text, currentDims, existingIds = [], options = {}) {
+export function importUseCasesFromJsonText(text, currentItems, existingIds = [], options = {}) {
   const envelope = parseEnvelope(text, options.appVersion || "");
   const importedUseCases = extractImportedUseCases(envelope);
 
@@ -126,10 +162,17 @@ export function importUseCasesFromJsonText(text, currentDims, existingIds = [], 
     seen.add(uc.id);
   }
 
-  const configCompatible = compareDimensionConfigs(envelope.dimensionConfig || [], currentDims);
-  const warning = configCompatible
-    ? ""
-    : "Imported scores were calculated with different dimension weights - weighted totals have been recalculated using your current settings.";
+  const currentMode = normalizeMode(options.outputMode || importedUseCases?.[0]?.outputMode || "");
+  const modeCompatible = compareConfigMode(envelope.outputMode || importedUseCases?.[0]?.outputMode || "", currentMode);
+  const configCompatible = modeCompatible && compareDimensionConfigs(envelope.dimensionConfig || [], currentItems, currentMode);
+  let warning = "";
+  if (!modeCompatible) {
+    warning = "Imported file was produced with a different research mode. Verify compatibility before comparing results.";
+  } else if (!configCompatible) {
+    warning = currentMode === "matrix"
+      ? "Imported matrix used different attribute configuration. Compare findings cautiously."
+      : "Imported scores were calculated with different dimension weights - weighted totals have been recalculated using your current settings.";
+  }
 
   return {
     useCases: importedUseCases,

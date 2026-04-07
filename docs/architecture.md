@@ -134,18 +134,25 @@ Classifies user intent into one of 6 types, then executes intent-specific logic:
   id,                    // unique string
   name,                  // human-readable name
   tabLabel,              // UI tab label
+  outputMode,            // "scorecard" | "matrix"
   methodology,           // methodology notes shown in UI
   engineVersion,         // semver
 
   inputSpec: { label, placeholder, description },
   framingFields: [{ id, label, description }],
 
+  // scorecard mode
   dimensions: [{
     id, label, weight, enabled,
     brief, fullDef,
     polarityHint,                          // read by engine rubric
     researchHints: { whereToLook, queryTemplates }  // read by engine brief
   }],
+
+  // matrix mode
+  matrixLayout,         // "subjects-as-rows" | "subjects-as-columns" | "auto" (UI default hint)
+  subjects: { label, inputPrompt, examples, minCount, maxCount },
+  attributes: [{ id, label, brief, derived? }],
 
   relatedDiscovery,      // boolean — enables phase 8
 

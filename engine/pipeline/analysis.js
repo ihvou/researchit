@@ -2,6 +2,7 @@ import { safeParseJSON, buildDimRubrics } from "../lib/json.js";
 import { buildRubricCalibrationBlock } from "../lib/rubric.js";
 import { normalizeConfidenceLevel } from "../lib/confidence.js";
 import { ensureDimensionArgumentShape } from "../lib/arguments.js";
+import { runMatrixAnalysis } from "./matrix.js";
 import {
   createAnalysisDebugSession,
   appendAnalysisDebugEvent,
@@ -3115,6 +3116,7 @@ function createInitialUseCaseState(input) {
     errorMsg: null,
     discover: null,
     origin,
+    outputMode: "scorecard",
     analysisMeta: {
       analysisMode: "hybrid",
       liveSearchRequested: true,
@@ -3148,6 +3150,11 @@ export async function runAnalysis(input, config, callbacks = {}) {
   const transport = callbacks?.transport;
   if (!transport?.callAnalyst || !transport?.callCritic) {
     throw new Error("runAnalysis requires callbacks.transport with callAnalyst and callCritic.");
+  }
+
+  const outputMode = String(config?.outputMode || "scorecard").trim().toLowerCase();
+  if (outputMode === "matrix") {
+    return runMatrixAnalysis(input, config, callbacks);
   }
 
   const dims = Array.isArray(config?.dimensions) ? config.dimensions : [];

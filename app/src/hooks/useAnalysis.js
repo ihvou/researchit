@@ -33,6 +33,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
       origin: options?.origin || null,
       options: {
         downloadDebugLog: !!options?.downloadDebugLog,
+        matrixSubjects: Array.isArray(options?.matrixSubjects) ? options.matrixSubjects : [],
       },
     },
     config,

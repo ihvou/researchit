@@ -1356,9 +1356,10 @@ function extractImportedUseCases(envelope) {
   return deepClone(envelope.useCases);
 }
 
-export function importUseCasesFromJsonText(text, currentDims, existingIds = []) {
-  return importUseCasesFromJsonTextCore(text, currentDims, existingIds, {
+export function importUseCasesFromJsonText(text, currentConfigItems, existingIds = [], outputMode = "scorecard") {
+  return importUseCasesFromJsonTextCore(text, currentConfigItems, existingIds, {
     appVersion: APP_VERSION,
+    outputMode,
   });
 }
 
@@ -1370,7 +1371,8 @@ export function exportSingleUseCaseJson(uc, dims) {
 }
 
 export function exportPortfolioJson(useCases, dims) {
-  const payload = buildPortfolioJsonPayload(useCases, dims);
+  const outputMode = String(useCases?.[0]?.outputMode || (useCases?.[0]?.matrix ? "matrix" : "scorecard"));
+  const payload = buildPortfolioJsonPayload(useCases, dims, { outputMode });
   const count = payload.useCases.length;
   downloadJson(`uc-portfolio-${dateTag()}-${count}-cases.json`, payload);
   return payload;

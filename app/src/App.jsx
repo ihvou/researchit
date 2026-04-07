@@ -27,9 +27,16 @@ function cloneDims(dims = []) {
 }
 
 function buildRuntimeConfig(baseConfig, dims) {
+  const outputMode = String(baseConfig?.outputMode || "scorecard").trim().toLowerCase();
+  const scorecardDims = outputMode === "scorecard" ? cloneDims(dims) : [];
+  const matrixAttributes = outputMode === "matrix" ? cloneDims(baseConfig?.attributes || []) : [];
   return {
     ...baseConfig,
-    dimensions: cloneDims(dims),
+    outputMode,
+    dimensions: scorecardDims,
+    attributes: matrixAttributes,
+    matrixLayout: outputMode === "matrix" ? (baseConfig?.matrixLayout || "auto") : null,
+    subjects: outputMode === "matrix" ? (baseConfig?.subjects || null) : null,
     prompts: { ...(baseConfig?.prompts || {}) },
     models: { ...(baseConfig?.models || {}) },
     limits: {
@@ -38,6 +45,39 @@ function buildRuntimeConfig(baseConfig, dims) {
         ...(baseConfig?.limits?.tokenLimits || {}),
       },
     },
+  };
+}
+
+function parseSubjectsInput(text) {
+  const values = String(text || "")
+    .split(/[,\n]/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  values.forEach((value) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(value);
+  });
+  return unique;
+}
+
+function getMatrixCoverage(uc) {
+  const coverage = uc?.matrix?.coverage;
+  if (coverage && Number.isFinite(Number(coverage.totalCells))) {
+    return {
+      totalCells: Number(coverage.totalCells),
+      lowConfidenceCells: Number(coverage.lowConfidenceCells) || 0,
+      contestedCells: Number(coverage.contestedCells) || 0,
+    };
+  }
+  const cells = Array.isArray(uc?.matrix?.cells) ? uc.matrix.cells : [];
+  return {
+    totalCells: cells.length,
+    lowConfidenceCells: cells.filter((cell) => String(cell?.confidence || "").toLowerCase() === "low").length,
+    contestedCells: cells.filter((cell) => !!cell?.contested).length,
   };
 }
 
@@ -75,6 +115,7 @@ export default function App() {
     )
   ));
   const [inputText, setInputText] = useState("");
+  const [subjectsText, setSubjectsText] = useState("");
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
@@ -101,9 +142,22 @@ export default function App() {
 
   const activeConfig = RESEARCH_CONFIGS.find((config) => config.id === activeConfigId)
     || DEFAULT_RESEARCH_CONFIG;
+  const outputMode = String(activeConfig?.outputMode || "scorecard").trim().toLowerCase();
+  const isMatrixMode = outputMode === "matrix";
   const dims = dimsByConfig[activeConfig.id] || cloneDims(activeConfig.dimensions);
+  const matrixAttributes = cloneDims(activeConfig?.attributes || []);
+
+  useEffect(() => {
+    const examples = activeConfig?.subjects?.examples || [];
+    setSubjectsText((prev) => {
+      if (String(prev || "").trim()) return prev;
+      if (!isMatrixMode || !examples.length) return "";
+      return examples.join("\n");
+    });
+  }, [activeConfig?.id, activeConfig?.subjects, isMatrixMode]);
 
   function setActiveDims(updater) {
+    if (isMatrixMode) return;
     setDimsByConfig((prev) => {
       const current = cloneDims(prev[activeConfig.id] || activeConfig.dimensions);
       const next = typeof updater === "function" ? updater(current) : updater;
@@ -122,24 +176,40 @@ export default function App() {
     setFuInputs(prev => ({ ...prev, [key]: val }));
   }
 
-  async function runNewAnalysis(descInput, origin = null, configOverride = null) {
+  async function runNewAnalysis(descInput, origin = null, configOverride = null, matrixSubjects = []) {
     const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
 
     const selectedConfig = configOverride || activeConfig;
-    const selectedDims = dimsByConfig[selectedConfig.id] || selectedConfig.dimensions;
+    const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
+    const selectedDims = selectedMode === "scorecard"
+      ? (dimsByConfig[selectedConfig.id] || selectedConfig.dimensions)
+      : [];
     const runtimeConfig = buildRuntimeConfig(selectedConfig, selectedDims);
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const initialPhase = "analyst_baseline";
+    const initialPhase = selectedMode === "matrix" ? "matrix_plan" : "analyst_baseline";
     const blankUC = {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
       attributes: null, dimScores: null, critique: null, finalScores: null,
       debate: [], followUps: {}, errorMsg: null, discover: null, origin,
       researchConfigId: selectedConfig.id,
       researchConfigName: selectedConfig.name,
+      outputMode: selectedMode,
+      matrix: selectedMode === "matrix"
+        ? {
+          layout: selectedConfig?.matrixLayout || "auto",
+          subjects: matrixSubjects.map((label, idx) => ({ id: `subject-${idx + 1}`, label })),
+          attributes: cloneDims(selectedConfig?.attributes || []),
+          cells: [],
+          subjectSummaries: [],
+          crossMatrixSummary: "",
+          coverage: { totalCells: 0, lowConfidenceCells: 0, contestedCells: 0 },
+          discovery: null,
+        }
+        : null,
       analysisMeta: {
-        analysisMode: INTERNAL_ANALYSIS_MODE,
+        analysisMode: selectedMode === "matrix" ? "matrix" : INTERNAL_ANALYSIS_MODE,
         liveSearchRequested: true,
         liveSearchUsed: false,
         webSearchCalls: 0,
@@ -169,6 +239,7 @@ export default function App() {
     setUseCases(prev => [...prev, blankUC]);
     setShowInputPanel(false);
     setInputText("");
+    if (selectedMode === "matrix") setSubjectsText("");
     setExpandedId(id);
     setGlobalAnalyzing(true);
 
@@ -177,6 +248,7 @@ export default function App() {
         analysisMode: INTERNAL_ANALYSIS_MODE,
         origin,
         config: runtimeConfig,
+        matrixSubjects,
       });
     } catch (err) {
       console.error("Analysis error:", err);
@@ -186,8 +258,21 @@ export default function App() {
   }
 
   async function startAnalysis() {
+    setImportError("");
     const desc = inputText.trim();
     if (!desc || globalAnalyzing) return;
+    if (isMatrixMode) {
+      const parsedSubjects = parseSubjectsInput(subjectsText);
+      const minCount = Math.max(2, Number(activeConfig?.subjects?.minCount) || 2);
+      const maxCount = Math.max(minCount, Number(activeConfig?.subjects?.maxCount) || 8);
+      if (parsedSubjects.length < minCount) {
+        setImportError(`Please provide at least ${minCount} subjects.`);
+        return;
+      }
+      const boundedSubjects = parsedSubjects.slice(0, maxCount);
+      await runNewAnalysis(desc, null, null, boundedSubjects);
+      return;
+    }
     await runNewAnalysis(desc, null);
   }
 
@@ -347,7 +432,7 @@ export default function App() {
     setImportWarning("");
     try {
       const text = await file.text();
-      const parsed = importUseCasesFromJsonText(text, dims, useCases.map((u) => u.id));
+      const parsed = importUseCasesFromJsonText(text, configItems, useCases.map((u) => u.id), outputMode);
       if (!parsed.useCases.length) {
         throw new Error("No completed researches were found in this file.");
       }
@@ -371,8 +456,9 @@ export default function App() {
     const configId = u?.researchConfigId || DEFAULT_RESEARCH_CONFIG.id;
     return configId === activeConfig.id;
   });
-  const activeDims = dims.filter(d => d.enabled);
-  const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
+  const configItems = isMatrixMode ? matrixAttributes : dims;
+  const activeDims = isMatrixMode ? [] : dims.filter(d => d.enabled);
+  const totalWeight = isMatrixMode ? 0 : dims.reduce((s, d) => s + d.weight, 0);
   const methodology = activeConfig?.methodology || "";
   const activeInputSpec = activeConfig?.inputSpec || {};
   const inputPanelLabel = String(activeInputSpec?.label || "New Research - describe what should be researched").trim();
@@ -381,6 +467,14 @@ export default function App() {
     || "Describe what you want to research. Broad or detailed inputs are both acceptable."
   ).trim();
   const inputPanelDescription = String(activeInputSpec?.description || "").trim();
+  const subjectsSpec = activeConfig?.subjects || null;
+  const subjectsLabel = String(subjectsSpec?.label || "Subjects").trim();
+  const subjectsPrompt = String(subjectsSpec?.inputPrompt || "List subjects to compare").trim();
+  const subjectsExamples = Array.isArray(subjectsSpec?.examples) ? subjectsSpec.examples : [];
+  const matrixSubjectMin = Math.max(2, Number(subjectsSpec?.minCount) || 2);
+  const matrixSubjectMax = Math.max(matrixSubjectMin, Number(subjectsSpec?.maxCount) || 8);
+  const parsedSubjects = isMatrixMode ? parseSubjectsInput(subjectsText) : [];
+  const hasValidSubjectCount = !isMatrixMode || parsedSubjects.length >= matrixSubjectMin;
   const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
   const desktopTabConfigs = (() => {
     const initial = RESEARCH_CONFIGS.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
@@ -400,6 +494,11 @@ export default function App() {
     critic: "Critic review...",
     finalizing: "Debate...",
     discover: "Discover...",
+    matrix_plan: "Planning...",
+    matrix_evidence: "Matrix evidence...",
+    matrix_critic: "Critic audit...",
+    matrix_summary: "Summarizing...",
+    matrix_discover: "Coverage discover...",
   };
 
   return (
@@ -609,47 +708,58 @@ export default function App() {
             <p className="methodology-text" style={{ fontSize: 13, color: "var(--ck-muted)", lineHeight: 1.5 }}>
               {methodology || "No methodology description is available for this configuration yet."}
             </p>
+            {isMatrixMode && subjectsSpec ? (
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+                <strong style={{ color: "var(--ck-text)" }}>{subjectsLabel} input:</strong> {subjectsPrompt}
+                <span style={{ marginLeft: 8 }}>
+                  ({matrixSubjectMin}-{matrixSubjectMax} items)
+                </span>
+              </div>
+            ) : null}
 
             <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                Dimensions
+                {isMatrixMode ? "Attributes" : "Dimensions"}
               </div>
-              <button
-                type="button"
-                onClick={() => setShowDimsPanel((v) => !v)}
-                style={{
-                  border: "1px solid var(--ck-line)",
-                  background: showDimsPanel ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                  color: "var(--ck-text)",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  padding: "6px 10px",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}>
-                <span>{showDimsPanel ? "Hide Configuration" : "Configure Dimensions"}</span>
-                <ChevronIcon direction={showDimsPanel ? "up" : "down"} size={12} />
-              </button>
+              {!isMatrixMode ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDimsPanel((v) => !v)}
+                  style={{
+                    border: "1px solid var(--ck-line)",
+                    background: showDimsPanel ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                    color: "var(--ck-text)",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    padding: "6px 10px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}>
+                  <span>{showDimsPanel ? "Hide Configuration" : "Configure Dimensions"}</span>
+                  <ChevronIcon direction={showDimsPanel ? "up" : "down"} size={12} />
+                </button>
+              ) : null}
             </div>
 
             <div className="dimension-descriptions-scroll">
               <div
                 className="dimension-descriptions-row"
-                style={{ "--dimension-count": Math.max(dims.length, 1) }}>
-                {dims.length ? dims.map((d) => (
+                style={{ "--dimension-count": Math.max(configItems.length, 1) }}>
+                {configItems.length ? configItems.map((d) => (
                   <div
                     key={`${d.id}-desc`}
                     className="dimension-description-card"
-                    style={{ opacity: d.enabled ? 1 : 0.6 }}>
+                    style={{ opacity: isMatrixMode ? 1 : (d.enabled ? 1 : 0.6) }}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
                       <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)" }}>{d.label}</span>
-                      {showDimsPanel && <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{d.weight}%</span>}
+                      {!isMatrixMode && showDimsPanel && <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>{d.weight}%</span>}
+                      {isMatrixMode && d.derived ? <span className="mono" style={{ fontSize: 11, color: "var(--ck-muted)" }}>derived</span> : null}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.45 }}>
                       {d.brief}
                     </div>
-                    {showDimsPanel && (
+                    {!isMatrixMode && showDimsPanel && (
                       <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <input
@@ -676,12 +786,16 @@ export default function App() {
                     )}
                   </div>
                 )) : (
-                  <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>No dimensions configured for this research type.</div>
+                  <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
+                    {isMatrixMode
+                      ? "No attributes configured for this research type."
+                      : "No dimensions configured for this research type."}
+                  </div>
                 )}
               </div>
             </div>
 
-            {showDimsPanel && (
+            {!isMatrixMode && showDimsPanel && (
               <div style={{ fontSize: 11, color: "var(--ck-muted)", marginTop: 10 }}>
                 Total weight: <span style={{ color: "var(--ck-text)", fontWeight: 700 }}>{totalWeight}%</span>
                 <span style={{ marginLeft: 8 }}>- scores auto-normalize, only relative weights matter</span>
@@ -746,19 +860,58 @@ export default function App() {
               resize: "vertical", lineHeight: 1.5, outline: "none",
             }}
           />
+          {isMatrixMode ? (
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                {subjectsLabel}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
+                {subjectsPrompt}
+              </div>
+              <textarea
+                value={subjectsText}
+                onChange={(e) => setSubjectsText(e.target.value)}
+                placeholder={subjectsExamples.length ? subjectsExamples.join("\n") : "One subject per line or comma-separated"}
+                onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startAnalysis(); }}
+                style={{
+                  width: "100%",
+                  minHeight: 90,
+                  background: "var(--ck-surface-soft)",
+                  border: "1px solid var(--ck-line-strong)",
+                  borderRadius: 2,
+                  color: "var(--ck-text)",
+                  padding: "10px 14px",
+                  fontSize: 13,
+                  resize: "vertical",
+                  lineHeight: 1.5,
+                  outline: "none",
+                }}
+              />
+              <div style={{ fontSize: 11, color: parsedSubjects.length > matrixSubjectMax ? "var(--ck-text)" : "var(--ck-muted)" }}>
+                Parsed {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | required: {matrixSubjectMin}-{matrixSubjectMax}
+              </div>
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
             <button
               onClick={startAnalysis}
-              disabled={!inputText.trim() || globalAnalyzing}
+              disabled={!inputText.trim() || globalAnalyzing || !hasValidSubjectCount}
               style={{
                 background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)",
                 padding: "8px 20px", borderRadius: 2, fontWeight: 700, fontSize: 13,
-                opacity: !inputText.trim() || globalAnalyzing ? 0.5 : 1,
+                opacity: !inputText.trim() || globalAnalyzing || !hasValidSubjectCount ? 0.5 : 1,
                 display: "inline-flex", alignItems: "center", gap: 6,
               }}>
               {globalAnalyzing ? <><Spinner size={11} color="var(--ck-accent-ink)" /> Analyzing...</> : "Analyze"}
             </button>
-            <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>Cmd/Ctrl+Enter to submit</span>
+            <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>
+              Cmd/Ctrl+Enter to submit
+            </span>
+            {isMatrixMode && !hasValidSubjectCount ? (
+              <span style={{ fontSize: 11, color: "var(--ck-text)" }}>
+                Add at least {matrixSubjectMin} subjects.
+              </span>
+            ) : null}
             <button
               onClick={() => setShowInputPanel(false)}
               style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--ck-line-strong)", color: "var(--ck-muted)", padding: "7px 14px", borderRadius: 2, fontSize: 12 }}>
@@ -825,11 +978,15 @@ export default function App() {
             ) : null}
             <div className="research-list">
             {visibleUseCases.map((uc) => {
-              const score = calcWeightedScore(uc, dims);
-              const isExpanded = expandAllResearches || expandedId === uc.id;
-              const title = uc.attributes?.title || trimText(uc.rawInput, 80) || "Untitled research";
               const ucConfig = RESEARCH_CONFIGS.find((config) => config.id === (uc?.researchConfigId || activeConfig.id))
                 || activeConfig;
+              const ucMode = String(uc?.outputMode || ucConfig?.outputMode || "scorecard").trim().toLowerCase();
+              const ucIsMatrix = ucMode === "matrix";
+              const ucDims = ucIsMatrix ? [] : cloneDims(dimsByConfig[ucConfig.id] || ucConfig?.dimensions || []);
+              const score = ucIsMatrix ? null : calcWeightedScore(uc, ucDims);
+              const matrixCoverage = ucIsMatrix ? getMatrixCoverage(uc) : null;
+              const isExpanded = expandAllResearches || expandedId === uc.id;
+              const title = uc.attributes?.title || trimText(uc.rawInput, 80) || "Untitled research";
               const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
               const inputFrame = uc.attributes?.inputFrame || {};
               const providedInput = String(inputFrame?.providedInput || uc.rawInput || "");
@@ -849,16 +1006,24 @@ export default function App() {
               const canCollapseFrame = frameCombinedLength > 620;
               const isFrameExpanded = !!expandedInputFrames[uc.id];
               const canExportResearch = uc.status === "complete";
-              const researchExportItems = [
-                { key: "html", label: "Export HTML", action: () => openSingleUseCaseHtml(uc, dims) },
-                { key: "pdf", label: "Export PDF", action: () => exportSingleUseCasePdf(uc, dims) },
-                { key: "images", label: "Export Images ZIP", action: () => exportSingleUseCaseImagesZip(uc, dims) },
-                {
-                  key: "json",
-                  label: "Export JSON",
-                  action: () => exportSingleUseCaseJson(uc, dims),
-                },
-              ];
+              const researchExportItems = ucIsMatrix
+                ? [
+                  {
+                    key: "json",
+                    label: "Export JSON",
+                    action: () => exportSingleUseCaseJson(uc, ucConfig?.attributes || []),
+                  },
+                ]
+                : [
+                  { key: "html", label: "Export HTML", action: () => openSingleUseCaseHtml(uc, ucDims) },
+                  { key: "pdf", label: "Export PDF", action: () => exportSingleUseCasePdf(uc, ucDims) },
+                  { key: "images", label: "Export Images ZIP", action: () => exportSingleUseCaseImagesZip(uc, ucDims) },
+                  {
+                    key: "json",
+                    label: "Export JSON",
+                    action: () => exportSingleUseCaseJson(uc, ucDims),
+                  },
+                ];
 
               return (
                 <article
@@ -901,11 +1066,13 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ textAlign: "right", display: "grid", gap: 3 }}>
-                      {score
+                      {!ucIsMatrix && score
                         ? <TotalPill score={score} />
                         : uc.status === "analyzing"
                           ? <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "..."}</span>
-                          : <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-</span>}
+                          : ucIsMatrix
+                            ? <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>{matrixCoverage?.totalCells || 0} cells</span>
+                            : <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-</span>}
                     </div>
                     <div className="desktop-only research-head-export-buttons">
                       {researchExportItems.map((item) => {
@@ -1089,53 +1256,90 @@ export default function App() {
                       ) : null}
                     </div>
 
-                    <div className="research-dimensions-scroll">
-                      <div className="research-dimensions-row" style={{ "--score-dimension-count": Math.max(activeDims.length, 1) }}>
-                        {activeDims.map((d) => {
-                          const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
-                          const sc = view.effectiveScore;
-                          const initScore = view.initial?.score;
-                          const finScore = view.debate?.finalScore;
-                          const revised = finScore != null && initScore != null && finScore !== initScore;
-                          return (
-                            <div key={`${uc.id}-${d.id}`} className="research-dimension-cell">
-                              <div className="dim-label-wrap" style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                                <span className="dim-label-full">{d.label}</span>
-                                <span className="dim-label-acronym">{dimensionAcronym(d.label)}</span>
+                    {!ucIsMatrix ? (
+                      <div className="research-dimensions-scroll">
+                        <div className="research-dimensions-row" style={{ "--score-dimension-count": Math.max(activeDims.length, 1) }}>
+                          {activeDims.map((d) => {
+                            const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
+                            const sc = view.effectiveScore;
+                            const initScore = view.initial?.score;
+                            const finScore = view.debate?.finalScore;
+                            const revised = finScore != null && initScore != null && finScore !== initScore;
+                            return (
+                              <div key={`${uc.id}-${d.id}`} className="research-dimension-cell">
+                                <div className="dim-label-wrap" style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                                  <span className="dim-label-full">{d.label}</span>
+                                  <span className="dim-label-acronym">{dimensionAcronym(d.label)}</span>
+                                </div>
+                                <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                  {sc != null ? (
+                                    <>
+                                      <ScorePill score={sc} revised={revised} />
+                                      <span className="dim-confidence">
+                                        <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
+                                      </span>
+                                    </>
+                                  ) : uc.status === "analyzing" ? (
+                                    <Spinner size={10} />
+                                  ) : (
+                                    <span style={{ color: "var(--ck-muted)" }}>-</span>
+                                  )}
+                                </div>
+                                <div className="dim-brief" style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.4 }}>
+                                  {view.brief || "No summary available."}
+                                </div>
                               </div>
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                                {sc != null ? (
-                                  <>
-                                    <ScorePill score={sc} revised={revised} />
-                                    <span className="dim-confidence">
-                                      <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
-                                    </span>
-                                  </>
-                                ) : uc.status === "analyzing" ? (
-                                  <Spinner size={10} />
-                                ) : (
-                                  <span style={{ color: "var(--ck-muted)" }}>-</span>
-                                )}
-                              </div>
-                              <div className="dim-brief" style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.4 }}>
-                                {view.brief || "No summary available."}
-                              </div>
+                            );
+                          })}
+                          {!activeDims.length && (
+                            <div className="research-dimension-cell">
+                              <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>No active dimensions configured.</div>
                             </div>
-                          );
-                        })}
-                        {!activeDims.length && (
-                          <div className="research-dimension-cell">
-                            <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>No active dimensions configured.</div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+                        <div className="research-dimension-cell">
+                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Subjects
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
+                            {Array.isArray(uc.matrix?.subjects) ? uc.matrix.subjects.length : 0}
+                          </div>
+                        </div>
+                        <div className="research-dimension-cell">
+                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Attributes
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
+                            {Array.isArray(uc.matrix?.attributes) ? uc.matrix.attributes.length : 0}
+                          </div>
+                        </div>
+                        <div className="research-dimension-cell">
+                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Low-confidence cells
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
+                            {matrixCoverage?.lowConfidenceCells || 0}
+                          </div>
+                        </div>
+                        <div className="research-dimension-cell">
+                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            Critic flags
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
+                            {matrixCoverage?.contestedCells || 0}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {isExpanded && (
                     <ExpandedRow
                       uc={uc}
-                      dims={dims}
+                      dims={ucDims}
                       fuInputs={fuInputs}
                       onFuInputChange={setFuInput}
                       fuLoading={fuLoading}
@@ -1144,6 +1348,7 @@ export default function App() {
                       onResolveFollowUpProposal={onResolveFollowUpProposal}
                       onAnalyzeRelated={(candidate) => onAnalyzeRelated(uc, candidate)}
                       globalAnalyzing={globalAnalyzing}
+                      outputMode={ucMode}
                     />
                   )}
                 </article>
