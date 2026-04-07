@@ -10,7 +10,6 @@ import {
   exportPortfolioJson,
   importUseCasesFromJsonText,
 } from "./lib/export";
-import { downloadDebugLogsBundle } from "./lib/debug";
 import Spinner from "./components/Spinner";
 import ScorePill from "./components/ScorePill";
 import TotalPill from "./components/TotalPill";
@@ -56,6 +55,16 @@ function normalizeAssumptions(values) {
     .slice(0, 6);
 }
 
+function dimensionAcronym(label) {
+  const words = String(label || "")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+  const letters = words.map((w) => w[0]?.toUpperCase() || "").join("");
+  if (letters) return letters.slice(0, 4);
+  return String(label || "").slice(0, 3).toUpperCase();
+}
+
 export default function App() {
   const [useCases, setUseCases] = useState([]);
   const [activeConfigId, setActiveConfigId] = useState(DEFAULT_RESEARCH_CONFIG.id);
@@ -69,6 +78,7 @@ export default function App() {
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
+  const [expandedInputFrames, setExpandedInputFrames] = useState({});
   const [globalAnalyzing, setGlobalAnalyzing] = useState(false);
   const [fuInputs, setFuInputs] = useState({});
   const [fuLoading, setFuLoading] = useState({});
@@ -79,7 +89,6 @@ export default function App() {
 
   const ucRef = useRef(useCases);
   const cardRefs = useRef({});
-  const exportMenuRef = useRef(null);
   const importFileRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
   useEffect(() => {
@@ -302,7 +311,6 @@ export default function App() {
       setImportError(`Export failed: ${err?.message || "Unknown error."}`);
     } finally {
       setToolbarExportLoading("");
-      exportMenuRef.current?.removeAttribute("open");
     }
   }
 
@@ -346,7 +354,6 @@ export default function App() {
   });
   const activeDims = dims.filter(d => d.enabled);
   const totalWeight = dims.reduce((s, d) => s + d.weight, 0);
-  const completedCount = visibleUseCases.filter((u) => u.status === "complete").length;
   const methodology = activeConfig?.methodology || "";
   const activeInputSpec = activeConfig?.inputSpec || {};
   const inputPanelLabel = String(activeInputSpec?.label || "New Research - describe what should be researched").trim();
@@ -407,7 +414,6 @@ export default function App() {
                         setActiveConfigId(config.id);
                         setShowInputPanel(false);
                         setExpandedId(null);
-                        exportMenuRef.current?.removeAttribute("open");
                       }}
                       style={{
                         padding: "7px 14px",
@@ -555,81 +561,6 @@ export default function App() {
             style={{ background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)", padding: "8px 14px", borderRadius: 2, fontSize: 13, fontWeight: 700 }}>
             + Research
           </button>
-          <details ref={exportMenuRef} style={{ position: "relative" }}>
-            <summary
-              onClick={(e) => {
-                if (!visibleUseCases.length || toolbarExportLoading || importLoading) e.preventDefault();
-              }}
-              style={{
-                background: "var(--ck-surface)",
-                border: "1px solid var(--ck-line)",
-                color: visibleUseCases.length ? "var(--ck-text)" : "var(--ck-muted-soft)",
-                padding: "6px 10px",
-                borderRadius: 2,
-                fontSize: 12,
-                fontWeight: 600,
-                opacity: visibleUseCases.length && !importLoading ? 1 : 0.5,
-                cursor: visibleUseCases.length && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
-                userSelect: "none",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-              <span>{toolbarExportLoading ? "Exporting..." : "Export"}</span>
-              <ChevronIcon direction="down" size={12} />
-            </summary>
-            <div style={{
-              position: "absolute",
-              left: 0,
-              top: "calc(100% + 6px)",
-              background: "var(--ck-surface)",
-              border: "1px solid var(--ck-line)",
-              borderRadius: 2,
-              minWidth: 185,
-              padding: 6,
-              display: "grid",
-              gap: 4,
-              zIndex: 30,
-            }}>
-              {[
-                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml(visibleUseCases, dims) },
-                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf(visibleUseCases, dims) },
-                {
-                  key: "portfolio-json",
-                  label: "Portfolio JSON",
-                  action: () => {
-                    if (!completedCount) {
-                      throw new Error("No completed researches available for portfolio JSON export.");
-                    }
-                    return exportPortfolioJson(visibleUseCases, dims);
-                  },
-                },
-                { key: "logs", label: "Logs JSON", action: () => downloadDebugLogsBundle() },
-              ].map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => { void runToolbarExport(item.key, item.action); }}
-                  disabled={!!toolbarExportLoading || importLoading}
-                  style={{
-                    background: "var(--ck-surface-soft)",
-                    border: "1px solid var(--ck-line)",
-                    color: "var(--ck-text)",
-                    textAlign: "left",
-                    borderRadius: 2,
-                    fontSize: 12,
-                    padding: "6px 8px",
-                    opacity: toolbarExportLoading && toolbarExportLoading !== item.key ? 0.55 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}>
-                  {toolbarExportLoading === item.key ? <Spinner size={10} /> : null}
-                  <span>{toolbarExportLoading === item.key ? `${item.label}...` : item.label}</span>
-                </button>
-              ))}
-            </div>
-          </details>
           <input
             ref={importFileRef}
             type="file"
@@ -738,13 +669,32 @@ export default function App() {
                 || activeConfig;
               const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
               const inputFrame = uc.attributes?.inputFrame || {};
-              const providedInput = trimText(inputFrame?.providedInput || uc.rawInput, 420);
+              const providedInput = String(inputFrame?.providedInput || uc.rawInput || "");
               const frameValues = inputFrame?.framingFields && typeof inputFrame.framingFields === "object"
                 ? inputFrame.framingFields
                 : {};
               const assumptions = normalizeAssumptions(inputFrame?.assumptionsUsed);
-              const confidenceLimits = trimText(inputFrame?.confidenceLimits || "", 220);
-              const analysisSummary = trimText(uc.attributes?.expandedDescription || "", 240);
+              const confidenceLimits = String(inputFrame?.confidenceLimits || "");
+              const analysisSummary = String(uc.attributes?.expandedDescription || "");
+              const frameCombinedLength = [
+                providedInput,
+                analysisSummary,
+                ...framingFieldDefs.map((field) => String(frameValues?.[field.id] || "")),
+                assumptions.join(" "),
+                confidenceLimits,
+              ].join(" ").length;
+              const canCollapseFrame = frameCombinedLength > 620;
+              const isFrameExpanded = !!expandedInputFrames[uc.id];
+              const canExportResearch = uc.status === "complete";
+              const researchExportItems = [
+                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml([uc], dims) },
+                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf([uc], dims) },
+                {
+                  key: "json",
+                  label: "Research JSON",
+                  action: () => exportPortfolioJson([uc], dims),
+                },
+              ];
 
               return (
                 <article
@@ -767,8 +717,76 @@ export default function App() {
                           ? <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "..."}</span>
                           : <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-</span>}
                     </div>
+                    <details className="desktop-only" style={{ position: "relative" }}>
+                      <summary
+                        onClick={(e) => {
+                          if (!canExportResearch || toolbarExportLoading || importLoading) e.preventDefault();
+                        }}
+                        style={{
+                          background: "var(--ck-surface)",
+                          border: "1px solid var(--ck-line)",
+                          color: canExportResearch ? "var(--ck-text)" : "var(--ck-muted-soft)",
+                          padding: "5px 9px",
+                          borderRadius: 2,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          opacity: canExportResearch ? 1 : 0.5,
+                          cursor: canExportResearch && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
+                          userSelect: "none",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}>
+                        <span>{toolbarExportLoading.startsWith(`research-${uc.id}-`) ? "Exporting..." : "Export"}</span>
+                        <ChevronIcon direction="down" size={12} />
+                      </summary>
+                      <div style={{
+                        position: "absolute",
+                        right: 0,
+                        top: "calc(100% + 6px)",
+                        background: "var(--ck-surface)",
+                        border: "1px solid var(--ck-line)",
+                        borderRadius: 2,
+                        minWidth: 160,
+                        padding: 6,
+                        display: "grid",
+                        gap: 4,
+                        zIndex: 40,
+                      }}>
+                        {researchExportItems.map((item) => {
+                          const key = `research-${uc.id}-${item.key}`;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={(e) => {
+                                void runToolbarExport(key, item.action);
+                                e.currentTarget.closest("details")?.removeAttribute("open");
+                              }}
+                              disabled={!!toolbarExportLoading || importLoading || !canExportResearch}
+                              style={{
+                                background: "var(--ck-surface-soft)",
+                                border: "1px solid var(--ck-line)",
+                                color: "var(--ck-text)",
+                                textAlign: "left",
+                                borderRadius: 2,
+                                fontSize: 12,
+                                padding: "6px 8px",
+                                opacity: toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                              }}>
+                              {toolbarExportLoading === key ? <Spinner size={10} /> : null}
+                              <span>{toolbarExportLoading === key ? `${item.label}...` : item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </details>
                     <button
                       type="button"
+                      className="desktop-only"
                       onClick={() => focusResearch(uc.id)}
                       style={{
                         border: "1px solid var(--ck-line)",
@@ -782,63 +800,177 @@ export default function App() {
                       }}>
                       <ChevronIcon direction={isExpanded ? "up" : "down"} size={13} />
                     </button>
+                    <details className="mobile-only" style={{ position: "relative" }}>
+                      <summary
+                        style={{
+                          border: "1px solid var(--ck-line)",
+                          background: "var(--ck-surface)",
+                          color: "var(--ck-text)",
+                          width: 28,
+                          height: 28,
+                          padding: 0,
+                          display: "grid",
+                          placeItems: "center",
+                          fontSize: 14,
+                          fontWeight: 700,
+                        }}>
+                        ...
+                      </summary>
+                      <div style={{
+                        position: "absolute",
+                        right: 0,
+                        top: "calc(100% + 6px)",
+                        background: "var(--ck-surface)",
+                        border: "1px solid var(--ck-line)",
+                        borderRadius: 2,
+                        minWidth: 170,
+                        padding: 6,
+                        display: "grid",
+                        gap: 4,
+                        zIndex: 40,
+                      }}>
+                        {researchExportItems.map((item) => {
+                          const key = `research-${uc.id}-${item.key}`;
+                          return (
+                            <button
+                              key={`${key}-mobile`}
+                              type="button"
+                              onClick={(e) => {
+                                void runToolbarExport(key, item.action);
+                                e.currentTarget.closest("details")?.removeAttribute("open");
+                              }}
+                              disabled={!!toolbarExportLoading || importLoading || !canExportResearch}
+                              style={{
+                                background: "var(--ck-surface-soft)",
+                                border: "1px solid var(--ck-line)",
+                                color: "var(--ck-text)",
+                                textAlign: "left",
+                                borderRadius: 2,
+                                fontSize: 12,
+                                padding: "6px 8px",
+                                opacity: toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1,
+                              }}>
+                              {toolbarExportLoading === key ? `${item.label}...` : item.label}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            focusResearch(uc.id);
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                          style={{
+                            background: "var(--ck-surface-soft)",
+                            border: "1px solid var(--ck-line)",
+                            color: "var(--ck-text)",
+                            textAlign: "left",
+                            borderRadius: 2,
+                            fontSize: 12,
+                            padding: "6px 8px",
+                          }}>
+                          {isExpanded ? "Collapse details" : "Expand details"}
+                        </button>
+                      </div>
+                    </details>
                   </div>
 
                   <div className="research-card-summary">
                     <div className="research-definition">
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
-                        Provided Input
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-                        {providedInput || "-"}
-                      </div>
-                      {analysisSummary ? (
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                            Analysis Framing
-                          </div>
-                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{analysisSummary}</div>
+                      <div
+                        style={{
+                          maxHeight: canCollapseFrame && !isFrameExpanded ? 205 : "none",
+                          overflow: canCollapseFrame && !isFrameExpanded ? "hidden" : "visible",
+                          position: "relative",
+                          display: "grid",
+                          gap: 8,
+                        }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
+                          Input + Framing
                         </div>
-                      ) : null}
-                      {framingFieldDefs.length ? (
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
-                          {framingFieldDefs.map((field) => {
-                            const value = trimText(frameValues?.[field.id] || "unspecified", 140);
-                            return (
-                              <div key={`${uc.id}-frame-${field.id}`}>
-                                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                                  {field.label || field.id}
+                        <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                          {providedInput || "-"}
+                        </div>
+                        {analysisSummary ? (
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                              Analysis Framing
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{analysisSummary}</div>
+                          </div>
+                        ) : null}
+                        {framingFieldDefs.length ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
+                            {framingFieldDefs.map((field) => {
+                              const value = String(frameValues?.[field.id] || "unspecified");
+                              return (
+                                <div key={`${uc.id}-frame-${field.id}`}>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                                    {field.label || field.id}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                                    {value || "unspecified"}
+                                  </div>
                                 </div>
-                                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                                  {value || "unspecified"}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                            Assumptions Used
+                              );
+                            })}
                           </div>
-                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                            {assumptions.length ? assumptions.join(" | ") : "None."}
+                        ) : null}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                              Assumptions Used
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                              {assumptions.length ? assumptions.join(" | ") : "None."}
+                            </div>
                           </div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                            Confidence Limits
-                          </div>
-                          <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                            {confidenceLimits || "No explicit limits were captured."}
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                              Confidence Limits
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                              {confidenceLimits || "No explicit limits were captured."}
+                            </div>
                           </div>
                         </div>
+                        {canCollapseFrame && !isFrameExpanded ? (
+                          <div style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: 36,
+                            background: "linear-gradient(180deg, rgba(247,247,246,0) 0%, rgba(247,247,246,1) 80%)",
+                            pointerEvents: "none",
+                          }} />
+                        ) : null}
                       </div>
+                      {canCollapseFrame ? (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedInputFrames((prev) => ({ ...prev, [uc.id]: !prev[uc.id] }))}
+                          style={{
+                            marginTop: 2,
+                            border: "1px solid var(--ck-line)",
+                            background: "var(--ck-surface)",
+                            color: "var(--ck-text)",
+                            padding: "5px 9px",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            width: "fit-content",
+                          }}>
+                          {isFrameExpanded ? "Collapse" : "Expand"}
+                          <ChevronIcon direction={isFrameExpanded ? "up" : "down"} size={11} />
+                        </button>
+                      ) : null}
                     </div>
 
                     <div className="research-dimensions-scroll">
-                      <div className="research-dimensions-row">
+                      <div className="research-dimensions-row" style={{ "--score-dimension-count": Math.max(activeDims.length, 1) }}>
                         {activeDims.map((d) => {
                           const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
                           const sc = view.effectiveScore;
@@ -847,14 +979,17 @@ export default function App() {
                           const revised = finScore != null && initScore != null && finScore !== initScore;
                           return (
                             <div key={`${uc.id}-${d.id}`} className="research-dimension-cell">
-                              <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                                {d.label}
+                              <div className="dim-label-wrap" style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                                <span className="dim-label-full">{d.label}</span>
+                                <span className="dim-label-acronym">{dimensionAcronym(d.label)}</span>
                               </div>
                               <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                                 {sc != null ? (
                                   <>
                                     <ScorePill score={sc} revised={revised} />
-                                    <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
+                                    <span className="dim-confidence">
+                                      <ConfidenceBadge level={view.confidence} reason={view.confidenceReason} compact={true} />
+                                    </span>
                                   </>
                                 ) : uc.status === "analyzing" ? (
                                   <Spinner size={10} />
@@ -862,8 +997,8 @@ export default function App() {
                                   <span style={{ color: "var(--ck-muted)" }}>-</span>
                                 )}
                               </div>
-                              <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.4 }}>
-                                {trimText(view.brief || "No summary available.", 120)}
+                              <div className="dim-brief" style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.4 }}>
+                                {view.brief || "No summary available."}
                               </div>
                             </div>
                           );

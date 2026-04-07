@@ -260,16 +260,17 @@ a:hover {
 }
 
 .research-dimensions-scroll {
-  overflow-x: auto;
-  padding-bottom: 2px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .research-dimensions-row {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(180px, 1fr);
+  grid-template-columns: repeat(var(--score-dimension-count, 1), minmax(0, 1fr));
   gap: 8px;
-  min-width: max-content;
+  width: 100%;
+  min-width: 0;
+  align-items: start;
 }
 
 .research-dimension-cell {
@@ -279,6 +280,19 @@ a:hover {
   padding: 8px;
   display: grid;
   gap: 4px;
+  min-width: 0;
+}
+
+.desktop-only {
+  display: inline-flex;
+}
+
+.mobile-only {
+  display: none;
+}
+
+.dim-label-acronym {
+  display: none;
 }
 
 @media (max-width: 900px) {
@@ -297,7 +311,39 @@ a:hover {
   .research-definition {
     padding: 8px 10px;
   }
-  .research-dimensions-row {
+  .dimension-descriptions-scroll {
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .dimension-descriptions-row {
+    display: grid;
+    grid-auto-flow: column;
     grid-auto-columns: minmax(165px, 1fr);
+    gap: 10px;
+    width: max-content;
+    min-width: max-content;
+  }
+  .research-dimensions-row {
+    gap: 6px;
+  }
+  .research-dimension-cell {
+    padding: 6px;
+    gap: 3px;
+  }
+  .dim-label-full {
+    display: none;
+  }
+  .dim-label-acronym {
+    display: inline;
+  }
+  .dim-confidence,
+  .dim-brief {
+    display: none;
+  }
+  .desktop-only {
+    display: none !important;
+  }
+  .mobile-only {
+    display: inline-flex !important;
   }
 }
