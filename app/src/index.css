@@ -159,11 +159,26 @@ a:hover {
   min-width: max-content;
 }
 
+.config-nav-desktop {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.config-nav-mobile {
+  display: none;
+  margin-left: auto;
+}
+
 .methodology-panel {
   border: 1px solid var(--ck-line);
   background: var(--ck-surface-soft);
   border-radius: 2px;
   padding: 8px 10px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .methodology-text {
@@ -171,6 +186,7 @@ a:hover {
   font-size: 11px;
   color: var(--ck-muted);
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .dimension-strip-item {
@@ -190,6 +206,7 @@ a:hover {
 .dimension-descriptions-scroll {
   margin-top: 10px;
   width: 100%;
+  max-width: 100%;
   overflow: hidden;
 }
 
@@ -226,6 +243,12 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.research-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 8px;
 }
 
 .research-card {
@@ -312,6 +335,12 @@ a:hover {
   .header-row {
     gap: 6px;
   }
+  .config-nav-desktop {
+    display: none;
+  }
+  .config-nav-mobile {
+    display: inline-flex;
+  }
   .research-card-summary {
     padding: 10px;
   }
@@ -325,10 +354,10 @@ a:hover {
   .dimension-descriptions-row {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(165px, 1fr);
-    gap: 10px;
+    grid-auto-columns: clamp(150px, 40vw, 210px);
+    gap: 12px;
     width: max-content;
-    min-width: max-content;
+    min-width: 100%;
   }
   .research-dimensions-row {
     gap: 6px;
@@ -352,5 +381,8 @@ a:hover {
   }
   .mobile-only {
     display: inline-flex !important;
+  }
+  .research-list-toolbar {
+    margin-bottom: 6px;
   }
 }

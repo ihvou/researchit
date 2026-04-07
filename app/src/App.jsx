@@ -79,6 +79,7 @@ export default function App() {
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
+  const [expandAllResearches, setExpandAllResearches] = useState(false);
   const [expandedInputFrames, setExpandedInputFrames] = useState({});
   const [globalAnalyzing, setGlobalAnalyzing] = useState(false);
   const [fuInputs, setFuInputs] = useState({});
@@ -95,6 +96,7 @@ export default function App() {
   useEffect(() => {
     setShowDimsPanel(false);
     setShowDetailsPanel(true);
+    setExpandAllResearches(false);
   }, [activeConfigId]);
 
   const activeConfig = RESEARCH_CONFIGS.find((config) => config.id === activeConfigId)
@@ -291,8 +293,16 @@ export default function App() {
     await runNewAnalysis(desc, origin, parentConfig);
   }
 
+  function selectResearchConfig(configId) {
+    setActiveConfigId(configId);
+    setShowInputPanel(false);
+    setExpandedId(null);
+    setExpandAllResearches(false);
+  }
+
   function focusResearch(id, options = {}) {
     const { forceOpen = false } = options;
+    setExpandAllResearches(false);
     setExpandedId((prev) => (forceOpen ? id : (prev === id ? null : id)));
     requestAnimationFrame(() => {
       const el = cardRefs.current[id];
@@ -363,6 +373,15 @@ export default function App() {
     || "Describe what you want to research. Broad or detailed inputs are both acceptable."
   ).trim();
   const inputPanelDescription = String(activeInputSpec?.description || "").trim();
+  const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
+  const desktopTabConfigs = (() => {
+    const initial = RESEARCH_CONFIGS.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
+    if (initial.some((config) => config.id === activeConfig.id)) return initial;
+    const merged = [...initial.slice(0, Math.max(DESKTOP_VISIBLE_CONFIG_COUNT - 1, 0)), activeConfig];
+    return merged.filter((config, idx, arr) => arr.findIndex((item) => item.id === config.id) === idx);
+  })();
+  const desktopVisibleIds = new Set(desktopTabConfigs.map((config) => config.id));
+  const hiddenTabConfigs = RESEARCH_CONFIGS.filter((config) => !desktopVisibleIds.has(config.id));
 
   const PHASE_LABEL_SHORT = {
     analyst: "Research...",
@@ -400,37 +419,144 @@ export default function App() {
             <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
           </div>
           <div style={{ minWidth: 0, flex: 1, marginLeft: 16, display: "flex", justifyContent: "flex-end" }}>
-            <div className="scroll-row">
-              <div className="scroll-row-inner" style={{ alignItems: "center", marginLeft: "auto" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
-                  Researches Available:
-                </span>
+            <div className="config-nav-desktop">
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
+                Researches Available:
+              </span>
+              {desktopTabConfigs.map((config) => {
+                const isActive = config.id === activeConfig.id;
+                return (
+                  <button
+                    key={config.id}
+                    type="button"
+                    onClick={() => selectResearchConfig(config.id)}
+                    style={{
+                      padding: "7px 12px",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      border: `1px solid ${isActive ? "var(--ck-accent)" : "var(--ck-line)"}`,
+                      background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                      color: isActive ? "var(--ck-text)" : "var(--ck-muted)",
+                      whiteSpace: "nowrap",
+                    }}>
+                    {config.tabLabel || config.name}
+                  </button>
+                );
+              })}
+              {hiddenTabConfigs.length ? (
+                <details style={{ position: "relative" }}>
+                  <summary style={{
+                    background: "var(--ck-surface)",
+                    border: "1px solid var(--ck-line)",
+                    color: "var(--ck-text)",
+                    padding: "7px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}>
+                    <span>More</span>
+                    <ChevronIcon direction="down" size={12} />
+                  </summary>
+                  <div style={{
+                    position: "absolute",
+                    right: 0,
+                    top: "calc(100% + 6px)",
+                    minWidth: 220,
+                    background: "var(--ck-surface)",
+                    border: "1px solid var(--ck-line)",
+                    borderRadius: 2,
+                    display: "grid",
+                    gap: 4,
+                    padding: 6,
+                    zIndex: 40,
+                  }}>
+                    {hiddenTabConfigs.map((config) => {
+                      const isActive = config.id === activeConfig.id;
+                      return (
+                        <button
+                          key={`hidden-${config.id}`}
+                          type="button"
+                          onClick={(e) => {
+                            selectResearchConfig(config.id);
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                          style={{
+                            textAlign: "left",
+                            background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface-soft)",
+                            border: `1px solid ${isActive ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                            color: "var(--ck-text)",
+                            padding: "6px 8px",
+                            fontSize: 12,
+                            fontWeight: isActive ? 700 : 600,
+                          }}>
+                          {config.tabLabel || config.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+
+            <details className="config-nav-mobile" style={{ position: "relative" }}>
+              <summary style={{
+                background: "var(--ck-surface)",
+                border: "1px solid var(--ck-line)",
+                color: "var(--ck-text)",
+                padding: "7px 10px",
+                fontSize: 12,
+                fontWeight: 700,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+              }}>
+                <span>Researches Available</span>
+                <ChevronIcon direction="down" size={12} />
+              </summary>
+              <div style={{
+                position: "absolute",
+                right: 0,
+                top: "calc(100% + 6px)",
+                minWidth: 240,
+                maxHeight: 320,
+                overflowY: "auto",
+                background: "var(--ck-surface)",
+                border: "1px solid var(--ck-line)",
+                borderRadius: 2,
+                display: "grid",
+                gap: 4,
+                padding: 6,
+                zIndex: 45,
+              }}>
                 {RESEARCH_CONFIGS.map((config) => {
                   const isActive = config.id === activeConfig.id;
                   return (
                     <button
-                      key={config.id}
+                      key={`mobile-${config.id}`}
                       type="button"
-                      onClick={() => {
-                        setActiveConfigId(config.id);
-                        setShowInputPanel(false);
-                        setExpandedId(null);
+                      onClick={(e) => {
+                        selectResearchConfig(config.id);
+                        e.currentTarget.closest("details")?.removeAttribute("open");
                       }}
                       style={{
-                        padding: "7px 14px",
-                        fontSize: 13,
-                        fontWeight: 700,
-                        border: `1px solid ${isActive ? "var(--ck-accent)" : "var(--ck-line)"}`,
-                        background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                        color: isActive ? "var(--ck-text)" : "var(--ck-muted)",
-                        whiteSpace: "nowrap",
+                        textAlign: "left",
+                        background: isActive ? "var(--ck-blue-soft)" : "var(--ck-surface-soft)",
+                        border: `1px solid ${isActive ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                        color: "var(--ck-text)",
+                        padding: "6px 8px",
+                        fontSize: 12,
+                        fontWeight: isActive ? 700 : 600,
                       }}>
                       {config.tabLabel || config.name}
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </details>
           </div>
         </div>
       </div>
@@ -661,10 +787,38 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <div className="research-list">
+          <>
+            {visibleUseCases.length >= 2 ? (
+              <div className="research-list-toolbar">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExpandAllResearches((prev) => {
+                      const next = !prev;
+                      if (!next) setExpandedId(null);
+                      return next;
+                    });
+                  }}
+                  style={{
+                    border: "1px solid var(--ck-line)",
+                    background: "var(--ck-surface)",
+                    color: "var(--ck-text)",
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}>
+                  <span>{expandAllResearches ? "Collapse All" : "Expand All"}</span>
+                  <ChevronIcon direction={expandAllResearches ? "up" : "down"} size={12} />
+                </button>
+              </div>
+            ) : null}
+            <div className="research-list">
             {visibleUseCases.map((uc) => {
               const score = calcWeightedScore(uc, dims);
-              const isExpanded = expandedId === uc.id;
+              const isExpanded = expandAllResearches || expandedId === uc.id;
               const title = uc.attributes?.title || trimText(uc.rawInput, 80) || "Untitled research";
               const ucConfig = RESEARCH_CONFIGS.find((config) => config.id === (uc?.researchConfigId || activeConfig.id))
                 || activeConfig;
@@ -705,7 +859,28 @@ export default function App() {
                   ref={(el) => { cardRefs.current[uc.id] = el; }}>
                   <div className="research-card-head">
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ck-text)", lineHeight: 1.3, marginBottom: 2 }}>{title}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginBottom: 2 }}>
+                        <button
+                          type="button"
+                          className="desktop-only"
+                          onClick={() => focusResearch(uc.id)}
+                          style={{
+                            border: "1px solid var(--ck-line)",
+                            background: isExpanded ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                            color: "var(--ck-text)",
+                            width: 22,
+                            height: 22,
+                            padding: 0,
+                            display: "grid",
+                            placeItems: "center",
+                            flexShrink: 0,
+                          }}>
+                          <ChevronIcon direction={isExpanded ? "up" : "down"} size={11} />
+                        </button>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ck-text)", lineHeight: 1.3, minWidth: 0 }}>
+                          {title}
+                        </div>
+                      </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", color: "var(--ck-muted)", fontSize: 11 }}>
                         {uc.attributes?.vertical ? <span>{uc.attributes.vertical}</span> : null}
                         {uc.attributes?.buyerPersona ? <span>| {uc.attributes.buyerPersona}</span> : null}
@@ -749,22 +924,6 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <button
-                      type="button"
-                      className="desktop-only"
-                      onClick={() => focusResearch(uc.id)}
-                      style={{
-                        border: "1px solid var(--ck-line)",
-                        background: isExpanded ? "var(--ck-blue-soft)" : "var(--ck-surface)",
-                        color: "var(--ck-text)",
-                        width: 28,
-                        height: 28,
-                        padding: 0,
-                        display: "grid",
-                        placeItems: "center",
-                      }}>
-                      <ChevronIcon direction={isExpanded ? "up" : "down"} size={13} />
-                    </button>
                     <details className="mobile-only" style={{ position: "relative" }}>
                       <summary
                         style={{
@@ -994,7 +1153,8 @@ export default function App() {
                 </article>
               );
             })}
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>
