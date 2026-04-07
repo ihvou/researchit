@@ -312,6 +312,14 @@ export default function App() {
     });
   }
 
+  function onResearchHeaderClick(e, id) {
+    const interactiveTarget = e.target instanceof Element
+      ? e.target.closest("button,summary,a,input,select,textarea,label,[role='button']")
+      : null;
+    if (interactiveTarget) return;
+    focusResearch(id);
+  }
+
   async function runToolbarExport(kind, action) {
     if (toolbarExportLoading) return;
     setToolbarExportLoading(kind);
@@ -857,12 +865,18 @@ export default function App() {
                   key={uc.id}
                   className="research-card"
                   ref={(el) => { cardRefs.current[uc.id] = el; }}>
-                  <div className="research-card-head">
+                  <div
+                    className="research-card-head"
+                    onClick={(e) => onResearchHeaderClick(e, uc.id)}
+                    style={{ cursor: "pointer" }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginBottom: 2 }}>
                         <button
                           type="button"
-                          onClick={() => focusResearch(uc.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            focusResearch(uc.id);
+                          }}
                           style={{
                             border: "1px solid var(--ck-line)",
                             background: isExpanded ? "var(--ck-blue-soft)" : "var(--ck-surface)",
