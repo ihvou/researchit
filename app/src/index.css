@@ -291,6 +291,13 @@ a:hover {
   display: none;
 }
 
+.research-head-export-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .dim-label-acronym {
   display: none;
 }

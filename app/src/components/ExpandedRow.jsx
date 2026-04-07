@@ -4,12 +4,6 @@ import DimensionsTab from "./DimensionsTab";
 import DebateTab from "./DebateTab";
 import DiscoverTab from "./DiscoverTab";
 import ProgressTab from "./ProgressTab";
-import {
-  openSingleUseCaseHtml,
-  exportSingleUseCasePdf,
-  exportSingleUseCaseImagesZip,
-  exportSingleUseCaseJson,
-} from "../lib/export";
 
 const PHASE_LABELS = {
   analyst: "Analyst researching...",
@@ -35,7 +29,6 @@ export default function ExpandedRow({
   globalAnalyzing = false,
 }) {
   const [tab, setTab] = useState("dimensions");
-  const [exportLoading, setExportLoading] = useState("");
 
   useEffect(() => {
     setTab("dimensions");
@@ -46,27 +39,6 @@ export default function ExpandedRow({
       setTab("dimensions");
     }
   }, [uc.status]);
-
-  useEffect(() => {
-    setExportLoading("");
-  }, [uc.id]);
-
-  async function runExport(kind, action, e) {
-    e.stopPropagation();
-    if (exportLoading) return;
-    setExportLoading(kind);
-    try {
-      const ok = await action();
-      if (ok === false) {
-        window.alert("Export did not complete. Please try again.");
-      }
-    } catch (err) {
-      console.error("Export failed:", err);
-      window.alert(`Export failed: ${err?.message || "Unknown error."}`);
-    } finally {
-      setExportLoading("");
-    }
-  }
 
   return (
     <div style={{ borderTop: "2px solid var(--ck-line-strong)", maxWidth: "100%", overflowX: "hidden" }}>
@@ -96,90 +68,6 @@ export default function ExpandedRow({
                 <Spinner size={10} /> {PHASE_LABELS[uc.phase] || "Processing..."}
               </span>
             : null}
-          {uc.status === "complete" && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <button
-                type="button"
-                onClick={(e) => { void runExport("html", () => openSingleUseCaseHtml(uc, dims), e); }}
-                disabled={!!exportLoading}
-                style={{
-                  background: "var(--ck-surface)",
-                  border: "1px solid var(--ck-line)",
-                  color: "var(--ck-text)",
-                  borderRadius: 2,
-                  fontSize: 11,
-                  padding: "4px 8px",
-                  cursor: exportLoading ? "not-allowed" : "pointer",
-                  opacity: exportLoading && exportLoading !== "html" ? 0.55 : 1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                {exportLoading === "html" ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                {exportLoading === "html" ? "Export HTML..." : "Export HTML"}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { void runExport("pdf", () => exportSingleUseCasePdf(uc, dims), e); }}
-                disabled={!!exportLoading}
-                style={{
-                  background: "var(--ck-surface)",
-                  border: "1px solid var(--ck-line)",
-                  color: "var(--ck-text)",
-                  borderRadius: 2,
-                  fontSize: 11,
-                  padding: "4px 8px",
-                  cursor: exportLoading ? "not-allowed" : "pointer",
-                  opacity: exportLoading && exportLoading !== "pdf" ? 0.55 : 1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                {exportLoading === "pdf" ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                {exportLoading === "pdf" ? "Export PDF..." : "Export PDF"}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { void runExport("images", () => exportSingleUseCaseImagesZip(uc, dims), e); }}
-                disabled={!!exportLoading}
-                style={{
-                  background: "var(--ck-surface)",
-                  border: "1px solid var(--ck-line)",
-                  color: "var(--ck-text)",
-                  borderRadius: 2,
-                  fontSize: 11,
-                  padding: "4px 8px",
-                  cursor: exportLoading ? "not-allowed" : "pointer",
-                  opacity: exportLoading && exportLoading !== "images" ? 0.55 : 1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                {exportLoading === "images" ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                {exportLoading === "images" ? "Export Images..." : "Export Images ZIP"}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { void runExport("json", () => exportSingleUseCaseJson(uc, dims), e); }}
-                disabled={!!exportLoading}
-                style={{
-                  background: "var(--ck-surface)",
-                  border: "1px solid var(--ck-line)",
-                  color: "var(--ck-text)",
-                  borderRadius: 2,
-                  fontSize: 11,
-                  padding: "4px 8px",
-                  cursor: exportLoading ? "not-allowed" : "pointer",
-                  opacity: exportLoading && exportLoading !== "json" ? 0.55 : 1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                {exportLoading === "json" ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                {exportLoading === "json" ? "Export JSON..." : "Export JSON"}
-              </button>
-            </div>
-          )}
         </div>
       </div>
       {uc.status !== "analyzing" && (

@@ -5,9 +5,10 @@ import { getDimensionView } from "./lib/dimensionView";
 import { runAnalysis } from "./hooks/useAnalysis";
 import { handleFollowUp } from "./hooks/useFollowUp";
 import {
-  exportAnalysisHtml,
-  exportAnalysisPdf,
-  exportPortfolioJson,
+  openSingleUseCaseHtml,
+  exportSingleUseCasePdf,
+  exportSingleUseCaseImagesZip,
+  exportSingleUseCaseJson,
   importUseCasesFromJsonText,
 } from "./lib/export";
 import Spinner from "./components/Spinner";
@@ -687,12 +688,13 @@ export default function App() {
               const isFrameExpanded = !!expandedInputFrames[uc.id];
               const canExportResearch = uc.status === "complete";
               const researchExportItems = [
-                { key: "html", label: "HTML Report", action: () => exportAnalysisHtml([uc], dims) },
-                { key: "pdf", label: "PDF Report", action: () => exportAnalysisPdf([uc], dims) },
+                { key: "html", label: "Export HTML", action: () => openSingleUseCaseHtml(uc, dims) },
+                { key: "pdf", label: "Export PDF", action: () => exportSingleUseCasePdf(uc, dims) },
+                { key: "images", label: "Export Images ZIP", action: () => exportSingleUseCaseImagesZip(uc, dims) },
                 {
                   key: "json",
-                  label: "Research JSON",
-                  action: () => exportPortfolioJson([uc], dims),
+                  label: "Export JSON",
+                  action: () => exportSingleUseCaseJson(uc, dims),
                 },
               ];
 
@@ -717,73 +719,36 @@ export default function App() {
                           ? <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>{PHASE_LABEL_SHORT[uc.phase] || "..."}</span>
                           : <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-</span>}
                     </div>
-                    <details className="desktop-only" style={{ position: "relative" }}>
-                      <summary
-                        onClick={(e) => {
-                          if (!canExportResearch || toolbarExportLoading || importLoading) e.preventDefault();
-                        }}
-                        style={{
-                          background: "var(--ck-surface)",
-                          border: "1px solid var(--ck-line)",
-                          color: canExportResearch ? "var(--ck-text)" : "var(--ck-muted-soft)",
-                          padding: "5px 9px",
-                          borderRadius: 2,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          opacity: canExportResearch ? 1 : 0.5,
-                          cursor: canExportResearch && !toolbarExportLoading && !importLoading ? "pointer" : "not-allowed",
-                          userSelect: "none",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}>
-                        <span>{toolbarExportLoading.startsWith(`research-${uc.id}-`) ? "Exporting..." : "Export"}</span>
-                        <ChevronIcon direction="down" size={12} />
-                      </summary>
-                      <div style={{
-                        position: "absolute",
-                        right: 0,
-                        top: "calc(100% + 6px)",
-                        background: "var(--ck-surface)",
-                        border: "1px solid var(--ck-line)",
-                        borderRadius: 2,
-                        minWidth: 160,
-                        padding: 6,
-                        display: "grid",
-                        gap: 4,
-                        zIndex: 40,
-                      }}>
-                        {researchExportItems.map((item) => {
-                          const key = `research-${uc.id}-${item.key}`;
-                          return (
-                            <button
-                              key={key}
-                              type="button"
-                              onClick={(e) => {
-                                void runToolbarExport(key, item.action);
-                                e.currentTarget.closest("details")?.removeAttribute("open");
-                              }}
-                              disabled={!!toolbarExportLoading || importLoading || !canExportResearch}
-                              style={{
-                                background: "var(--ck-surface-soft)",
-                                border: "1px solid var(--ck-line)",
-                                color: "var(--ck-text)",
-                                textAlign: "left",
-                                borderRadius: 2,
-                                fontSize: 12,
-                                padding: "6px 8px",
-                                opacity: toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1,
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                              }}>
-                              {toolbarExportLoading === key ? <Spinner size={10} /> : null}
-                              <span>{toolbarExportLoading === key ? `${item.label}...` : item.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </details>
+                    <div className="desktop-only research-head-export-buttons">
+                      {researchExportItems.map((item) => {
+                        const key = `research-${uc.id}-${item.key}`;
+                        const isLoading = toolbarExportLoading === key;
+                        return (
+                          <button
+                            key={`${key}-desktop`}
+                            type="button"
+                            onClick={() => { void runToolbarExport(key, item.action); }}
+                            disabled={!!toolbarExportLoading || importLoading || !canExportResearch}
+                            style={{
+                              background: "var(--ck-surface)",
+                              border: "1px solid var(--ck-line)",
+                              color: "var(--ck-text)",
+                              borderRadius: 2,
+                              fontSize: 11,
+                              padding: "4px 8px",
+                              cursor: !canExportResearch || toolbarExportLoading ? "not-allowed" : "pointer",
+                              opacity: canExportResearch ? (toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1) : 0.5,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 5,
+                              whiteSpace: "nowrap",
+                            }}>
+                            {isLoading ? <Spinner size={9} color="var(--ck-text)" /> : null}
+                            {isLoading ? `${item.label}...` : item.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <button
                       type="button"
                       className="desktop-only"
