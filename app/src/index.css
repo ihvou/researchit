@@ -349,15 +349,19 @@ a:hover {
   }
   .dimension-descriptions-scroll {
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
   }
   .dimension-descriptions-row {
     display: grid;
+    grid-template-columns: none;
     grid-auto-flow: column;
-    grid-auto-columns: clamp(150px, 40vw, 210px);
-    gap: 12px;
+    grid-auto-columns: clamp(160px, 40vw, 220px);
+    gap: 10px;
     width: max-content;
     min-width: 100%;
+    padding-right: 6px;
   }
   .research-dimensions-row {
     gap: 6px;

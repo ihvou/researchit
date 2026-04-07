@@ -862,7 +862,6 @@ export default function App() {
                       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginBottom: 2 }}>
                         <button
                           type="button"
-                          className="desktop-only"
                           onClick={() => focusResearch(uc.id)}
                           style={{
                             border: "1px solid var(--ck-line)",
@@ -973,28 +972,11 @@ export default function App() {
                                 fontSize: 12,
                                 padding: "6px 8px",
                                 opacity: toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1,
-                              }}>
+                            }}>
                               {toolbarExportLoading === key ? `${item.label}...` : item.label}
                             </button>
                           );
                         })}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            focusResearch(uc.id);
-                            e.currentTarget.closest("details")?.removeAttribute("open");
-                          }}
-                          style={{
-                            background: "var(--ck-surface-soft)",
-                            border: "1px solid var(--ck-line)",
-                            color: "var(--ck-text)",
-                            textAlign: "left",
-                            borderRadius: 2,
-                            fontSize: 12,
-                            padding: "6px 8px",
-                          }}>
-                          {isExpanded ? "Collapse details" : "Expand details"}
-                        </button>
                       </div>
                     </details>
                   </div>
