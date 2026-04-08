@@ -1318,6 +1318,366 @@ function downloadJson(filename, payload) {
   downloadBlob(filename, blob);
 }
 
+function markdownEscapeInline(value) {
+  return String(value == null ? "" : value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r\n/g, " ")
+    .replace(/\r/g, " ")
+    .replace(/\n/g, " ");
+}
+
+function markdownTextBlock(value) {
+  return String(value == null ? "" : value).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function markdownSourceLine(source, index) {
+  const label = `Source ${index + 1}`;
+  const name = markdownEscapeInline(source?.name || "");
+  const quote = markdownEscapeInline(source?.quote || "");
+  const url = String(source?.url || "").trim();
+  const meta = [name, quote].filter(Boolean).join(" - ");
+  if (url) {
+    return `- [${label}](${url})${meta ? `: ${meta}` : ""}`;
+  }
+  return `- ${label}${meta ? `: ${meta}` : ""}`;
+}
+
+function markdownSourcesSection(sources = []) {
+  const normalized = Array.isArray(sources) ? sources : [];
+  if (!normalized.length) return "- No sources.";
+  return normalized.map((source, idx) => markdownSourceLine(source, idx)).join("\n");
+}
+
+function markdownThreadSection(thread = []) {
+  if (!Array.isArray(thread) || !thread.length) return "- No follow-up thread.";
+  return thread.map((entry) => {
+    const role = entry?.role === "pm" ? "PM" : "Analyst";
+    const body = entry?.role === "pm"
+      ? String(entry?.text || "").trim()
+      : String(entry?.response || entry?.text || "").trim();
+    const proposal = entry?.role === "analyst" && entry?.scoreProposal?.newScore != null
+      ? ` | score proposal ${entry.scoreProposal.previousScore}/5 -> ${entry.scoreProposal.newScore}/5 (${entry.scoreProposal.status || "pending"})`
+      : "";
+    return `- **${role}:** ${markdownEscapeInline(body || "(empty)")}${proposal}`;
+  }).join("\n");
+}
+
+function buildScorecardMarkdown(uc, dims = []) {
+  const title = String(uc?.attributes?.title || uc?.rawInput || uc?.id || "Untitled research").trim();
+  const weighted = calcWeightedScore(uc, dims);
+  const conclusion = String(uc?.finalScores?.conclusion || "").trim();
+  const lines = [];
+
+  lines.push(`# ${title}`);
+  lines.push("");
+  lines.push(`- Research ID: ${markdownEscapeInline(uc?.id || "")}`);
+  lines.push("- Output mode: scorecard");
+  lines.push(`- Exported at: ${new Date().toISOString()}`);
+  if (Number.isFinite(Number(weighted))) lines.push(`- Weighted score: ${Number(weighted)}%`);
+  lines.push("");
+
+  lines.push("## Input");
+  lines.push("");
+  lines.push(markdownTextBlock(uc?.rawInput || "No input captured."));
+  lines.push("");
+
+  if (conclusion) {
+    lines.push("## Strategic Conclusion");
+    lines.push("");
+    lines.push(markdownTextBlock(conclusion));
+    lines.push("");
+  }
+
+  lines.push("## Dimension Analysis");
+  lines.push("");
+
+  if (!Array.isArray(dims) || !dims.length) {
+    lines.push("No dimensions configured.");
+    lines.push("");
+    return `${lines.join("\n")}\n`;
+  }
+
+  dims.forEach((dim) => {
+    const view = getDimensionView(uc, dim.id, { dimLabel: dim.label, dim });
+    const critic = uc?.critique?.dimensions?.[dim.id] || {};
+    const score = view?.effectiveScore;
+    const confidence = String(view?.confidence || "").trim() || "unknown";
+    const confidenceReason = String(view?.confidenceReason || "").trim();
+    const brief = markdownTextBlock(view?.brief || "");
+    const full = markdownTextBlock(view?.full || "");
+    const risks = markdownTextBlock(view?.risks || "");
+    const researchBrief = view?.researchBrief || null;
+    const supporting = Array.isArray(view?.supportingArguments) ? view.supportingArguments : [];
+    const limiting = Array.isArray(view?.limitingArguments) ? view.limitingArguments : [];
+    const followUps = uc?.followUps?.[dim.id] || [];
+
+    lines.push(`### ${dim.label}`);
+    lines.push("");
+    lines.push(`- Score: ${score == null ? "-" : `${score}/5`}`);
+    lines.push(`- Weight: ${Number(dim?.weight) || 0}%`);
+    lines.push(`- Confidence: ${confidence}${confidenceReason ? ` (${markdownEscapeInline(confidenceReason)})` : ""}`);
+    lines.push(`- Stage: ${markdownEscapeInline(view?.stageLabel || "unknown")}`);
+    lines.push("");
+
+    if (brief) {
+      lines.push("#### Brief");
+      lines.push("");
+      lines.push(brief);
+      lines.push("");
+    }
+
+    if (full) {
+      lines.push("#### Full Analysis");
+      lines.push("");
+      lines.push(full);
+      lines.push("");
+    }
+
+    if (risks) {
+      lines.push("#### Risks");
+      lines.push("");
+      lines.push(risks);
+      lines.push("");
+    }
+
+    lines.push("#### Supporting Evidence");
+    lines.push("");
+    if (supporting.length) {
+      supporting.forEach((arg) => {
+        const claim = markdownEscapeInline(arg?.claim || "Unnamed claim");
+        const detail = markdownEscapeInline(arg?.detail || "");
+        const discarded = arg?.status === "discarded";
+        const prefix = discarded ? "[discarded] " : "";
+        lines.push(`- ${prefix}${claim}${detail ? ` - ${detail}` : ""}`);
+      });
+    } else {
+      lines.push("- None.");
+    }
+    lines.push("");
+
+    lines.push("#### Limiting Factors");
+    lines.push("");
+    if (limiting.length) {
+      limiting.forEach((arg) => {
+        const claim = markdownEscapeInline(arg?.claim || "Unnamed factor");
+        const detail = markdownEscapeInline(arg?.detail || "");
+        const discarded = arg?.status === "discarded";
+        const prefix = discarded ? "[discarded] " : "";
+        lines.push(`- ${prefix}${claim}${detail ? ` - ${detail}` : ""}`);
+      });
+    } else {
+      lines.push("- None.");
+    }
+    lines.push("");
+
+    if (researchBrief) {
+      lines.push("#### Research Brief");
+      lines.push("");
+      const missingEvidence = markdownTextBlock(researchBrief?.missingEvidence || "");
+      if (missingEvidence) {
+        lines.push(`- Missing evidence: ${markdownEscapeInline(missingEvidence)}`);
+      }
+      const whereToLook = Array.isArray(researchBrief?.whereToLook) ? researchBrief.whereToLook.filter(Boolean) : [];
+      if (whereToLook.length) {
+        lines.push("- Where to look:");
+        whereToLook.forEach((item) => lines.push(`  - ${markdownEscapeInline(item)}`));
+      }
+      const suggestedQueries = Array.isArray(researchBrief?.suggestedQueries) ? researchBrief.suggestedQueries.filter(Boolean) : [];
+      if (suggestedQueries.length) {
+        lines.push("- Suggested queries:");
+        suggestedQueries.forEach((item) => lines.push(`  - ${markdownEscapeInline(item)}`));
+      }
+      if (!missingEvidence && !whereToLook.length && !suggestedQueries.length) {
+        lines.push("- No research brief details.");
+      }
+      lines.push("");
+    }
+
+    lines.push("#### Sources");
+    lines.push("");
+    lines.push(markdownSourcesSection(view?.sources || []));
+    lines.push("");
+
+    lines.push("#### Critic");
+    lines.push("");
+    lines.push(`- Suggested score: ${critic?.suggestedScore == null ? "-" : `${critic.suggestedScore}/5`}`);
+    lines.push(`- Score justified: ${critic?.scoreJustified == null ? "-" : String(critic.scoreJustified)}`);
+    lines.push(`- Note: ${markdownEscapeInline(critic?.critique || "No critic comment.")}`);
+    lines.push("- Critic sources:");
+    const criticSources = markdownSourcesSection(critic?.sources || []).split("\n");
+    criticSources.forEach((line) => lines.push(`  ${line}`));
+    lines.push("");
+
+    lines.push("#### Follow-up Thread");
+    lines.push("");
+    lines.push(markdownThreadSection(followUps));
+    lines.push("");
+  });
+
+  return `${lines.join("\n")}\n`;
+}
+
+function buildMatrixMarkdown(uc) {
+  const title = String(uc?.attributes?.title || uc?.rawInput || uc?.id || "Untitled matrix research").trim();
+  const matrix = uc?.matrix || {};
+  const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
+  const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const coverage = matrix?.coverage || {};
+  const lines = [];
+
+  lines.push(`# ${title}`);
+  lines.push("");
+  lines.push(`- Research ID: ${markdownEscapeInline(uc?.id || "")}`);
+  lines.push("- Output mode: matrix");
+  lines.push(`- Exported at: ${new Date().toISOString()}`);
+  lines.push(`- Cells: ${Number(coverage?.totalCells) || cells.length}`);
+  lines.push(`- Low-confidence cells: ${Number(coverage?.lowConfidenceCells) || 0}`);
+  lines.push(`- Critic flags: ${Number(coverage?.contestedCells) || 0}`);
+  lines.push("");
+
+  const decisionQuestion = markdownTextBlock(matrix?.decisionQuestion || "");
+  if (decisionQuestion) {
+    lines.push("## Decision Question");
+    lines.push("");
+    lines.push(decisionQuestion);
+    lines.push("");
+  }
+
+  lines.push("## Subjects");
+  lines.push("");
+  if (subjects.length) {
+    subjects.forEach((subject) => lines.push(`- ${markdownEscapeInline(subject?.label || subject?.id || "Unknown subject")}`));
+  } else {
+    lines.push("- No subjects.");
+  }
+  lines.push("");
+
+  lines.push("## Attributes");
+  lines.push("");
+  if (attributes.length) {
+    attributes.forEach((attribute) => {
+      const label = markdownEscapeInline(attribute?.label || attribute?.id || "Unknown attribute");
+      const brief = markdownEscapeInline(attribute?.brief || "");
+      lines.push(`- ${label}${brief ? ` - ${brief}` : ""}`);
+    });
+  } else {
+    lines.push("- No attributes.");
+  }
+  lines.push("");
+
+  if (subjects.length && attributes.length) {
+    const cellMap = new Map();
+    cells.forEach((cell) => {
+      const key = `${String(cell?.subjectId || "")}::${String(cell?.attributeId || "")}`;
+      cellMap.set(key, cell);
+    });
+
+    lines.push("## Matrix (compact)");
+    lines.push("");
+    lines.push(`| Subject | ${attributes.map((attribute) => markdownEscapeInline(attribute?.label || attribute?.id || "Attribute")).join(" | ")} |`);
+    lines.push(`| --- | ${attributes.map(() => "---").join(" | ")} |`);
+    subjects.forEach((subject) => {
+      const row = attributes.map((attribute) => {
+        const key = `${String(subject?.id || "")}::${String(attribute?.id || "")}`;
+        const cell = cellMap.get(key);
+        const confidence = String(cell?.confidence || "").trim().toLowerCase();
+        const confidenceMark = confidence === "high" ? "H" : confidence === "medium" ? "M" : confidence === "low" ? "L" : "-";
+        const value = markdownEscapeInline(limitWords(cell?.value || "", 16) || "-");
+        return `[${confidenceMark}] ${value}`;
+      });
+      lines.push(`| ${markdownEscapeInline(subject?.label || subject?.id || "Unknown subject")} | ${row.join(" | ")} |`);
+    });
+    lines.push("");
+  }
+
+  lines.push("## Cell Details");
+  lines.push("");
+  if (cells.length) {
+    const subjectLabelById = new Map(subjects.map((subject) => [subject.id, subject.label || subject.id]));
+    const attributeLabelById = new Map(attributes.map((attribute) => [attribute.id, attribute.label || attribute.id]));
+    cells.forEach((cell) => {
+      const subjectLabel = subjectLabelById.get(cell?.subjectId) || cell?.subjectId || "Unknown subject";
+      const attributeLabel = attributeLabelById.get(cell?.attributeId) || cell?.attributeId || "Unknown attribute";
+      lines.push(`### ${markdownEscapeInline(subjectLabel)} x ${markdownEscapeInline(attributeLabel)}`);
+      lines.push("");
+      lines.push(`- Confidence: ${markdownEscapeInline(cell?.confidence || "unknown")}${cell?.confidenceReason ? ` (${markdownEscapeInline(cell.confidenceReason)})` : ""}`);
+      lines.push(`- Critic flagged: ${cell?.contested ? "yes" : "no"}`);
+      if (cell?.analystDecision) lines.push(`- Analyst decision: ${markdownEscapeInline(cell.analystDecision)}`);
+      if (cell?.analystNote) lines.push(`- Analyst note: ${markdownEscapeInline(cell.analystNote)}`);
+      lines.push("");
+      lines.push(markdownTextBlock(cell?.value || "No value."));
+      lines.push("");
+      lines.push("Sources:");
+      lines.push(markdownSourcesSection(cell?.sources || []));
+      lines.push("");
+    });
+  } else {
+    lines.push("No matrix cells.");
+    lines.push("");
+  }
+
+  const subjectSummaries = Array.isArray(matrix?.subjectSummaries) ? matrix.subjectSummaries : [];
+  if (subjectSummaries.length) {
+    const subjectLabelById = new Map(subjects.map((subject) => [subject.id, subject.label || subject.id]));
+    lines.push("## Subject Summaries");
+    lines.push("");
+    subjectSummaries.forEach((summary) => {
+      const label = subjectLabelById.get(summary?.subjectId) || summary?.subjectId || "Unknown subject";
+      lines.push(`### ${markdownEscapeInline(label)}`);
+      lines.push("");
+      lines.push(markdownTextBlock(summary?.summary || "No summary."));
+      lines.push("");
+    });
+  }
+
+  const crossMatrixSummary = markdownTextBlock(matrix?.crossMatrixSummary || "");
+  if (crossMatrixSummary) {
+    lines.push("## Cross-Matrix Summary");
+    lines.push("");
+    lines.push(crossMatrixSummary);
+    lines.push("");
+  }
+
+  const discover = uc?.discover || {};
+  const suggestedSubjects = Array.isArray(discover?.suggestedSubjects) ? discover.suggestedSubjects : [];
+  const suggestedAttributes = Array.isArray(discover?.suggestedAttributes) ? discover.suggestedAttributes : [];
+  if (suggestedSubjects.length || suggestedAttributes.length) {
+    lines.push("## Discovery Suggestions");
+    lines.push("");
+    if (suggestedSubjects.length) {
+      lines.push("### Suggested Subjects");
+      lines.push("");
+      suggestedSubjects.forEach((item) => {
+        lines.push(`- ${markdownEscapeInline(item?.label || "Unknown")} - ${markdownEscapeInline(item?.reason || "")}`);
+      });
+      lines.push("");
+    }
+    if (suggestedAttributes.length) {
+      lines.push("### Suggested Attributes");
+      lines.push("");
+      suggestedAttributes.forEach((item) => {
+        lines.push(`- ${markdownEscapeInline(item?.label || "Unknown")} - ${markdownEscapeInline(item?.reason || "")}`);
+      });
+      lines.push("");
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function exportSingleUseCaseMarkdown(uc, dims = []) {
+  const outputMode = String(uc?.outputMode || (uc?.matrix ? "matrix" : "scorecard")).trim().toLowerCase();
+  const markdown = outputMode === "matrix"
+    ? buildMatrixMarkdown(uc)
+    : buildScorecardMarkdown(uc, Array.isArray(dims) ? dims : []);
+  const tag = safeFilePart(uc?.attributes?.title || uc?.rawInput || uc?.id || "research");
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8;" });
+  downloadBlob(`research-report-${tag}-${timestampTag()}.md`, blob);
+  return markdown;
+}
+
 function parseEnvelope(text) {
   let parsed;
   try {

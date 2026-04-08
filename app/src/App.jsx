@@ -8,6 +8,7 @@ import {
   openSingleUseCaseHtml,
   exportSingleUseCasePdf,
   exportSingleUseCaseImagesZip,
+  exportSingleUseCaseMarkdown,
   exportSingleUseCaseJson,
   importUseCasesFromJsonText,
 } from "./lib/export";
@@ -1155,6 +1156,11 @@ export default function App({
               const researchExportItems = ucIsMatrix
                 ? [
                   {
+                    key: "markdown",
+                    label: "Export Markdown",
+                    action: () => exportSingleUseCaseMarkdown(uc, ucConfig?.attributes || []),
+                  },
+                  {
                     key: "json",
                     label: "Export JSON",
                     action: () => exportSingleUseCaseJson(uc, ucConfig?.attributes || []),
@@ -1164,6 +1170,7 @@ export default function App({
                   { key: "html", label: "Export HTML", action: () => openSingleUseCaseHtml(uc, ucDims) },
                   { key: "pdf", label: "Export PDF", action: () => exportSingleUseCasePdf(uc, ucDims) },
                   { key: "images", label: "Export Images ZIP", action: () => exportSingleUseCaseImagesZip(uc, ucDims) },
+                  { key: "markdown", label: "Export Markdown", action: () => exportSingleUseCaseMarkdown(uc, ucDims) },
                   {
                     key: "json",
                     label: "Export JSON",
