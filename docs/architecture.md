@@ -71,7 +71,8 @@ handleFollowUp(input, config, callbacks)
 | `api/` | Vercel serverless routes: `analyst.js`, `critic.js`, `fetch-source.js`, `providerConfig.js` |
 | `src/components/` | React UI components (tabs, pills, badges, lists, threads) |
 | `src/hooks/` | `useAnalysis.js`, `useFollowUp.js` — orchestration hooks that wire engine to React state |
-| `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation) |
+| `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation), `seo.js` (meta tag management), `routes.js` (URL ↔ config resolution) |
+| `scripts/` | Build-time scripts: `prerender-meta.js` (stamps route-specific SEO tags into static HTML) |
 
 ### configs/ — Research Configurations
 
@@ -176,6 +177,25 @@ Classifies user intent into one of 6 types, then executes intent-specific logic:
 
 ---
 
+## Routing, SEO & Static Prerendering
+
+The app is a client-side SPA. Routing is handled by a custom router (`ResearchitRoot.jsx`) that reads `window.location.pathname` and resolves it to a config via `lib/routes.js`. No React Router dependency.
+
+**URL structure:**
+- `/` — homepage (landing page)
+- `/{slug}/` — research workspace for a specific config (e.g. `/startup-validation/`)
+- `/workspace`, `/research/{slug}` — legacy paths, redirected client-side
+
+**Static prerendering:** At build time, `app/scripts/prerender-meta.js` runs after `vite build`. It reads the config list, generates route-specific `<title>`, `<meta>`, `<link rel="canonical">`, and JSON-LD, and writes one `index.html` per route into `dist/{slug}/index.html`. Vercel serves these static files directly — no rewrite needed for known slugs.
+
+A single catch-all rewrite in `vercel.json` handles unknown paths, falling back to `dist/index.html` where the SPA router renders a 404.
+
+**Client-side SEO updates:** `lib/seo.js` updates meta tags dynamically on in-app navigation (e.g., user switches configs). The prerendered HTML covers the first page load for search engines and direct URL access; the client-side `applySeoMeta()` covers subsequent navigations within the SPA.
+
+**Adding a new route:** Add the config to `configs/research-configurations.js` with a `slug` entry. The prerender script and router pick it up automatically — no changes to `vercel.json` or routing code needed.
+
+---
+
 ## Key Design Decisions
 
 | Decision | Choice | Rationale |
@@ -186,6 +206,7 @@ Classifies user intent into one of 6 types, then executes intent-specific logic:
 | Prompt ownership | Engine ships generic defaults; product overrides via config | Engine stays product-agnostic |
 | Serverless routes | Stay in product shell, not engine | Engine is library-only, never a server |
 | Dimension config | JS modules (not JSON) | Importable, supports comments, can reference engine defaults |
+| SEO prerendering | Build-time meta injection, not SSR | All routes are known at build time; avoids server runtime complexity |
 
 ---
 
