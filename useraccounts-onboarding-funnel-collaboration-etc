@@ -1,0 +1,63 @@
+## Scenario 1 — New User
+
+1. User lands on homepage — hero with input + research type selector visible immediately
+2. Below hero: "How it works" — three steps explaining Analyst, Critic, output structure
+3. Below that: tabbed demo researches by type — user clicks tab matching their interest, reads full output including Critic challenge, cost breakdown visible
+4. User types own question, selects research type, hits "Run research"
+5. Email gate appears inline: "Enter your email to run this research free"
+6. Magic link sent → user clicks in same tab → run starts immediately
+7. Results load: dimensions, scores, evidence blocks, Critic challenge
+8. Results page footer: "API cost: $0.43 · Service fee 30%: $0.13 · You paid: $0.00 (free run) · Future runs from $0.56"
+9. Countdown visible below results: "This research is stored for 47h 23m. Top up to save it permanently."
+10. User tries to export → "Export requires balance. Top up to continue."
+11. Top-up screen: 3 USD-priced packs + BYOK option with copy: "Use your own API key — your data goes directly to the model provider, never through our servers"
+12. Stripe Checkout → returns to tab → balance shown in header as "$4.50 remaining"
+13. Research saved permanently, export unlocked → user downloads JSON + Markdown
+14. User runs second research → balance decrements in real-time, shown in header
+
+---
+
+## Scenario 2 — Returning User
+
+1. User returns to researchit.app — auto-authenticated via JWT, balance shown as "$X.XX remaining"
+2. Previous researches listed in sidebar — readable, each with Export / Delete options visible
+3. User selects research type, enters question, hits run — no friction
+4. Run completes, balance decrements
+5. One dimension returns Low confidence → evidence block explains what's missing + brief: where to find the missing evidence
+6. User clicks "Share" → selects one or more researches from their list → share link generated
+7. User pastes link into Slack
+8. Later: balance low → subtle header nudge: "$1.20 remaining"
+9. User starts deep run with insufficient balance → pre-run cost estimate shown → two options: top up, or switch to standard run (no Critic, no web search) at lower cost
+10. User tops up → Stripe Checkout → balance restored → run continues
+
+**JWT expired or new device:**
+1. User arrives — no balance in header, "Sign in" visible
+2. User clicks "Sign in" → email input only, no password
+3. Magic link sent → user clicks → JWT issued → balance restored
+4. Note visible: "Your balance is synced. Research history is stored on our servers — export or delete anytime."
+
+**Privacy-first user:**
+1. After any run: Export (JSON), Delete, and Import options always visible on every research
+2. User exports JSON → deletes research from server → data gone
+3. User returns later → imports JSON → continues with follow-up run or challenge thread
+4. Settings footer: "We store only your email hash, balance, and research you haven't deleted. Export anytime, delete anytime."
+
+---
+
+## Scenario 3 — Shared Research + Collaborative Challenge
+
+1. Owner selects one or more researches from their list, clicks "Share"
+2. Share link generated — one link regardless of how many researches selected
+3. Owner pastes link into Slack (or email, WhatsApp — tool doesn't care)
+4. **Marcus** opens link — no account prompt, full research visible
+5. If multiple researches shared: list view shows each research with dimension score summary row — Marcus clicks into whichever interests him
+6. Banner at top: "This link expires in 47h · Sign up to keep access" and "Run your own research — first one's free"
+7. Marcus comments on a specific dimension → text field opens → comment appears inline flagged as "External reviewer"
+8. **Priya** opens same link on phone — mobile layout, sees Marcus's comment, adds reply nested inline
+9. **Owner** receives email notification: "2 new comments on your shared research"
+10. Owner opens research from their list — sees all comments inline, replies
+11. **Marcus** clicks "Sign up to keep access" → email → magic link → account created
+12. Shared research now permanently accessible to Marcus — no expiry, appears in his "Shared with me" list
+13. Marcus sees CTA: "Run your own research — first one's free" → runs research → becomes user
+14. **Priya** doesn't sign up → access expires after 48hr → sees "Sign up to keep access" on next visit
+15. Owner can see in share management: who has account access vs. link-only access, can revoke per person or per research anytime
