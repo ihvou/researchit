@@ -1,6 +1,6 @@
-# Researchit
+# Research it
 
-Researchit is a strategic research application for founders, executives, and analysts.
+Research it is a strategic research application for founders, executives, and analysts.
 It runs evidence-first research workflows with analyst generation plus critic challenge.
 
 ## Primary URL

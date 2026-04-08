@@ -482,6 +482,7 @@ export default function App({
   const activeDims = isMatrixMode ? [] : dims.filter(d => d.enabled);
   const totalWeight = isMatrixMode ? 0 : dims.reduce((s, d) => s + d.weight, 0);
   const methodology = activeConfig?.methodology || "";
+  const methodologySources = Array.isArray(activeConfig?.methodologySources) ? activeConfig.methodologySources : [];
   const activeInputSpec = activeConfig?.inputSpec || {};
   const inputPanelLabel = String(activeInputSpec?.label || "New Research - describe what should be researched").trim();
   const inputPanelPlaceholder = String(
@@ -559,10 +560,10 @@ export default function App({
                     padding: 0,
                     margin: 0,
                   }}>
-                  Researchit
+                  Research it
                 </button>
               ) : (
-                <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
+                <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Research it</span>
               )}
             </div>
           <div style={{ minWidth: 0, flex: 1, marginLeft: 16, display: "flex", justifyContent: "flex-end" }}>
@@ -748,6 +749,25 @@ export default function App({
             <p className="methodology-text" style={{ fontSize: 13, color: "var(--ck-muted)", lineHeight: 1.5 }}>
               {methodology || "No methodology description is available for this configuration yet."}
             </p>
+            {methodologySources.length ? (
+              <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                  Source References
+                </div>
+                <div style={{ display: "grid", gap: 3 }}>
+                  {methodologySources.map((source) => (
+                    <a
+                      key={`${source.label}-${source.url}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontSize: 12, color: "var(--ck-accent)", textDecoration: "none", lineHeight: 1.45 }}>
+                      {source.label}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {isMatrixMode && subjectsSpec ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
                 <strong style={{ color: "var(--ck-text)" }}>{subjectsLabel} input:</strong> {subjectsPrompt}
@@ -972,51 +992,34 @@ export default function App({
             {importWarning}
           </div>
         )}
-        {visibleUseCases.length === 0 ? (
-          <div style={{ textAlign: "left", padding: "32px 20px", maxWidth: 760, margin: "0 auto", background: "var(--ck-surface)", borderRadius: 2, border: "1px solid var(--ck-line)" }}>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ck-text)", marginBottom: 8 }}>
-              Researchit
-            </div>
-            <div style={{ fontSize: 13, color: "var(--ck-muted)", marginBottom: 14 }}>
-              Add one research and the tool will run a structured workflow.
-            </div>
+        {visibleUseCases.length >= 2 ? (
+          <div className="research-list-toolbar">
             <button
               type="button"
-              onClick={() => setShowInputPanel(true)}
-              style={{ background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)", fontWeight: 700, fontSize: 13, padding: "8px 12px" }}>
-              + Research
+              onClick={() => {
+                setExpandAllResearches((prev) => {
+                  const next = !prev;
+                  if (!next) setExpandedId(null);
+                  return next;
+                });
+              }}
+              style={{
+                border: "1px solid var(--ck-line)",
+                background: "var(--ck-surface)",
+                color: "var(--ck-text)",
+                padding: "6px 10px",
+                fontSize: 12,
+                fontWeight: 700,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}>
+              <span>{expandAllResearches ? "Collapse All" : "Expand All"}</span>
+              <ChevronIcon direction={expandAllResearches ? "up" : "down"} size={12} />
             </button>
           </div>
-        ) : (
-          <>
-            {visibleUseCases.length >= 2 ? (
-              <div className="research-list-toolbar">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setExpandAllResearches((prev) => {
-                      const next = !prev;
-                      if (!next) setExpandedId(null);
-                      return next;
-                    });
-                  }}
-                  style={{
-                    border: "1px solid var(--ck-line)",
-                    background: "var(--ck-surface)",
-                    color: "var(--ck-text)",
-                    padding: "6px 10px",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}>
-                  <span>{expandAllResearches ? "Collapse All" : "Expand All"}</span>
-                  <ChevronIcon direction={expandAllResearches ? "up" : "down"} size={12} />
-                </button>
-              </div>
-            ) : null}
-            <div className="research-list">
+        ) : null}
+        <div className="research-list">
             {visibleUseCases.map((uc) => {
               const ucConfig = RESEARCH_CONFIGS.find((config) => config.id === (uc?.researchConfigId || activeConfig.id))
                 || activeConfig;
@@ -1394,9 +1397,7 @@ export default function App({
                 </article>
               );
             })}
-            </div>
-          </>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { getResearchPath, getConfigSlug } from "./routes";
 
-const SITE_NAME = "Researchit";
-const DEFAULT_DESCRIPTION = "Researchit helps founders, executives, and analysts run evidence-first strategic research with analyst-plus-critic validation.";
+const SITE_NAME = "Research it";
+const DEFAULT_DESCRIPTION = "Research it helps founders, executives, and analysts run evidence-first strategic research with analyst-plus-critic validation.";
 const DEFAULT_KEYWORDS = [
   "strategic research tool",
   "market analysis",
@@ -93,7 +93,7 @@ export function applySeoMeta(meta) {
 }
 
 export function buildHomeSeoMeta() {
-  const title = "Researchit | Evidence-First Strategic Research for Decision Teams";
+  const title = "Research it | Evidence-First Strategic Research for Decision Teams";
   const description = "Run startup validation, market-entry, competitive, GTM, and investment research with structured evidence, confidence, and critic challenge in one workspace.";
   const canonical = toAbsoluteUrl("/");
   return {
@@ -125,11 +125,11 @@ export function buildResearchSeoMeta(config) {
   const label = String(config?.tabLabel || config?.name || "Research").trim() || "Research";
   const methodology = summarizeMethodology(config?.methodology, 230);
   const description = methodology
-    ? `${methodology} Use Researchit to pressure-test this decision with evidence and a critic pass.`
-    : `Run ${label} research in Researchit with evidence-backed scoring and analyst/critic review.`;
+    ? `${methodology} Use Research it to pressure-test this decision with evidence and a critic pass.`
+    : `Run ${label} research in Research it with evidence-backed scoring and analyst/critic review.`;
   const path = getResearchPath(config);
   const canonical = toAbsoluteUrl(path);
-  const title = `${label} Research | Researchit`;
+  const title = `${label} Research | Research it`;
   const aboutSource = Array.isArray(config?.dimensions) && config.dimensions.length
     ? config.dimensions
     : (Array.isArray(config?.attributes) ? config.attributes : []);
@@ -165,8 +165,8 @@ export function buildResearchSeoMeta(config) {
 export function buildNotFoundSeoMeta(pathname = "/") {
   const canonical = toAbsoluteUrl(pathname);
   return {
-    title: "Page Not Found | Researchit",
-    description: "The requested Researchit page could not be found.",
+    title: "Page Not Found | Research it",
+    description: "The requested Research it page could not be found.",
     canonical,
     robots: "noindex,nofollow",
     ogType: "website",
@@ -176,7 +176,7 @@ export function buildNotFoundSeoMeta(pathname = "/") {
       "@type": "WebPage",
       name: "Page Not Found",
       url: canonical,
-      description: "The requested Researchit page could not be found.",
+      description: "The requested Research it page could not be found.",
     },
   };
 }

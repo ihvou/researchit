@@ -16,7 +16,7 @@ const AUDIENCE_BLOCKS = [
 const POWER_BLOCKS = [
   {
     title: "Evidence-first by default",
-    text: "Researchit prioritizes verifiable evidence before scoring or recommendations.",
+    text: "Research it prioritizes verifiable evidence before scoring or recommendations.",
   },
   {
     title: "Built-in critic pass",
@@ -52,7 +52,7 @@ export default function LandingPage({
             <span className="landing-logo-number">75</span>
             <span className="landing-logo-mark">Re</span>
           </div>
-          <span className="landing-brand-name">Researchit</span>
+          <span className="landing-brand-name">Research it</span>
         </div>
         <div className="landing-top-actions">
           <button
@@ -69,7 +69,7 @@ export default function LandingPage({
           <p className="landing-kicker">Strategic Research Instrument</p>
           <h1>Make higher-stakes decisions with evidence you can defend.</h1>
           <p className="landing-subtitle">
-            Researchit helps founders, executives, and analysts evaluate ideas, markets, channels, and competitors using a structured analyst-plus-critic workflow.
+            Research it helps founders, executives, and analysts evaluate ideas, markets, channels, and competitors using a structured analyst-plus-critic workflow.
           </p>
           <div className="landing-hero-actions">
             <button
@@ -82,7 +82,7 @@ export default function LandingPage({
         </section>
 
         <section className="landing-grid-section">
-          <h2>Why Teams Use Researchit</h2>
+          <h2>Why Founders, Leaders, and Analysts Use Research it</h2>
           <div className="landing-grid landing-grid-4">
             {POWER_BLOCKS.map((item) => (
               <article key={item.title} className="landing-card">

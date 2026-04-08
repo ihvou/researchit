@@ -161,6 +161,19 @@ function normalizeFramingFields(framingFields = []) {
   return normalized.length ? normalized : DEFAULT_FRAMING_FIELDS;
 }
 
+function normalizeMethodologySources(sources = []) {
+  if (!Array.isArray(sources)) return [];
+  return sources
+    .map((source) => {
+      const label = String(source?.label || "").trim();
+      const url = String(source?.url || "").trim();
+      if (!label || !/^https?:\/\//i.test(url)) return null;
+      return { label, url };
+    })
+    .filter(Boolean)
+    .slice(0, 16);
+}
+
 function normalizeOutputMode(value) {
   return String(value || "").trim().toLowerCase() === "matrix" ? "matrix" : "scorecard";
 }
@@ -258,8 +271,38 @@ const CONFIG_SPECS = [
   {
     "id": "startup-product-idea-validation",
     "name": "Startup / Product Idea Validation",
-    "methodology": "This type of research is anchored in Jobs to Be Done and Outcome-Driven Innovation for problem selection and unmet need quality; Sequoia's Arc product-market fit framework for market, product, and customer fit; a16z's work on growth metrics and distribution moats for early evidence quality and go-to-market realism; Hamilton Helmer's *7 Powers* for whether a promising idea could ever become defensible; and Marty Cagan's *Transformed* for product discovery discipline and evidence over opinion. I weighted problem reality and demand evidence above \"idea quality,\" because current practitioner thinking treats false positives on demand as the most common early-stage decision error.",
-        "relatedDiscovery": true,
+    "methodology": "This type of research combines Jobs to Be Done for clarifying customer progress, Outcome-Driven Innovation for identifying unmet outcomes, Sequoia Arc's product-market-fit archetypes for market/product/customer alignment, a16z guidance on startup metrics and distribution design for early traction realism, 7 Powers for defensibility assessment, and SVPG's product operating model principles for disciplined discovery and decision-making.",
+    "methodologySources": [
+      {
+        "label": "Jobs to Be Done Theory (Christensen Institute)",
+        "url": "https://www.christenseninstitute.org/video/what-is-jobs-to-be-done-theory/"
+      },
+      {
+        "label": "Outcome-Driven Innovation (Strategyn)",
+        "url": "https://strategyn.com/outcome-driven-innovation/"
+      },
+      {
+        "label": "The Arc Product-Market Fit Framework (Sequoia)",
+        "url": "https://www.sequoiacap.com/article/pmf-framework/"
+      },
+      {
+        "label": "16 Startup Metrics (a16z)",
+        "url": "https://a16z.com/16-startup-metrics/"
+      },
+      {
+        "label": "Distribution (a16z)",
+        "url": "https://a16z.com/distribution/"
+      },
+      {
+        "label": "7 Powers (Hamilton Helmer)",
+        "url": "https://7powers.com/"
+      },
+      {
+        "label": "TRANSFORMED: Moving to the Product Operating Model (SVPG)",
+        "url": "https://www.svpg.com/books/transformed-moving-to-the-product-operating-model/"
+      }
+    ],
+    "relatedDiscovery": true,
     "dimensions": [
       {
         "id": "problem-severity",
@@ -811,6 +854,7 @@ export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   framingFields: normalizeFramingFields(spec.framingFields || DEFAULT_FRAMING_FIELDS),
   relatedDiscovery: spec.relatedDiscovery !== false,
   methodology: spec.methodology || "",
+  methodologySources: normalizeMethodologySources(spec.methodologySources || []),
   prompts: BASE_PROMPTS,
   models: SHARED_MODELS,
   limits: SHARED_LIMITS,

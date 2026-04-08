@@ -8,10 +8,10 @@ import { applySeoMeta, buildHomeSeoMeta, buildNotFoundSeoMeta, buildResearchSeoM
 const FEATURED_CONFIG_IDS = [
   "startup-product-idea-validation",
   "market-entry-analysis",
+  "competitors-comparison-matrix",
+  "channel-gtm-analysis-matrix",
   "competitive-landscape",
-  "build-vs-buy-technology-decision",
-  "investment-m-and-a-screening",
-  "channel-gtm-analysis-scorecard",
+  "market-sizing-tam-sam-som",
 ];
 
 function readPathname() {
@@ -91,7 +91,7 @@ export default function ResearchitRoot() {
               type="button"
               className="landing-brand-home"
               onClick={() => navigateTo(HOME_PATH)}>
-              Researchit
+              Research it
             </button>
           </div>
         </header>
