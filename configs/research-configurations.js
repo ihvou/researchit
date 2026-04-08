@@ -280,8 +280,8 @@ const CONFIG_SPECS = [
   {
     "id": "startup-product-idea-validation",
     "name": "Startup / Product Idea Validation",
-    "shortDescription": "Stress-test startup or product ideas with evidence on pain intensity, demand quality, GTM feasibility, and defensibility.",
-    "methodology": "This type of research combines [Jobs to Be Done](https://www.christenseninstitute.org/video/what-is-jobs-to-be-done-theory/) for clarifying customer progress, [Outcome-Driven Innovation](https://strategyn.com/outcome-driven-innovation/) for unmet outcomes, Sequoia Arc's [product-market-fit framework](https://www.sequoiacap.com/article/pmf-framework/) for market/product/customer alignment, a16z guidance on [startup metrics](https://a16z.com/16-startup-metrics/) and [distribution](https://a16z.com/distribution/) for early traction realism, [7 Powers](https://7powers.com/) for defensibility assessment, and SVPG's [product operating model](https://www.svpg.com/books/transformed-moving-to-the-product-operating-model/) principles for disciplined discovery and decision-making.",
+    "shortDescription": "Scores a startup or product idea across demand evidence, segment clarity, monetization logic, and defensibility. Structured to surface the dimensions founders most commonly misjudge before committing resources.",
+    "methodology": "Dimension selection and weighting draw on four frameworks. Jobs to Be Done and Outcome-Driven Innovation (Christensen, Ulwick — https://strategyn.com/outcome-driven-innovation/) structure the problem severity and unmet need dimensions around behavioral evidence rather than feature gaps. Sequoia's Arc Product-Market Fit framework (https://sequoiacap.com/article/pmf-framework/) informs the market, product, and customer fit dimensions. Hamilton Helmer's 7 Powers (https://www.7powers.com/) structures the defensibility dimension around durable competitive advantage rather than feature differentiation. Marty Cagan's product discovery practice as documented in Empowered (https://www.svpg.com/empowered/) grounds the demand evidence dimension in behavioral signals over stated intent. Dimension weights reflect practitioner consensus that false positives on demand are the most costly early-stage error — problem severity and demand evidence carry higher weight than defensibility, which is typically emergent rather than demonstrable at idea stage.",
     "relatedDiscovery": true,
     "dimensions": [
       {
@@ -346,8 +346,8 @@ const CONFIG_SPECS = [
   {
     "id": "market-entry-analysis",
     "name": "Market Entry Analysis",
-    "shortDescription": "Evaluate whether a specific offer has a credible right-to-win in a target geography or segment.",
-    "methodology": "This type of research is grounded in McKinsey's current \"where to play\" and market-specific competitive-advantage work, especially its emphasis that advantage is context-specific at the intersection of offering, geography, and customer; BCG's strategy and sector work on uneven market conditions and local fit; Bain's strategic-fit logic; and classic strategy books that remain widely used in practice, especially Rumelt on diagnosis and coherent action. The result is not a generic \"country attractiveness\" template: it is a right-to-win test for a specific offer in a specific market.",
+    "shortDescription": "Assesses whether a specific product or company has a credible right to win in a target market. Covers market attractiveness, local need fit, competitive position, regulatory friction, and route-to-market feasibility.",
+    "methodology": "Dimension selection draws on McKinsey's where-to-play / how-to-win framework (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/the-elements-of-strategy) and its emphasis that competitive advantage is context-specific to the intersection of offer, geography, and segment. Local need fit and route-to-market dimensions reflect BCG's local advantage research and Bain's strategic-fit logic. Richard Rumelt's diagnosis-first approach from Good Strategy Bad Strategy informs how the research frames the specific entry hypothesis before assessing dimensions (https://www.penguinrandomhouse.com/books/208668/good-strategy-bad-strategy-by-richard-rumelt/). The framework is structured as a right-to-win assessment for a specific offer in a specific market, not a generic country attractiveness ranking.",
         "relatedDiscovery": true,
     "dimensions": [
       {
@@ -404,8 +404,8 @@ const CONFIG_SPECS = [
   {
     "id": "competitive-landscape",
     "name": "Competitive Landscape",
-    "shortDescription": "Map category structure, competitor advantage quality, and whitespace to assess strategic exposure.",
-    "methodology": "This type of research draws on Helmer's durable-advantage lens, McKinsey's granular competitive-advantage approach, and practitioner venture thinking from a16z and Sequoia that focuses less on feature comparison and more on what actually drives customer choice, market power, and white space. I excluded generic checklist competitor matrices as the scoring backbone; the point here is to understand the structure of advantage, not just list vendors.",
+    "shortDescription": "Produces a structured readout of a competitive situation — category structure, customer choice drivers, advantage quality, and relative positioning risk. Designed for go/no-go strategy decisions, not feature comparison.",
+    "methodology": "Dimension selection draws on Hamilton Helmer's 7 Powers framework (https://www.7powers.com/) for the advantage quality and moat dimensions, and McKinsey's granular competitive advantage approach (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/strategys-biggest-blind-spot-erosion-of-competitive-advantage) for customer choice driver dimensions. The Jobs to Be Done lens (Christensen) informs the competitive positioning dimension. Feature comparison is deliberately excluded as a primary dimension following the practitioner guidance in Marty Cagan's Inspired (https://www.svpg.com/inspired-2/) and ProductPlan's competitive analysis frameworks — feature parity analysis systematically underweights the factors that actually drive customer selection and retention. The Critic is specifically calibrated to challenge the inference that an incumbent's outdated appearance indicates structural weakness, which is among the most common errors in competitive analysis.",
         "relatedDiscovery": false,
     "dimensions": [
       {
@@ -462,8 +462,8 @@ const CONFIG_SPECS = [
   {
     "id": "build-vs-buy-technology-decision",
     "name": "Build vs. Buy / Technology Decision",
-    "shortDescription": "Pressure-test build, buy, and hybrid options using strategic criticality, speed, lock-in, and execution risk.",
-    "methodology": "This type of research uses BCG's current buy-and-build logic, which explicitly favors hybrid approaches when companies need both speed and differentiation; McKinsey's recent framing that build-versus-buy should be evaluated in light of competitive advantage and strategic flexibility; Bain's execution-first view that capabilities should be sequenced to deliver value while building lasting internal strengths; and SVPG's product-operating-model view that capabilities matter only when they materially affect product outcomes. This is why the config gives high weight to strategic criticality and time-to-value instead of treating the choice as a pure cost comparison.",
+    "shortDescription": "Evaluates whether a capability should be built in-house, purchased from a vendor, or handled through a hybrid approach. Scores strategic criticality, time-to-value, integration burden, vendor risk, and internal readiness.",
+    "methodology": "Dimension selection and weighting draw on BCG's buy-and-build strategy framework (https://www.bcg.com/publications/2025/buy-and-build-strategy-unlocks-greater-ops-tech-value), which favors hybrid approaches when companies require both execution speed and strategic differentiation. McKinsey's competitive advantage and strategic flexibility framing informs the strategic criticality dimension (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/how-strategy-champions-win). Bain's execution-first sequencing logic informs the time-to-value dimension. Marty Cagan's product operating model framing from SVPG (https://www.svpg.com/) informs whether a capability materially affects product outcomes. Strategic criticality and time-to-value carry higher weight than total cost of ownership because the build-vs-buy decision is rarely reducible to a cost comparison — capabilities that shape competitive advantage warrant different treatment from infrastructure.",
         "relatedDiscovery": true,
     "dimensions": [
       {
@@ -520,8 +520,8 @@ const CONFIG_SPECS = [
   {
     "id": "investment-m-and-a-screening",
     "name": "Investment / M&A Screening",
-    "shortDescription": "Screen investment or acquisition targets by strategic fit, advantage durability, and value-creation plausibility.",
-    "methodology": "This type of research combines current M&A practice from McKinsey, BCG, and Bain with venture-style quality filters from Sequoia and a16z. The consulting side contributes strategic fit, synergy logic, diligence beyond the standard legal-financial checklist, and repeated emphasis on experienced acquirers, value creation, and deeper diligence. The venture side contributes market quality, growth quality, and defensibility. I deliberately weight quality of advantage and value-creation logic above raw market excitement because practitioners are trying to avoid expensive false positives, not just find \"interesting\" assets.",
+    "shortDescription": "Screens an investment target or M&A candidate across strategic fit, market quality, advantage durability, revenue quality, team risk, and value-creation logic. Structured to surface expensive false positives before diligence spend.",
+    "methodology": "Dimension selection combines M&A practice frameworks from McKinsey (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/done-deal-why-many-large-transactions-fail-to-create-value), BCG, and Bain with venture-quality filters from Sequoia (https://sequoiacap.com/article/pmf-framework/) and a16z (https://a16z.com/). Strategic fit and value-creation logic dimensions follow the McKinsey finding that deals creating shareholder value are primarily those with clear strategic rationale rather than financial engineering. Quality of advantage draws on Hamilton Helmer's 7 Powers (https://www.7powers.com/) applied to the target rather than the acquirer. Dimension weights reflect the practitioner objective of avoiding expensive false positives — strategic fit and advantage quality carry higher weight than market excitement signals, which are more visible but less predictive of deal value.",
         "relatedDiscovery": true,
     "dimensions": [
       {
@@ -578,8 +578,8 @@ const CONFIG_SPECS = [
   {
     "id": "product-expansion-new-feature-adjacent-segment-new-geography",
     "name": "Product Expansion (new feature, adjacent segment, new geography)",
-    "shortDescription": "Assess whether core strengths can transfer into adjacent features, segments, or geographies without value dilution.",
-    "methodology": "This type of research is based on McKinsey's current work on growing within and beyond the core, Bain's long-running but still practitioner-relevant adjacency and \"beyond the core\" logic, Sequoia's product-market-fit framing, and a16z's growth thinking around expansion metrics and land-and-expand behavior. I treat expansion as a transfer test: can the company carry real advantage from the core into a new feature, segment, or geography without destroying focus or economics?",
+    "shortDescription": "Assesses whether a product expansion — new feature, adjacent segment, or new geography — is strategically sound. Scores core strength transferability, customer pull, adjacency attractiveness, operational readiness, and cannibalization risk.",
+    "methodology": "Dimension selection draws on McKinsey's core-to-adjacent expansion framework (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/how-top-performers-use-innovation-to-grow-within-and-beyond-the-core), BCG's adjacency strategy work, and Chris Zook's Profit from the Core (https://www.bain.com/insights/profit-from-the-core/) for the core strength transferability dimension. Customer pull evidence draws on Sequoia's product-market fit signals framework (https://sequoiacap.com/article/pmf-framework/) and SVPG's product discovery practice (https://www.svpg.com/empowered/). Dimension weights reflect the consensus that expansions reusing an existing competitive edge outperform those requiring new capability development from scratch — core strength transferability carries the highest weight as the dimension most predictive of whether the expansion creates sustainable value.",
         "relatedDiscovery": true,
     "dimensions": [
       {
@@ -636,10 +636,10 @@ const CONFIG_SPECS = [
   {
     "id": "market-sizing-tam-sam-som",
     "name": "Market Sizing (TAM/SAM/SOM)",
-    "shortDescription": "Validate TAM/SAM/SOM assumptions through evidence quality, segmentation clarity, and practical reachability.",
+    "shortDescription": "Evaluates the credibility and defensibility of a market sizing case — scoring demand evidence, segment definition, methodology rigor, growth trajectory, and reachability. Dimensions score evidence quality, not absolute market size.",
     "tabLabel": "Market Sizing",
     "outputMode": "scorecard",
-    "methodology": "This type of research is anchored in bottom-up market sizing and triangulation practices used by Sequoia and a16z, with explicit pressure-testing of segment definition and reachability assumptions before trusting topline TAM claims.",
+    "methodology": "Dimension selection draws on bottom-up market sizing methodology as documented in Sequoia's market sizing guidance (https://sequoiacap.com/article/pmf-framework/) and a16z's market analysis frameworks (https://a16z.com/), both of which emphasize segment-specific evidence over top-down industry reports. The bottom-up vs top-down triangulation approach follows the standard methodology described in Y Combinator's startup curriculum (https://www.ycombinator.com/library/4D-how-to-plan-an-mvp) and Bill Gurley's market size framework (https://abovethecrowd.com/2011/05/24/all-revenue-is-not-created-equal-the-keys-to-the-10x-revenue-club/). Dimensions score the quality and defensibility of the evidence, not the absolute scale of the numbers — a $3M local market with rigorous bottom-up evidence scores higher than a $50B global TAM supported only by a single analyst report. Estimated TAM/SAM/SOM figures appear as metadata on the research question rather than as scored dimensions.",
     "relatedDiscovery": true,
     "dimensions": [
       {
@@ -695,11 +695,11 @@ const CONFIG_SPECS = [
   {
     "id": "icp-customer-persona-matrix",
     "name": "ICP / Customer Persona",
-    "shortDescription": "Compare candidate customer segments side by side to identify the strongest initial wedge.",
+    "shortDescription": "Profiles 2–4 customer segments across behavioral pain, decision triggers, willingness to pay, and acquisition channels. Output is a comparison matrix — one column per segment — designed to identify the strongest initial wedge.",
     "tabLabel": "ICP / Persona",
     "outputMode": "matrix",
     "matrixLayout": "subjects-as-columns",
-    "methodology": "This type of research applies Jobs-to-be-Done and modern product discovery practice to compare customer segments based on behavioral evidence, triggers, and willingness to pay.",
+    "methodology": "Attribute selection draws on three frameworks. Jobs to Be Done and Outcome-Driven Innovation (Christensen, Ulwick — https://strategyn.com/outcome-driven-innovation/) structure the core pain and current workarounds attributes around the job the customer is trying to accomplish rather than demographics or feature preferences. The decision trigger attribute follows the demand-side sales approach documented in Competing Against Luck (Christensen, Hall, Dillon, Duncan — https://www.harpercollins.com/products/competing-against-luck-clayton-m-christenstenscott-d-anthonykarl-t-ulwickdavid-s-duncan). The ICP vs buyer persona distinction — account-level fit vs individual decision-maker profile — follows the framework established by OpenView Partners (https://openviewpartners.com/blog/ideal-customer-profile/) and widely adopted in B2B SaaS go-to-market practice. Willingness to pay and procurement friction attributes draw on Van Westendorp's pricing sensitivity methodology and SVPG's customer discovery interview practice (https://www.svpg.com/inspired-2/).",
     "relatedDiscovery": true,
     "subjects": {
       "label": "Customer Segments",
@@ -722,11 +722,11 @@ const CONFIG_SPECS = [
   {
     "id": "competitors-comparison-matrix",
     "name": "Competitors Comparison",
-    "shortDescription": "Compare competitors across positioning, strengths, weaknesses, and moat quality for practical decision support.",
+    "shortDescription": "Maps a set of competitors across target ICP, positioning, strengths, weaknesses, PMF signal, and moat quality. Output is a comparison matrix — one row or column per competitor — designed to identify gaps and positioning opportunities.",
     "tabLabel": "Competitors Comparison",
     "outputMode": "matrix",
     "matrixLayout": "auto",
-    "methodology": "This type of research compares competitors by actual customer choice structure and advantage quality, avoiding feature-checklist analysis.",
+    "methodology": "Attribute selection draws on Hamilton Helmer's 7 Powers framework (https://www.7powers.com/) for the strengths, moat assessment, and PMF signal attributes — evaluating whether competitors hold durable advantages rather than temporary feature leads. The customer choice drivers attribute follows McKinsey's granular competitive advantage methodology (https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights/strategys-biggest-blind-spot-erosion-of-competitive-advantage). The Jobs to Be Done lens (Christensen) informs the core positioning attribute — categorizing competitors by the job they perform for buyers rather than by vendor messaging. Feature checklists are excluded as a primary attribute following the practitioner guidance in Marty Cagan's Inspired (https://www.svpg.com/inspired-2/) — feature comparison systematically misidentifies the factors driving customer choice. The Critic is specifically calibrated to challenge gaps described without evidence of user demand, and PMF signal cells that conflate funding with actual user adoption.",
     "relatedDiscovery": false,
     "subjects": {
       "label": "Competitors",
@@ -749,10 +749,10 @@ const CONFIG_SPECS = [
   {
     "id": "channel-gtm-analysis-scorecard",
     "name": "Channel / GTM Analysis (Scorecard)",
-    "shortDescription": "Evaluate overall GTM strategy quality across channel fit, distribution leverage, economics, and signal speed.",
+    "shortDescription": "Assesses whether a proposed GTM strategy is structurally viable — scoring ICP-channel fit, distribution advantage, CAC sustainability, channel-product fit, and competitive density. Use this when you have a specific GTM hypothesis to pressure-test.",
     "tabLabel": "GTM Strategy",
     "outputMode": "scorecard",
-    "methodology": "This type of research pressure-tests overall GTM strategy quality across ICP-channel fit, unit economics, and time-to-signal constraints.",
+    "methodology": "Dimension selection draws on Brian Balfour's channel-product-market fit framework (https://brianbalfour.com/essays/channel-model-fit-for-user-acquisition), which holds that sustainable growth requires three-way fit between channel, product, and market rather than channel reach alone. Andrew Chen's distribution moat and cold start research (https://andrewchen.com/professional/) informs the distribution advantage dimension. The go-to-market motion taxonomy — self-serve PLG, sales-led, partner-led, community-led — follows OpenView Partners' product-led growth framework (https://openviewpartners.com/product-led-growth/). Dimension weights reflect the principle that ICP-channel fit and distribution advantage are structural — they determine whether the GTM is viable at all — while CAC sustainability and competitive density refine execution once structural viability is established.",
     "relatedDiscovery": true,
     "dimensions": [
       {
@@ -808,11 +808,11 @@ const CONFIG_SPECS = [
   {
     "id": "channel-gtm-analysis-matrix",
     "name": "Channel / GTM Analysis (Matrix)",
-    "shortDescription": "Compare acquisition channels directly to prioritize where to invest first based on evidence and constraints.",
+    "shortDescription": "Compares 2–8 acquisition channels across ICP reach, estimated CAC, competitive density, founder advantage, and channel-product fit. Output is a comparison matrix designed to support channel prioritization decisions.",
     "tabLabel": "GTM Channels",
     "outputMode": "matrix",
     "matrixLayout": "subjects-as-rows",
-    "methodology": "This type of research compares channel options directly to prioritize where to invest first based on evidence density, economics, and founder advantage.",
+    "methodology": "Attribute selection applies Brian Balfour's channel-product-market fit framework (https://brianbalfour.com/essays/channel-model-fit-for-user-acquisition) at the per-channel level to compare acquisition options rather than assess a single GTM strategy holistically. CAC estimates are calibrated against current B2B and B2C benchmarks from sources including FirstPageSage, Profitwell, and OpenView Partners' SaaS benchmarks (https://openviewpartners.com/saas-benchmarks-report/) rather than derived from model assumptions alone. Andrew Chen's cold start and distribution moat research (https://andrewchen.com/professional/) informs the founder advantage attribute. The Critic is specifically instructed to challenge CAC estimates that assume reply rates or conversion rates above current industry benchmarks, and to flag ICP reach claims inferred from a channel's general audience rather than segment-specific evidence.",
     "relatedDiscovery": true,
     "subjects": {
       "label": "Channels",

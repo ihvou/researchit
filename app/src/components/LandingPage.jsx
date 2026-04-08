@@ -1,3 +1,4 @@
+import ChevronIcon from "./ChevronIcon.jsx";
 import SiteFooter from "./SiteFooter.jsx";
 
 const AUDIENCE_BLOCKS = [
@@ -49,6 +50,11 @@ export default function LandingPage({
   onOpenWorkspace,
   onExportDebug,
 }) {
+  const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
+  const desktopTabConfigs = featuredConfigs.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
+  const desktopVisibleIds = new Set(desktopTabConfigs.map((config) => config.id));
+  const hiddenTabConfigs = featuredConfigs.filter((config) => !desktopVisibleIds.has(config.id));
+
   return (
     <div className="landing-shell">
       <header className="landing-top">
@@ -60,12 +66,135 @@ export default function LandingPage({
           <span className="landing-brand-name">Research it</span>
         </div>
         <div className="landing-top-actions">
-          <button
-            type="button"
-            className="landing-btn landing-btn-ghost"
-            onClick={onOpenWorkspace}>
-            Open Workspace
-          </button>
+          <div className="config-nav-desktop">
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
+              Researches Available:
+            </span>
+            {desktopTabConfigs.map((config) => (
+              <button
+                key={config.id}
+                type="button"
+                onClick={() => onOpenConfig?.(config)}
+                style={{
+                  padding: "7px 12px",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-muted)",
+                  whiteSpace: "nowrap",
+                }}>
+                {config.tabLabel || config.name}
+              </button>
+            ))}
+            {hiddenTabConfigs.length ? (
+              <details style={{ position: "relative" }}>
+                <summary style={{
+                  background: "var(--ck-surface)",
+                  border: "1px solid var(--ck-line)",
+                  color: "var(--ck-text)",
+                  padding: "7px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}>
+                  <span>More</span>
+                  <ChevronIcon direction="down" size={12} />
+                </summary>
+                <div style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "calc(100% + 6px)",
+                  minWidth: 220,
+                  background: "var(--ck-surface)",
+                  border: "1px solid var(--ck-line)",
+                  borderRadius: 2,
+                  display: "grid",
+                  gap: 4,
+                  padding: 6,
+                  zIndex: 40,
+                }}>
+                  {hiddenTabConfigs.map((config) => (
+                    <button
+                      key={`hidden-${config.id}`}
+                      type="button"
+                      onClick={(e) => {
+                        onOpenConfig?.(config);
+                        e.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      style={{
+                        textAlign: "left",
+                        background: "var(--ck-surface-soft)",
+                        border: "1px solid var(--ck-line)",
+                        color: "var(--ck-text)",
+                        padding: "6px 8px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}>
+                      {config.tabLabel || config.name}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </div>
+
+          <details className="config-nav-mobile" style={{ position: "relative" }}>
+            <summary style={{
+              background: "var(--ck-surface)",
+              border: "1px solid var(--ck-line)",
+              color: "var(--ck-text)",
+              padding: "7px 10px",
+              fontSize: 12,
+              fontWeight: 700,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+            }}>
+              <span>Researches Available</span>
+              <ChevronIcon direction="down" size={12} />
+            </summary>
+            <div style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 6px)",
+              minWidth: 240,
+              maxHeight: 320,
+              overflowY: "auto",
+              background: "var(--ck-surface)",
+              border: "1px solid var(--ck-line)",
+              borderRadius: 2,
+              display: "grid",
+              gap: 4,
+              padding: 6,
+              zIndex: 45,
+            }}>
+              {featuredConfigs.map((config) => (
+                <button
+                  key={`mobile-${config.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    onOpenConfig?.(config);
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                  style={{
+                    textAlign: "left",
+                    background: "var(--ck-surface-soft)",
+                    border: "1px solid var(--ck-line)",
+                    color: "var(--ck-text)",
+                    padding: "6px 8px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}>
+                  {config.tabLabel || config.name}
+                </button>
+              ))}
+            </div>
+          </details>
         </div>
       </header>
 
