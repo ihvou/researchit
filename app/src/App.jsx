@@ -18,6 +18,7 @@ import DimRubricToggle from "./components/DimRubricToggle";
 import ExpandedRow from "./components/ExpandedRow";
 import ConfidenceBadge from "./components/ConfidenceBadge";
 import ChevronIcon from "./components/ChevronIcon";
+import { downloadDebugLogsBundle } from "./lib/debug";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
@@ -444,6 +445,10 @@ export default function App({
     if (importLoading) return;
     setImportError("");
     importFileRef.current?.click();
+  }
+
+  function handleExportDebugLogs() {
+    downloadDebugLogsBundle();
   }
 
   async function onImportJsonChange(e) {
@@ -1399,6 +1404,29 @@ export default function App({
             })}
         </div>
       </div>
+
+      <footer className="app-footer">
+        <button
+          type="button"
+          onClick={handleExportDebugLogs}
+          className="app-footer-button">
+          Export Debug Logs
+        </button>
+        <a
+          href="https://github.com/ihvou/researchit"
+          target="_blank"
+          rel="noreferrer"
+          className="app-footer-link">
+          GitHub
+        </a>
+        <a
+          href="https://www.linkedin.com/in/serhii-knyr-aa332b27/"
+          target="_blank"
+          rel="noreferrer"
+          className="app-footer-link">
+          Contact
+        </a>
+      </footer>
     </div>
   );
 }

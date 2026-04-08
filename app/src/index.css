@@ -251,6 +251,38 @@ a:hover {
   margin: 0 0 8px;
 }
 
+.app-footer {
+  margin-top: 10px;
+  border-top: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.app-footer-button {
+  background: var(--ck-surface);
+  border: 1px solid var(--ck-line);
+  color: var(--ck-text);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.app-footer-link {
+  color: var(--ck-text);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.app-footer-link:hover {
+  text-decoration: underline;
+}
+
 .research-card {
   border: 1px solid var(--ck-line);
   border-radius: 2px;
@@ -601,6 +633,11 @@ a:hover {
   }
   .research-list-toolbar {
     margin-bottom: 6px;
+  }
+  .app-footer {
+    padding: 10px 12px;
+    justify-content: flex-start;
+    gap: 10px;
   }
   .landing-top {
     padding: 10px 12px;
