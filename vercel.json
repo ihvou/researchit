@@ -3,29 +3,57 @@
   "installCommand": "cd app && npm install",
   "buildCommand": "cd app && npm run build",
   "outputDirectory": "app/dist",
-  "redirects": [
+  "rewrites": [
     {
-      "source": "/research",
-      "destination": "/workspace",
-      "permanent": true
+      "source": "/workspace/:path*",
+      "destination": "/index.html"
     },
     {
       "source": "/research/:path*",
-      "destination": "/workspace/:path*",
-      "permanent": true
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/workspace",
       "destination": "/index.html"
     },
     {
-      "source": "/workspace/",
+      "source": "/startup-validation/:path*",
       "destination": "/index.html"
     },
     {
-      "source": "/workspace/:path*",
+      "source": "/market-entry/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/competitive-landscape/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/build-vs-buy/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/investment-m-a-screening/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/product-expansion/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/market-sizing/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/icp-customer-persona/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/competitors-comparison/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/gtm-strategy/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/gtm-channels-comparison/:path*",
       "destination": "/index.html"
     }
   ]

@@ -40,7 +40,6 @@ researchit/
 - client state wiring (`app/src/App.jsx`)
 - exports and browser-side helpers (`app/src/lib/*`)
 - serverless endpoints (`app/api/*`)
-- static SEO research pages generated from config (`app/scripts/generate-static-research-pages.mjs` -> `app/public/<slug>/index.html`)
 
 It consumes the engine package via `"@researchit/engine": "file:../engine"`.
 
@@ -334,23 +333,6 @@ This repo deploys from root with root-level `vercel.json` that builds `app/`:
 Root-level API entrypoints (`/api/analyst`, `/api/critic`, `/api/fetch-source`) re-export handlers from `app/api/*`.
 
 If deployment settings in Vercel override these commands, reset them so repo `vercel.json` takes effect.
-
-## Routing and Indexing
-
-Research it uses a hybrid routing model:
-- Static, indexable research pages live at `/<research-slug>/` (for example `/startup-validation/`).
-- Interactive app workspace lives at `/workspace/<research-slug>/`.
-- Legacy `/research/*` paths redirect to `/workspace/*`.
-
-Static pages are generated from `configs/research-configurations.js` during `predev` and `prebuild` by:
-- `app/scripts/generate-static-research-pages.mjs`
-
-Generated SEO artifacts:
-- `app/public/sitemap.xml`
-- `app/public/robots.txt`
-- `app/public/llms.txt`
-
-Workspace pages are execution surfaces and are marked `noindex`; canonical index targets are the static slug pages.
 
 ## Contribution Flow
 
