@@ -44,6 +44,15 @@ function isValidHttpUrl(value) {
   }
 }
 
+function sourceFetchError(res, message, status = "fetch_failed") {
+  return res.status(200).json({
+    error: String(message || "Source fetch failed."),
+    sourceFetchError: true,
+    sourceFetchStatus: status,
+    fetchedAt: new Date().toISOString(),
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -51,7 +60,7 @@ export default async function handler(req, res) {
 
   const url = String(req.body?.url || "").trim();
   if (!isValidHttpUrl(url)) {
-    return res.status(400).json({ error: "Invalid URL. Only http/https are allowed." });
+    return sourceFetchError(res, "Invalid URL. Only http/https are allowed.", "invalid_url");
   }
 
   const controller = new AbortController();
@@ -68,9 +77,7 @@ export default async function handler(req, res) {
       },
     });
 
-    if (!response.ok) {
-      return res.status(400).json({ error: `Source fetch failed (${response.status})` });
-    }
+    if (!response.ok) return sourceFetchError(res, `Source fetch failed (${response.status})`, response.status);
 
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
     const raw = await response.text();
@@ -87,9 +94,7 @@ export default async function handler(req, res) {
       text = sanitizeText(body);
     }
 
-    if (!text) {
-      return res.status(400).json({ error: "Source content is empty or unreadable." });
-    }
+    if (!text) return sourceFetchError(res, "Source content is empty or unreadable.", "empty_content");
 
     return res.status(200).json({
       url,
@@ -99,7 +104,7 @@ export default async function handler(req, res) {
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {
-    return res.status(500).json({ error: err?.message || "Failed to fetch source." });
+    return sourceFetchError(res, err?.message || "Failed to fetch source.", "fetch_exception");
   } finally {
     clearTimeout(timeout);
   }

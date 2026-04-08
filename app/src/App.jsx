@@ -310,6 +310,7 @@ export default function App({
         origin,
         config: runtimeConfig,
         matrixSubjects,
+        initialState: blankUC,
       });
     } catch (err) {
       console.error("Analysis error:", err);

@@ -1,4 +1,9 @@
 import { safeParseJSON } from "../lib/json.js";
+import {
+  createAnalysisDebugSession,
+  appendAnalysisDebugEvent,
+  finalizeAnalysisDebugSession,
+} from "../lib/debug.js";
 
 const MATRIX_ANALYST_PROMPT = `You are a senior research analyst producing an evidence-first comparison matrix.
 
@@ -1283,11 +1288,29 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
   }
 
   const onProgress = typeof callbacks?.onProgress === "function" ? callbacks.onProgress : () => {};
+  const onDebugSession = typeof callbacks?.onDebugSession === "function" ? callbacks.onDebugSession : null;
   let state = input?.initialState ? clone(input.initialState) : createInitialState(input);
   const sourceFetchCache = new Map();
+  const debugSession = createAnalysisDebugSession({
+    useCaseId: state.id,
+    analysisMode: "matrix",
+    rawInput: state.rawInput,
+    dims: normalizeAttributeList(config?.attributes || []),
+  });
+  appendAnalysisDebugEvent(debugSession, {
+    type: "analysis_start",
+    phase: state.phase || "matrix_plan",
+  });
+  let runStatus = "error";
+  let runError = null;
 
   const update = (phase, patch) => {
     state = { ...state, phase, ...patch };
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_update",
+      phase,
+      status: String(state?.status || "analyzing"),
+    });
     onProgress(phase, clone(state));
   };
 
@@ -1756,12 +1779,31 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         analysisMeta: state.analysisMeta,
       });
     }
+    runStatus = "complete";
   } catch (err) {
+    runError = err;
     update("error", {
       status: "error",
       errorMsg: err?.message || "Matrix analysis failed.",
     });
     throw err;
+  } finally {
+    appendAnalysisDebugEvent(debugSession, {
+      type: "analysis_end",
+      phase: "matrix",
+      status: runStatus,
+      error: runError ? String(runError?.message || runError) : "",
+    });
+    const completedDebugSession = finalizeAnalysisDebugSession(debugSession, {
+      status: runStatus,
+      error: runError,
+      analysisMeta: state?.analysisMeta || null,
+    });
+    if (onDebugSession) {
+      onDebugSession(completedDebugSession, {
+        downloadRequested: !!input?.options?.downloadDebugLog,
+      });
+    }
   }
 
   return clone(state);

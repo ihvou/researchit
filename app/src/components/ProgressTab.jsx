@@ -1,3 +1,5 @@
+import Spinner from "./Spinner";
+
 const HYBRID_FLOW = [
   {
     key: "submitted",
@@ -132,6 +134,30 @@ function phaseRankMap(flow) {
   return map;
 }
 
+const SCORECARD_PHASE_ALIASES = {
+  analyst: "analyst_baseline",
+  analyst_evidence: "analyst_baseline",
+  analyst_scoring: "analyst_web",
+  analyst_targeted_query_plan: "analyst_targeted",
+  analyst_targeted_search: "analyst_targeted",
+  analyst_targeted_rescore: "analyst_targeted",
+  analyst_source_verification: "analyst_targeted",
+  critic_source_verification: "critic",
+  finalizing_consistency: "finalizing",
+  final_source_verification: "finalizing",
+};
+
+const MATRIX_PHASE_ALIASES = {
+  matrix_evidence: "matrix_web",
+};
+
+function resolveProgressPhase(phase, outputMode) {
+  const value = String(phase || "").trim();
+  if (!value) return "submitted";
+  if (outputMode === "matrix") return MATRIX_PHASE_ALIASES[value] || value;
+  return SCORECARD_PHASE_ALIASES[value] || value;
+}
+
 function getStepState(step, idx, currentIdx, uc) {
   if (step.phase === "submitted") return "done";
   if (step.phase === "complete") {
@@ -167,7 +193,8 @@ function stateBackground(state) {
 export default function ProgressTab({ uc, outputMode = "scorecard" }) {
   const flow = outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW;
   const rank = phaseRankMap(flow);
-  const currentIdx = rank[uc.phase] ?? 0;
+  const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
+  const currentIdx = rank[resolvedPhase] ?? 0;
 
   return (
     <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
@@ -183,6 +210,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {flow.map((step, idx) => {
           const state = getStepState(step, idx, currentIdx, uc);
+          const isActive = state === "active";
           return (
             <div
               key={step.key}
@@ -193,10 +221,16 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                 gap: 10,
                 padding: "9px 10px",
                 borderRadius: 2,
-                border: "1px solid var(--ck-line)",
+                border: `1px solid ${isActive ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
                 background: "var(--ck-surface-soft)",
               }}>
-              <input type="checkbox" checked={state === "done"} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
+              {isActive ? (
+                <div style={{ marginTop: 2, display: "grid", placeItems: "center" }}>
+                  <Spinner size={10} color="var(--ck-text)" />
+                </div>
+              ) : (
+                <input type="checkbox" checked={state === "done"} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
+              )}
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>{step.title}</div>
                 <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{step.detail}</div>
@@ -211,7 +245,11 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                   borderRadius: 2,
                   padding: "2px 7px",
                   whiteSpace: "nowrap",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
                 }}>
+                {isActive ? <Spinner size={9} color="var(--ck-text)" /> : null}
                 {stateLabel(state)}
               </span>
             </div>

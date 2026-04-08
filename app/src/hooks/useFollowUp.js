@@ -18,6 +18,18 @@ function mergeConfig(baseConfig, dims) {
   };
 }
 
+function mergeProgressState(prevState = {}, nextState = {}, config = null) {
+  return {
+    ...prevState,
+    ...nextState,
+    researchConfigId: nextState?.researchConfigId || prevState?.researchConfigId || config?.id || null,
+    researchConfigName: nextState?.researchConfigName || prevState?.researchConfigName || config?.name || null,
+    rawInput: nextState?.rawInput || prevState?.rawInput || "",
+    outputMode: nextState?.outputMode || prevState?.outputMode || String(config?.outputMode || "").trim().toLowerCase() || null,
+    origin: nextState?.origin ?? prevState?.origin ?? null,
+  };
+}
+
 export async function handleFollowUp(ucId, dimId, challenge, dims, ucRef, updateUC, options = {}) {
   const uc = ucRef.current.find((u) => u.id === ucId);
   if (!uc) throw new Error(`Use case not found: ${ucId}`);
@@ -36,7 +48,7 @@ export async function handleFollowUp(ucId, dimId, challenge, dims, ucRef, update
     {
       transport: appTransport,
       onProgress: (_phase, nextState) => {
-        updateUC(ucId, () => nextState);
+        updateUC(ucId, (prevState) => mergeProgressState(prevState, nextState, config));
       },
     }
   );

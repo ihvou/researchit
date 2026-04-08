@@ -1,4 +1,9 @@
-import { runAnalysis as runEngineAnalysis } from "@researchit/engine";
+import {
+  runAnalysis as runEngineAnalysis,
+  createAnalysisDebugSession,
+  appendAnalysisDebugEvent,
+  finalizeAnalysisDebugSession,
+} from "@researchit/engine";
 import defaultConfig from "../../../configs/research-configurations.js";
 import { appTransport } from "../lib/api";
 import {
@@ -22,35 +27,92 @@ function mergeConfig(baseConfig, dims) {
   };
 }
 
+function mergeProgressState(prevState = {}, nextState = {}, config = null) {
+  return {
+    ...prevState,
+    ...nextState,
+    researchConfigId: nextState?.researchConfigId || prevState?.researchConfigId || config?.id || null,
+    researchConfigName: nextState?.researchConfigName || prevState?.researchConfigName || config?.name || null,
+    rawInput: nextState?.rawInput || prevState?.rawInput || "",
+    outputMode: nextState?.outputMode || prevState?.outputMode || String(config?.outputMode || "").trim().toLowerCase() || null,
+    origin: nextState?.origin ?? prevState?.origin ?? null,
+  };
+}
+
 export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const config = mergeConfig(options?.config || defaultConfig, dims);
+  const debugDims = String(config?.outputMode || "").trim().toLowerCase() === "matrix"
+    ? (Array.isArray(config?.attributes) ? config.attributes : [])
+    : (Array.isArray(config?.dimensions) ? config.dimensions : []);
+  const fallbackDebugSession = createAnalysisDebugSession({
+    useCaseId: id,
+    analysisMode: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix" ? "matrix" : "hybrid",
+    rawInput: desc,
+    dims: debugDims,
+  });
+  appendAnalysisDebugEvent(fallbackDebugSession, {
+    type: "analysis_start",
+    phase: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix" ? "matrix_plan" : "analyst_baseline",
+  });
+  let debugSessionReceived = false;
+  let caughtError = null;
 
   let latest = null;
-  await runEngineAnalysis(
-    {
-      id,
-      description: desc,
-      origin: options?.origin || null,
-      options: {
-        downloadDebugLog: !!options?.downloadDebugLog,
-        matrixSubjects: Array.isArray(options?.matrixSubjects) ? options.matrixSubjects : [],
+  try {
+    await runEngineAnalysis(
+      {
+        id,
+        description: desc,
+        origin: options?.origin || null,
+        initialState: options?.initialState || null,
+        options: {
+          downloadDebugLog: !!options?.downloadDebugLog,
+          matrixSubjects: Array.isArray(options?.matrixSubjects) ? options.matrixSubjects : [],
+        },
       },
-    },
-    config,
-    {
-      transport: appTransport,
-      onProgress: (_phase, nextState) => {
-        latest = nextState;
-        updateUC(id, () => nextState);
-      },
-      onDebugSession: (session, meta = {}) => {
-        storeCompletedAnalysisDebugSession(session);
-        if (meta?.downloadRequested) {
-          downloadAnalysisDebugSession(session);
-        }
-      },
+      config,
+      {
+        transport: appTransport,
+        onProgress: (phase, nextState) => {
+          appendAnalysisDebugEvent(fallbackDebugSession, {
+            type: "phase_update",
+            phase: String(phase || ""),
+            status: String(nextState?.status || ""),
+          });
+          updateUC(id, (prevState) => {
+            const merged = mergeProgressState(prevState, nextState, config);
+            latest = merged;
+            return merged;
+          });
+        },
+        onDebugSession: (session, meta = {}) => {
+          debugSessionReceived = true;
+          storeCompletedAnalysisDebugSession(session);
+          if (meta?.downloadRequested) {
+            downloadAnalysisDebugSession(session);
+          }
+        },
+      }
+    );
+  } catch (err) {
+    caughtError = err;
+    throw err;
+  } finally {
+    if (!debugSessionReceived) {
+      const status = latest?.status || "error";
+      const payload = finalizeAnalysisDebugSession(fallbackDebugSession, {
+        status,
+        error: status === "error"
+          ? (caughtError || new Error(latest?.errorMsg || "Analysis failed before debug session was finalized."))
+          : null,
+        analysisMeta: latest?.analysisMeta || null,
+      });
+      storeCompletedAnalysisDebugSession(payload);
+      if (options?.downloadDebugLog) {
+        downloadAnalysisDebugSession(payload);
+      }
     }
-  );
+  }
 
   return latest;
 }
