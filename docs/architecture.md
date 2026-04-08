@@ -186,7 +186,7 @@ The app is a client-side SPA. Routing is handled by a custom router (`Researchit
 - `/{slug}/` — research workspace for a specific config (e.g. `/startup-validation/`)
 - `/workspace`, `/research/{slug}` — legacy paths, redirected client-side
 
-**Static prerendering:** At build time, `app/scripts/prerender-meta.js` runs after `vite build`. It reads the config list, generates route-specific `<title>`, `<meta>`, `<link rel="canonical">`, and JSON-LD, and writes one `index.html` per route into `dist/{slug}/index.html`. Vercel serves these static files directly — no rewrite needed for known slugs.
+**Static prerendering:** At build time, `app/scripts/prerender-meta.js` runs after `vite build`. It uses shared builders from `src/lib/seo.js`, generates route-specific `<title>`, `<meta>`, `<link rel="canonical">`, and JSON-LD, and writes one `index.html` per route into `dist/{slug}/index.html`. Canonical base URL is configurable via `RESEARCHIT_PUBLIC_URL` (fallback: `https://researchit.app`). Vercel serves these static files directly — no rewrite needed for known slugs.
 
 A single catch-all rewrite in `vercel.json` handles unknown paths, falling back to `dist/index.html` where the SPA router renders a 404.
 

@@ -1,6 +1,7 @@
-import { getResearchPath, getConfigSlug } from "./routes";
+import { getResearchPath, getConfigSlug } from "./routes.js";
 
 const SITE_NAME = "Research it";
+const DEFAULT_SITE_ORIGIN = "https://researchit.app";
 const DEFAULT_DESCRIPTION = "Research it helps founders, executives, and analysts run evidence-first strategic research with analyst-plus-critic validation.";
 const DEFAULT_KEYWORDS = [
   "strategic research tool",
@@ -19,9 +20,28 @@ function summarizeMethodology(text, maxLength = 220) {
   return `${firstSentence.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return DEFAULT_SITE_ORIGIN;
+  const noSlash = raw.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(noSlash)) return DEFAULT_SITE_ORIGIN;
+  return noSlash;
+}
+
+function getServerOrigin() {
+  if (typeof process === "undefined" || !process?.env) return DEFAULT_SITE_ORIGIN;
+  const configured = process.env.RESEARCHIT_PUBLIC_URL
+    || process.env.VITE_PUBLIC_SITE_URL
+    || process.env.PUBLIC_SITE_URL
+    || DEFAULT_SITE_ORIGIN;
+  return normalizeOrigin(configured);
+}
+
 function toAbsoluteUrl(pathname = "/") {
-  if (typeof window === "undefined") return `https://researchit.app${pathname}`;
-  return new URL(pathname, window.location.origin).toString();
+  const origin = typeof window !== "undefined"
+    ? normalizeOrigin(window.location?.origin || DEFAULT_SITE_ORIGIN)
+    : getServerOrigin();
+  return new URL(pathname, `${origin}/`).toString();
 }
 
 function upsertMeta(selector, attrs, content) {

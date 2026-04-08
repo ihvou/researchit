@@ -3,6 +3,7 @@
  *
  * Input:  dist/index.html  (Vite build output)
  *         configs/research-configurations.js  (route list + metadata)
+ *         src/lib/seo.js  (shared SEO builders)
  *
  * Output: dist/index.html  (homepage meta replaced)
  *         dist/{slug}/index.html  (one per config)
@@ -13,23 +14,12 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildHomeSeoMeta, buildResearchSeoMeta } from "../src/lib/seo.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(__dirname, "..", "dist");
 const TEMPLATE_PATH = resolve(DIST, "index.html");
-
-const SITE_NAME = "Research it";
-const SITE_URL = "https://researchit.app";
-const DEFAULT_DESCRIPTION =
-  "Research it helps founders, executives, and analysts run evidence-first strategic research with analyst-plus-critic validation.";
-const DEFAULT_KEYWORDS = [
-  "strategic research tool",
-  "market analysis",
-  "startup validation",
-  "competitive landscape",
-  "evidence-based decision making",
-  "researchit",
-].join(", ");
+const FALLBACK_SITE_NAME = "Research it";
 
 // ---------------------------------------------------------------------------
 // Import configs (pure ESM, no browser deps)
@@ -37,85 +27,8 @@ const DEFAULT_KEYWORDS = [
 
 const { RESEARCH_CONFIGS } = await import("../../configs/research-configurations.js");
 
-// ---------------------------------------------------------------------------
-// Meta builders (mirrors app/src/lib/seo.js but pure-Node, no DOM)
-// ---------------------------------------------------------------------------
-
-function summarizeMethodology(text, maxLength = 230) {
-  const raw = String(text || "").trim();
-  if (!raw) return "";
-  const first = raw.split(/(?<=[.!?])\s+/)[0] || raw;
-  return first.length <= maxLength ? first : `${first.slice(0, maxLength - 1).trimEnd()}...`;
-}
-
 function getSlug(config) {
   return String(config?.slug || config?.id || "").trim().toLowerCase();
-}
-
-function buildHomeMeta() {
-  const title = "Research it | Evidence-First Strategic Research for Decision Teams";
-  const description =
-    "Run startup validation, market-entry, competitive, GTM, and investment research with structured evidence, confidence, and critic challenge in one workspace.";
-  const canonical = `${SITE_URL}/`;
-  return {
-    title,
-    description,
-    keywords: `${DEFAULT_KEYWORDS}, strategy, founders, executives, analysts`,
-    canonical,
-    robots: "index,follow",
-    ogType: "website",
-    twitterCard: "summary_large_image",
-    jsonLd: {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      name: SITE_NAME,
-      applicationCategory: "BusinessApplication",
-      operatingSystem: "Web",
-      description,
-      url: canonical,
-      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-    },
-  };
-}
-
-function buildResearchMeta(config) {
-  const label = String(config?.tabLabel || config?.name || "Research").trim() || "Research";
-  const methodology = summarizeMethodology(config?.methodology, 230);
-  const description = methodology
-    ? `${methodology} Use Research it to pressure-test this decision with evidence and a critic pass.`
-    : `Run ${label} research in Research it with evidence-backed scoring and analyst/critic review.`;
-  const slug = getSlug(config);
-  const canonical = `${SITE_URL}/${slug}/`;
-  const title = `${label} Research | Research it`;
-  const aboutSource =
-    Array.isArray(config?.dimensions) && config.dimensions.length
-      ? config.dimensions
-      : Array.isArray(config?.attributes)
-        ? config.attributes
-        : [];
-  const aboutItems = aboutSource
-    .map((item) => String(item?.label || "").trim())
-    .filter(Boolean)
-    .slice(0, 12);
-
-  return {
-    title,
-    description,
-    keywords: `${DEFAULT_KEYWORDS}, ${label.toLowerCase()}, ${slug}`,
-    canonical,
-    robots: "index,follow",
-    ogType: "article",
-    twitterCard: "summary",
-    jsonLd: {
-      "@context": "https://schema.org",
-      "@type": "WebPage",
-      name: title,
-      url: canonical,
-      description,
-      isPartOf: { "@type": "WebSite", name: SITE_NAME, url: `${SITE_URL}/` },
-      about: aboutItems,
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +56,7 @@ function replaceMeta(html, selector, content) {
   return html.replace("</head>", `    ${tag}\n  </head>`);
 }
 
-function applyMeta(template, meta) {
+function applyMeta(template, meta, siteName) {
   let html = template;
 
   // Title
@@ -155,7 +68,7 @@ function applyMeta(template, meta) {
   html = replaceMeta(html, 'name="robots"', meta.robots);
 
   // Open Graph
-  html = replaceMeta(html, 'property="og:site_name"', SITE_NAME);
+  html = replaceMeta(html, 'property="og:site_name"', siteName);
   html = replaceMeta(html, 'property="og:type"', meta.ogType);
   html = replaceMeta(html, 'property="og:title"', meta.title);
   html = replaceMeta(html, 'property="og:description"', meta.description);
@@ -192,8 +105,9 @@ function applyMeta(template, meta) {
 const template = readFileSync(TEMPLATE_PATH, "utf-8");
 
 // 1. Homepage
-const homeMeta = buildHomeMeta();
-const homeHtml = applyMeta(template, homeMeta);
+const homeMeta = buildHomeSeoMeta();
+const siteName = String(homeMeta?.jsonLd?.name || FALLBACK_SITE_NAME).trim() || FALLBACK_SITE_NAME;
+const homeHtml = applyMeta(template, homeMeta, siteName);
 writeFileSync(TEMPLATE_PATH, homeHtml, "utf-8");
 console.log(`  /index.html  →  ${homeMeta.title}`);
 
@@ -203,8 +117,8 @@ for (const config of RESEARCH_CONFIGS) {
   const slug = getSlug(config);
   if (!slug) continue;
 
-  const meta = buildResearchMeta(config);
-  const html = applyMeta(template, meta);
+  const meta = buildResearchSeoMeta(config);
+  const html = applyMeta(template, meta, siteName);
 
   const dir = resolve(DIST, slug);
   mkdirSync(dir, { recursive: true });

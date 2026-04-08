@@ -285,6 +285,11 @@ OPENAI_CRITIC_MODEL=gpt-5.4
 OPENAI_CRITIC_WEBSEARCH_MODEL=gpt-5.4
 ```
 
+Optional SEO canonical base URL (used by build-time prerendering):
+```bash
+RESEARCHIT_PUBLIC_URL=https://your-domain.example
+```
+
 Resolution precedence for provider/model/base URL is:
 1. Role-specific `RESEARCHIT_*` env vars
 2. Global `RESEARCHIT_*` env vars
