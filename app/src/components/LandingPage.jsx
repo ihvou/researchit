@@ -221,15 +221,17 @@ export default function LandingPage({
               <div className="hero-diagram-columns">
                 <div className="hero-diagram-column">
                   <div className="hero-diagram-column-label">Generic LLMs</div>
-                  <div className="hero-diagram-card">question</div>
+                  <div className="hero-diagram-card hero-diagram-card-flow hero-diagram-card-flow-top">
+                    <span className="hero-diagram-card-head">Your question</span>
+                  </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">
-                    <span className="hero-diagram-card-head">single model pass</span>
+                  <div className="hero-diagram-card hero-diagram-card-flow">
+                    <span className="hero-diagram-card-head">Single model pass</span>
                     <span className="hero-diagram-card-sub">one shot, no explicit structure</span>
                   </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">
-                    <span className="hero-diagram-card-head">narrative output</span>
+                  <div className="hero-diagram-card hero-diagram-card-flow">
+                    <span className="hero-diagram-card-head">Narrative output</span>
                     <span className="hero-diagram-card-sub">confident, hard to audit</span>
                   </div>
                   <div className="hero-diagram-list">
@@ -241,26 +243,28 @@ export default function LandingPage({
 
                 <div className="hero-diagram-column">
                   <div className="hero-diagram-column-label">Research it - LLM wrapper</div>
-                  <div className="hero-diagram-card">question + research type</div>
+                  <div className="hero-diagram-card hero-diagram-card-flow hero-diagram-card-flow-top">
+                    <span className="hero-diagram-card-head">Question + research type</span>
+                  </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">
-                    <span className="hero-diagram-card-head">analyst model pass</span>
-                    <span className="hero-diagram-card-sub">web search · evidence per dimension</span>
-                    <span className="hero-diagram-card-sub">score 1-5 · confidence level</span>
+                  <div className="hero-diagram-card hero-diagram-card-flow">
+                    <span className="hero-diagram-card-head">Analyst model pass</span>
+                    <span className="hero-diagram-card-sub">web search · evidence per dimension · score 1-5 · confidence level</span>
+                  </div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card hero-diagram-card-flow">
+                    <span className="hero-diagram-card-head">Critic model challenge</span>
+                    <span className="hero-diagram-card-sub">challenges weak claims · flags thin evidence</span>
                   </div>
                   <div className="hero-diagram-arrow">↓</div>
                   <div className="hero-diagram-card">
-                    <span className="hero-diagram-card-head">critic model challenge</span>
-                    <span className="hero-diagram-card-sub">challenges weak claims</span>
-                    <span className="hero-diagram-card-sub">flags thin evidence</span>
-                  </div>
-                  <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">
-                    <span className="hero-diagram-card-head">structured output</span>
+                    <span className="hero-diagram-card-head">Structured output</span>
                     <span className="hero-diagram-card-sub">scorecard or matrix · auditable artifact</span>
                   </div>
+                  <div className="hero-diagram-arrow">↓</div>
                   <div className="hero-diagram-card hero-diagram-card-note">
-                    <span className="hero-diagram-card-sub">Refine manually. Debate scoring and evidence.</span>
+                    <span className="hero-diagram-card-head">Refine manually</span>
+                    <span className="hero-diagram-card-sub">debate scoring and evidence</span>
                   </div>
                 </div>
               </div>
