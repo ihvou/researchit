@@ -200,18 +200,55 @@ export default function LandingPage({
 
       <main className="landing-main">
         <section className="landing-hero">
-          <p className="landing-kicker">Evidence-first. Critic-reviewed. Auditable.</p>
-          <h1>Research before you build.</h1>
-          <p className="landing-subtitle">
-            Structured AI research for product and strategy decisions. Every run scores evidence per dimension, surfaces a Critic challenge, and produces an auditable artifact - not a confident-sounding narrative.
-          </p>
-          <div className="landing-hero-actions">
-            <button
-              type="button"
-              className="landing-btn landing-btn-primary"
-              onClick={onOpenWorkspace}>
-              Run your first research
-            </button>
+          <div className="landing-hero-layout">
+            <div className="landing-hero-copy">
+              <p className="landing-kicker">Evidence-first. Critic-reviewed. Auditable.</p>
+              <h1>Research before you build.</h1>
+              <p className="landing-subtitle">
+                Structured AI research for product and strategy decisions. Every run scores evidence per dimension, surfaces a Critic challenge, and produces an auditable artifact - not a confident-sounding narrative.
+              </p>
+              <div className="landing-hero-actions">
+                <button
+                  type="button"
+                  className="landing-btn landing-btn-primary"
+                  onClick={onOpenWorkspace}>
+                  Run your first research
+                </button>
+              </div>
+            </div>
+
+            <aside className="landing-hero-diagram" aria-label="Comparison of generic AI tools and Research it workflow">
+              <div className="hero-diagram-title">How it works</div>
+              <div className="hero-diagram-columns">
+                <div className="hero-diagram-column">
+                  <div className="hero-diagram-column-label">generic tools</div>
+                  <div className="hero-diagram-card">question</div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card">single model pass</div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card">narrative output</div>
+                  <div className="hero-diagram-list">
+                    <div className="hero-diagram-item">no evidence trail</div>
+                    <div className="hero-diagram-item">hallucinations hidden</div>
+                    <div className="hero-diagram-item">hard to challenge</div>
+                  </div>
+                </div>
+
+                <div className="hero-diagram-column">
+                  <div className="hero-diagram-column-label">research it</div>
+                  <div className="hero-diagram-card">question + research type</div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card">analyst model pass</div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card">critic model challenge</div>
+                  <div className="hero-diagram-arrow">↓</div>
+                  <div className="hero-diagram-card">structured output (scorecard/matrix)</div>
+                  <div className="hero-diagram-card hero-diagram-card-note">
+                    <span className="hero-diagram-note-text">Refine manually. Debate scoring and evidence.</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
         </section>
 

@@ -446,6 +446,16 @@ a:hover {
   gap: 12px;
 }
 
+.landing-hero-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.landing-hero-copy {
+  display: grid;
+  gap: 12px;
+}
+
 .landing-kicker {
   margin: 0;
   color: var(--ck-muted);
@@ -469,6 +479,97 @@ a:hover {
   max-width: 76ch;
   font-size: 16px;
   line-height: 1.55;
+}
+
+.landing-hero-diagram {
+  display: none;
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface-soft);
+  padding: 8px;
+  gap: 6px;
+}
+
+.hero-diagram-title {
+  margin: 0;
+  color: var(--ck-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.hero-diagram-columns {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hero-diagram-columns::before {
+  content: "";
+  position: absolute;
+  left: calc(50% - 0.5px);
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--ck-line);
+}
+
+.hero-diagram-column {
+  display: grid;
+  gap: 4px;
+}
+
+.hero-diagram-column-label {
+  margin: 0;
+  color: var(--ck-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.hero-diagram-card {
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  padding: 4px 6px;
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-align: center;
+  color: var(--ck-text);
+}
+
+.hero-diagram-card-note {
+  background: var(--ck-surface);
+  border-color: var(--ck-line);
+}
+
+.hero-diagram-note-text {
+  color: var(--ck-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.hero-diagram-arrow {
+  font-size: 11px;
+  color: var(--ck-muted);
+  text-align: center;
+  line-height: 1;
+}
+
+.hero-diagram-list {
+  display: grid;
+  gap: 3px;
+}
+
+.hero-diagram-item {
+  border: 1px dashed var(--ck-line);
+  background: var(--ck-bg);
+  padding: 4px 6px;
+  font-size: 10px;
+  color: var(--ck-muted);
+  line-height: 1.3;
+  text-align: center;
 }
 
 .landing-hero-actions,
@@ -575,6 +676,18 @@ a:hover {
 
 .landing-btn-ghost {
   background: var(--ck-surface);
+}
+
+@media (min-width: 1080px) {
+  .landing-hero-layout {
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 14px;
+    align-items: start;
+  }
+
+  .landing-hero-diagram {
+    display: grid;
+  }
 }
 
 @media (max-width: 900px) {
