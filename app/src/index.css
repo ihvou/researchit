@@ -511,20 +511,23 @@ a:hover {
 }
 
 .hero-diagram-column-label {
-  margin: 0;
+  margin: 0 0 2px;
   color: var(--ck-muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   font-size: 11px;
   font-weight: 700;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 14px;
   line-height: 1.2;
 }
 
 .hero-diagram-card {
   border: 1px solid var(--ck-line);
   background: var(--ck-surface);
-  padding: 5px 8px;
+  padding: 5px 10px;
   font-size: 11px;
   line-height: 1.3;
   text-align: center;
@@ -534,12 +537,12 @@ a:hover {
 }
 
 .hero-diagram-card-row-1 {
-  min-height: 34px;
+  height: 34px;
   align-content: center;
 }
 
 .hero-diagram-card-row-2 {
-  min-height: 46px;
+  height: 46px;
   align-content: center;
 }
 
@@ -569,22 +572,33 @@ a:hover {
 .hero-diagram-arrow {
   font-size: 11px;
   color: var(--ck-muted);
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   line-height: 1;
 }
 
+.hero-diagram-arrow-spacer {
+  color: transparent;
+}
+
 .hero-diagram-list {
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
 .hero-diagram-item {
   border: 1px dashed var(--ck-line);
   background: var(--ck-bg);
-  padding: 3px 6px;
+  height: 34px;
+  padding: 0 8px;
   font-size: 10px;
   color: var(--ck-muted);
   line-height: 1.3;
+  display: grid;
+  align-content: center;
   text-align: center;
 }
 

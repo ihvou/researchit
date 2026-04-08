@@ -234,6 +234,7 @@ export default function LandingPage({
                     <span className="hero-diagram-card-head">Narrative output</span>
                     <span className="hero-diagram-card-sub">confident, hard to audit</span>
                   </div>
+                  <div className="hero-diagram-arrow hero-diagram-arrow-spacer" aria-hidden="true">↓</div>
                   <div className="hero-diagram-list">
                     <div className="hero-diagram-item">no evidence trail</div>
                     <div className="hero-diagram-item">hallucinations hidden</div>
