@@ -217,16 +217,21 @@ export default function LandingPage({
               </div>
             </div>
 
-            <aside className="landing-hero-diagram" aria-label="Comparison of generic AI tools and Research it workflow">
-              <div className="hero-diagram-title">How it works</div>
+            <aside className="landing-hero-diagram" aria-label="Comparison of generic LLMs and Research it workflow">
               <div className="hero-diagram-columns">
                 <div className="hero-diagram-column">
-                  <div className="hero-diagram-column-label">generic tools</div>
+                  <div className="hero-diagram-column-label">Generic LLMs</div>
                   <div className="hero-diagram-card">question</div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">single model pass</div>
+                  <div className="hero-diagram-card">
+                    <span className="hero-diagram-card-head">single model pass</span>
+                    <span className="hero-diagram-card-sub">one shot, no explicit structure</span>
+                  </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">narrative output</div>
+                  <div className="hero-diagram-card">
+                    <span className="hero-diagram-card-head">narrative output</span>
+                    <span className="hero-diagram-card-sub">confident, hard to audit</span>
+                  </div>
                   <div className="hero-diagram-list">
                     <div className="hero-diagram-item">no evidence trail</div>
                     <div className="hero-diagram-item">hallucinations hidden</div>
@@ -235,16 +240,27 @@ export default function LandingPage({
                 </div>
 
                 <div className="hero-diagram-column">
-                  <div className="hero-diagram-column-label">research it</div>
+                  <div className="hero-diagram-column-label">Research it - LLM wrapper</div>
                   <div className="hero-diagram-card">question + research type</div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">analyst model pass</div>
+                  <div className="hero-diagram-card">
+                    <span className="hero-diagram-card-head">analyst model pass</span>
+                    <span className="hero-diagram-card-sub">web search · evidence per dimension</span>
+                    <span className="hero-diagram-card-sub">score 1-5 · confidence level</span>
+                  </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">critic model challenge</div>
+                  <div className="hero-diagram-card">
+                    <span className="hero-diagram-card-head">critic model challenge</span>
+                    <span className="hero-diagram-card-sub">challenges weak claims</span>
+                    <span className="hero-diagram-card-sub">flags thin evidence</span>
+                  </div>
                   <div className="hero-diagram-arrow">↓</div>
-                  <div className="hero-diagram-card">structured output (scorecard/matrix)</div>
+                  <div className="hero-diagram-card">
+                    <span className="hero-diagram-card-head">structured output</span>
+                    <span className="hero-diagram-card-sub">scorecard or matrix · auditable artifact</span>
+                  </div>
                   <div className="hero-diagram-card hero-diagram-card-note">
-                    <span className="hero-diagram-note-text">Refine manually. Debate scoring and evidence.</span>
+                    <span className="hero-diagram-card-sub">Refine manually. Debate scoring and evidence.</span>
                   </div>
                 </div>
               </div>
