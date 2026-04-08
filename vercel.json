@@ -2,5 +2,59 @@
   "framework": "vite",
   "installCommand": "cd app && npm install",
   "buildCommand": "cd app && npm run build",
-  "outputDirectory": "app/dist"
+  "outputDirectory": "app/dist",
+  "rewrites": [
+    {
+      "source": "/workspace/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/research/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/startup-validation/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/market-entry/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/competitive-landscape/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/build-vs-buy/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/investment-m-a-screening/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/product-expansion/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/market-sizing/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/icp-customer-persona/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/competitors-comparison/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/gtm-strategy/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/gtm-channels-comparison/:path*",
+      "destination": "/"
+    }
+  ]
 }

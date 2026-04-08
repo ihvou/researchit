@@ -1,0 +1,26 @@
+# Researchit
+
+Researchit is a strategic research application for founders, executives, and analysts.
+It runs evidence-first research workflows with analyst generation plus critic challenge.
+
+## Primary URL
+- https://researchit.app/
+
+## Key Research URLs
+- https://researchit.app/startup-validation/
+- https://researchit.app/market-entry/
+- https://researchit.app/competitive-landscape/
+- https://researchit.app/build-vs-buy/
+- https://researchit.app/investment-m-a-screening/
+- https://researchit.app/product-expansion/
+- https://researchit.app/market-sizing/
+- https://researchit.app/icp-customer-persona/
+- https://researchit.app/competitors-comparison/
+- https://researchit.app/gtm-strategy/
+- https://researchit.app/gtm-channels-comparison/
+
+## Product Summary
+- Supports scorecard and matrix research modes.
+- Uses configurable research dimensions/attributes per research type.
+- Produces auditable research outputs with confidence and source grounding.
+- Supports export artifacts (JSON, and scorecard exports like HTML/PDF/images).

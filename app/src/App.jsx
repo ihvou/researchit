@@ -22,6 +22,13 @@ import ChevronIcon from "./components/ChevronIcon";
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
 
+function resolveConfigId(configId) {
+  const value = String(configId || "").trim();
+  if (!value) return DEFAULT_RESEARCH_CONFIG.id;
+  const found = RESEARCH_CONFIGS.find((config) => config.id === value);
+  return found?.id || DEFAULT_RESEARCH_CONFIG.id;
+}
+
 function cloneDims(dims = []) {
   return (dims || []).map((d) => ({ ...d }));
 }
@@ -106,9 +113,14 @@ function dimensionAcronym(label) {
   return String(label || "").slice(0, 3).toUpperCase();
 }
 
-export default function App() {
+export default function App({
+  initialConfigId = DEFAULT_RESEARCH_CONFIG.id,
+  routeConfigId = null,
+  onActiveConfigChange = null,
+  onNavigateHome = null,
+}) {
   const [useCases, setUseCases] = useState([]);
-  const [activeConfigId, setActiveConfigId] = useState(DEFAULT_RESEARCH_CONFIG.id);
+  const [activeConfigId, setActiveConfigId] = useState(resolveConfigId(routeConfigId || initialConfigId));
   const [dimsByConfig, setDimsByConfig] = useState(() => (
     Object.fromEntries(
       RESEARCH_CONFIGS.map((config) => [config.id, cloneDims(config.dimensions)])
@@ -134,6 +146,11 @@ export default function App() {
   const cardRefs = useRef({});
   const importFileRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
+  useEffect(() => {
+    if (!routeConfigId) return;
+    const nextId = resolveConfigId(routeConfigId);
+    setActiveConfigId((prev) => (prev === nextId ? prev : nextId));
+  }, [routeConfigId]);
   useEffect(() => {
     setShowDimsPanel(false);
     setShowDetailsPanel(true);
@@ -379,10 +396,15 @@ export default function App() {
   }
 
   function selectResearchConfig(configId) {
-    setActiveConfigId(configId);
+    const nextConfig = RESEARCH_CONFIGS.find((config) => config.id === configId);
+    if (!nextConfig) return;
+    setActiveConfigId(nextConfig.id);
     setShowInputPanel(false);
     setExpandedId(null);
     setExpandAllResearches(false);
+    if (typeof onActiveConfigChange === "function") {
+      onActiveConfigChange(nextConfig);
+    }
   }
 
   function focusResearch(id, options = {}) {
@@ -523,8 +545,26 @@ export default function App() {
               <span style={{ position: "absolute", top: 1, left: 3, fontSize: 8, color: "var(--ck-muted)" }}>{CHEMICAL_NUMBER}</span>
               <span style={{ fontSize: 13, lineHeight: 1 }}>Re</span>
             </div>
-            <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
-          </div>
+              {typeof onNavigateHome === "function" ? (
+                <button
+                  type="button"
+                  onClick={onNavigateHome}
+                  className="brand-title"
+                  style={{
+                    fontWeight: 800,
+                    fontSize: 17,
+                    color: "var(--ck-text)",
+                    border: "none",
+                    background: "transparent",
+                    padding: 0,
+                    margin: 0,
+                  }}>
+                  Researchit
+                </button>
+              ) : (
+                <span className="brand-title" style={{ fontWeight: 800, fontSize: 17, color: "var(--ck-text)" }}>Researchit</span>
+              )}
+            </div>
           <div style={{ minWidth: 0, flex: 1, marginLeft: 16, display: "flex", justifyContent: "flex-end" }}>
             <div className="config-nav-desktop">
               <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>

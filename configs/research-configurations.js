@@ -121,6 +121,20 @@ const DEFAULT_FRAMING_FIELDS = [
   },
 ];
 
+const URL_SLUG_BY_CONFIG = {
+  "startup-product-idea-validation": "startup-validation",
+  "market-entry-analysis": "market-entry",
+  "competitive-landscape": "competitive-landscape",
+  "build-vs-buy-technology-decision": "build-vs-buy",
+  "investment-m-and-a-screening": "investment-m-a-screening",
+  "product-expansion-new-feature-adjacent-segment-new-geography": "product-expansion",
+  "market-sizing-tam-sam-som": "market-sizing",
+  "icp-customer-persona-matrix": "icp-customer-persona",
+  "competitors-comparison-matrix": "competitors-comparison",
+  "channel-gtm-analysis-scorecard": "gtm-strategy",
+  "channel-gtm-analysis-matrix": "gtm-channels-comparison",
+};
+
 function normalizeInputSpec(inputSpec = {}) {
   return {
     label: String(inputSpec?.label || DEFAULT_INPUT_SPEC.label).trim() || DEFAULT_INPUT_SPEC.label,
@@ -789,6 +803,7 @@ const CONFIG_SPECS = [
 export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   ...normalizeResearchConfigSpec(spec),
   id: spec.id,
+  slug: spec.slug || URL_SLUG_BY_CONFIG[spec.id] || spec.id,
   name: spec.name,
   tabLabel: spec.tabLabel || spec.name,
   engineVersion: "1.0.0",

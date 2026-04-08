@@ -325,6 +325,219 @@ a:hover {
   display: none;
 }
 
+.landing-shell {
+  min-height: 100vh;
+  background: var(--ck-bg);
+  color: var(--ck-text);
+}
+
+.landing-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--ck-surface);
+  border-bottom: 1px solid var(--ck-line);
+}
+
+.landing-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.landing-logo-box {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ck-line-strong);
+  background: var(--ck-surface-soft);
+  display: grid;
+  place-items: center;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+}
+
+.landing-logo-number {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 8px;
+  color: var(--ck-muted);
+}
+
+.landing-logo-mark {
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.landing-brand-name,
+.landing-brand-home {
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--ck-text);
+  letter-spacing: -0.01em;
+}
+
+.landing-brand-home {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+}
+
+.landing-main {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 26px 20px 36px;
+  display: grid;
+  gap: 28px;
+}
+
+.landing-hero {
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.landing-kicker {
+  margin: 0;
+  color: var(--ck-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.landing-hero h1 {
+  margin: 0;
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: 1.04;
+  font-weight: 700;
+  max-width: 14ch;
+}
+
+.landing-subtitle {
+  margin: 0;
+  color: var(--ck-muted);
+  max-width: 76ch;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.landing-hero-actions,
+.landing-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.landing-grid-section {
+  display: grid;
+  gap: 10px;
+}
+
+.landing-grid-section h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.landing-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.landing-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.landing-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.landing-grid-featured {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.landing-card {
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.landing-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.landing-card p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ck-muted);
+  line-height: 1.5;
+}
+
+.landing-feature-card {
+  align-content: start;
+  gap: 10px;
+}
+
+.landing-feature-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.landing-tag {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ck-line-strong);
+  background: var(--ck-surface-soft);
+  color: var(--ck-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 6px;
+}
+
+.landing-slug {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ck-muted);
+}
+
+.landing-btn {
+  border: 1px solid var(--ck-line);
+  background: var(--ck-surface);
+  color: var(--ck-text);
+  padding: 8px 11px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.landing-btn-primary {
+  border-color: var(--ck-accent);
+  background: var(--ck-accent);
+  color: var(--ck-accent-ink);
+}
+
+.landing-btn-ghost {
+  background: var(--ck-surface);
+}
+
 @media (max-width: 900px) {
   .app-header {
     padding: 10px 12px;
@@ -388,5 +601,34 @@ a:hover {
   }
   .research-list-toolbar {
     margin-bottom: 6px;
+  }
+  .landing-top {
+    padding: 10px 12px;
+  }
+  .landing-brand-name,
+  .landing-brand-home {
+    font-size: 24px;
+  }
+  .landing-main {
+    padding: 16px 12px 24px;
+    gap: 16px;
+  }
+  .landing-hero {
+    padding: 14px;
+    gap: 9px;
+  }
+  .landing-subtitle {
+    font-size: 14px;
+  }
+  .landing-grid-4,
+  .landing-grid-3,
+  .landing-grid-featured {
+    grid-template-columns: 1fr;
+  }
+  .landing-card {
+    padding: 12px;
+  }
+  .landing-top-actions {
+    margin-left: auto;
   }
 }
