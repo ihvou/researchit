@@ -4,34 +4,34 @@ import SiteFooter from "./SiteFooter.jsx";
 const AUDIENCE_BLOCKS = [
   {
     title: "Founders",
-    text: "Pressure-test ideas before you commit roadmap, hiring, and GTM budget.",
+    text: "Validate market demand, size an opportunity, map competitors, and assess GTM before committing resources - with an audit trail you can show investors.",
   },
   {
-    title: "Top Managers",
-    text: "Compare strategic options with explicit evidence and confidence, not slides-only narratives.",
+    title: "Strategy and product teams",
+    text: "Run build-vs-buy, market entry, or expansion decisions with per-dimension evidence and a Critic challenge - outputs you can defend in a board review.",
   },
   {
-    title: "Analysts",
-    text: "Run repeatable research frameworks with auditable outputs and exports.",
+    title: "Analysts and consultants",
+    text: "Reproducible research frameworks with configurable rubrics, confidence calibration, and exports that hold up to scrutiny.",
   },
 ];
 
 const POWER_BLOCKS = [
   {
-    title: "Evidence-first by default",
-    text: "Research it prioritizes verifiable evidence before scoring or recommendations.",
+    title: "Evidence before scoring",
+    text: "Each dimension is researched with live web search and cited sources before any score is assigned. Nothing is inferred from training data alone.",
   },
   {
-    title: "Built-in critic pass",
-    text: "A dedicated critic model challenges weak claims and confidence inflation.",
+    title: "Built-in Critic that disagrees",
+    text: "A second model reviews the Analyst's output, challenges overconfident claims, and flags dimensions where evidence is thin. Disagreement is visible, not hidden.",
   },
   {
-    title: "Scorecard and matrix modes",
-    text: "Use scorecards for go/no-go decisions and matrices for side-by-side comparisons.",
+    title: "Two output modes",
+    text: "Scorecards for go/no-go decisions - scored dimensions, weighted total, confidence per claim. Matrices for side-by-side comparisons across competitors, segments, or channels.",
   },
   {
-    title: "Operational outputs",
-    text: "Export JSON/HTML/PDF artifacts and keep a reproducible research trail.",
+    title: "Exportable and re-importable",
+    text: "Every run exports to JSON, HTML, and PDF. Re-import to continue where you left off. Share with colleagues for async review and challenge.",
   },
 ];
 
@@ -200,30 +200,18 @@ export default function LandingPage({
 
       <main className="landing-main">
         <section className="landing-hero">
-          <p className="landing-kicker">Strategic Research Instrument</p>
-          <h1>Make higher-stakes decisions with evidence you can defend.</h1>
+          <p className="landing-kicker">Evidence-first. Critic-reviewed. Auditable.</p>
+          <h1>Research before you build.</h1>
           <p className="landing-subtitle">
-            Research it helps founders, executives, and analysts evaluate ideas, markets, channels, and competitors using a structured analyst-plus-critic workflow.
+            Structured AI research for product and strategy decisions. Every run scores evidence per dimension, surfaces a Critic challenge, and produces an auditable artifact - not a confident-sounding narrative.
           </p>
           <div className="landing-hero-actions">
             <button
               type="button"
               className="landing-btn landing-btn-primary"
               onClick={onOpenWorkspace}>
-              Start Researching
+              Run your first research
             </button>
-          </div>
-        </section>
-
-        <section className="landing-grid-section">
-          <h2>Why Founders, Leaders, and Analysts Use Research it</h2>
-          <div className="landing-grid landing-grid-4">
-            {POWER_BLOCKS.map((item) => (
-              <article key={item.title} className="landing-card">
-                <h3>{item.title}</h3>
-                <p>{item.text}</p>
-              </article>
-            ))}
           </div>
         </section>
 
@@ -240,7 +228,7 @@ export default function LandingPage({
         </section>
 
         <section className="landing-grid-section">
-          <h2>Start With These Researches</h2>
+          <h2>Research Types</h2>
           <div className="landing-grid landing-grid-featured">
             {featuredConfigs.map((config) => (
               <article key={config.id} className="landing-card landing-feature-card">
@@ -256,6 +244,18 @@ export default function LandingPage({
                   onClick={() => onOpenConfig?.(config)}>
                   Open Research
                 </button>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="landing-grid-section">
+          <h2>How It Works</h2>
+          <div className="landing-grid landing-grid-4">
+            {POWER_BLOCKS.map((item) => (
+              <article key={item.title} className="landing-card">
+                <h3>{item.title}</h3>
+                <p>{item.text}</p>
               </article>
             ))}
           </div>
