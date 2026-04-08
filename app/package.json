@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "generate:static-pages": "node ./scripts/generate-static-research-pages.mjs",
+    "predev": "npm run generate:static-pages",
+    "prebuild": "npm run generate:static-pages",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

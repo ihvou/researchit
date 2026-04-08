@@ -3,7 +3,7 @@ import App from "./App.jsx";
 import LandingPage from "./components/LandingPage.jsx";
 import SiteFooter from "./components/SiteFooter.jsx";
 import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../configs/research-configurations.js";
-import { HOME_PATH, getResearchPath, resolveAppRoute } from "./lib/routes";
+import { HOME_PATH, getResearchPath, getWorkspacePath, resolveAppRoute } from "./lib/routes";
 import { applySeoMeta, buildHomeSeoMeta, buildNotFoundSeoMeta, buildResearchSeoMeta } from "./lib/seo";
 import { downloadDebugLogsBundle } from "./lib/debug";
 
@@ -62,7 +62,11 @@ export default function ResearchitRoot() {
 
   useEffect(() => {
     if (route.kind === "research" && route.config) {
-      applySeoMeta(buildResearchSeoMeta(route.config));
+      const meta = buildResearchSeoMeta(route.config);
+      applySeoMeta({
+        ...meta,
+        robots: "noindex,follow",
+      });
       return;
     }
     if (route.kind === "not_found") {
@@ -77,7 +81,7 @@ export default function ResearchitRoot() {
       <App
         initialConfigId={route.config.id}
         routeConfigId={route.config.id}
-        onActiveConfigChange={(config) => navigateTo(getResearchPath(config))}
+        onActiveConfigChange={(config) => navigateTo(getWorkspacePath(config))}
         onNavigateHome={() => navigateTo(HOME_PATH)}
       />
     );
@@ -117,7 +121,7 @@ export default function ResearchitRoot() {
               <button
                 type="button"
                 className="landing-btn landing-btn-ghost"
-                onClick={() => navigateTo(getResearchPath(DEFAULT_RESEARCH_CONFIG))}>
+                onClick={() => navigateTo(getWorkspacePath(DEFAULT_RESEARCH_CONFIG))}>
                 Open Workspace
               </button>
             </div>
@@ -131,8 +135,14 @@ export default function ResearchitRoot() {
   return (
     <LandingPage
       featuredConfigs={featuredConfigs}
-      onOpenConfig={(config) => navigateTo(getResearchPath(config))}
-      onOpenWorkspace={() => navigateTo(getResearchPath(DEFAULT_RESEARCH_CONFIG))}
+      onOpenConfig={(config) => {
+        if (typeof window !== "undefined") {
+          window.location.assign(getResearchPath(config));
+          return;
+        }
+        navigateTo(getResearchPath(config));
+      }}
+      onOpenWorkspace={() => navigateTo(getWorkspacePath(DEFAULT_RESEARCH_CONFIG))}
       onExportDebug={handleExportDebugLogs}
     />
   );

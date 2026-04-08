@@ -64,6 +64,8 @@ handleFollowUp(input, config, callbacks)
 - All LLM calls go through the engine's transport abstraction — app provides the `callFn` implementation.
 - `analyst.js` / `critic.js` are thin wrappers around engine's `callOpenAI`; `providerConfig.js` and `fetch-source.js` handle host-only concerns.
 - UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
+- Public routing is hybrid by design: static indexable pages at `/<config-slug>/`, interactive execution UI at `/workspace/<config-slug>/`.
+- Static discovery pages are generated from config metadata (not hand-maintained) via `app/scripts/generate-static-research-pages.mjs`.
 
 **Internal structure:**
 | Directory | Contents |
@@ -72,6 +74,7 @@ handleFollowUp(input, config, callbacks)
 | `src/components/` | React UI components (tabs, pills, badges, lists, threads) |
 | `src/hooks/` | `useAnalysis.js`, `useFollowUp.js` — orchestration hooks that wire engine to React state |
 | `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation) |
+| `scripts/` | Build-time generators (static SEO research pages, sitemap, llms.txt) |
 
 ### configs/ — Research Configurations
 

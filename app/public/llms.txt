@@ -20,7 +20,11 @@ It runs evidence-first research workflows with analyst generation plus critic ch
 - https://researchit.app/gtm-channels-comparison/
 
 ## Product Summary
+- Hybrid architecture: static research pages for indexing + interactive workspace for execution.
 - Supports scorecard and matrix research modes.
 - Uses configurable research dimensions/attributes per research type.
 - Produces auditable research outputs with confidence and source grounding.
 - Supports export artifacts (JSON, and scorecard exports like HTML/PDF/images).
+
+## Workspace
+- https://researchit.app/workspace/

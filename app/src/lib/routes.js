@@ -1,10 +1,8 @@
 import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../../configs/research-configurations.js";
 
 export const HOME_PATH = "/";
-export const LEGACY_WORKSPACE_PATH = "/workspace";
+export const WORKSPACE_BASE_PATH = "/workspace";
 export const LEGACY_RESEARCH_BASE_PATH = "/research";
-
-const RESERVED_SINGLE_PATHS = new Set(["api"]);
 
 function splitPath(pathname = "/") {
   const raw = String(pathname || "/").trim() || "/";
@@ -52,6 +50,19 @@ export function getResearchPath(configOrIdOrSlug = DEFAULT_RESEARCH_CONFIG) {
   return `/${getConfigSlug(config)}/`;
 }
 
+export function getWorkspacePath(configOrIdOrSlug = DEFAULT_RESEARCH_CONFIG) {
+  let config = DEFAULT_RESEARCH_CONFIG;
+  if (typeof configOrIdOrSlug === "object" && configOrIdOrSlug) {
+    config = getConfigById(configOrIdOrSlug.id);
+  } else {
+    const value = String(configOrIdOrSlug || "").trim();
+    const byId = RESEARCH_CONFIGS.find((item) => item.id === value);
+    const bySlug = getConfigBySlug(value);
+    config = byId || bySlug || DEFAULT_RESEARCH_CONFIG;
+  }
+  return `${WORKSPACE_BASE_PATH}/${getConfigSlug(config)}/`;
+}
+
 export function resolveAppRoute(pathname = "/") {
   const { raw, normalized } = splitPath(pathname);
 
@@ -64,9 +75,9 @@ export function resolveAppRoute(pathname = "/") {
     };
   }
 
-  if (normalized === LEGACY_WORKSPACE_PATH || normalized === LEGACY_RESEARCH_BASE_PATH) {
+  if (normalized === WORKSPACE_BASE_PATH) {
     const config = DEFAULT_RESEARCH_CONFIG;
-    const canonicalPath = getResearchPath(config);
+    const canonicalPath = getWorkspacePath(config);
     return {
       kind: "research",
       config,
@@ -76,8 +87,8 @@ export function resolveAppRoute(pathname = "/") {
     };
   }
 
-  if (normalized.startsWith(`${LEGACY_RESEARCH_BASE_PATH}/`)) {
-    let slug = normalized.slice(LEGACY_RESEARCH_BASE_PATH.length + 1);
+  if (normalized.startsWith(`${WORKSPACE_BASE_PATH}/`)) {
+    let slug = normalized.slice(WORKSPACE_BASE_PATH.length + 1).split("/")[0];
     try {
       slug = decodeURIComponent(slug);
     } catch {
@@ -92,7 +103,7 @@ export function resolveAppRoute(pathname = "/") {
         shouldRedirect: false,
       };
     }
-    const canonicalPath = getResearchPath(config);
+    const canonicalPath = getWorkspacePath(config);
     return {
       kind: "research",
       config,
@@ -102,25 +113,42 @@ export function resolveAppRoute(pathname = "/") {
     };
   }
 
-  const pathSegments = normalized.slice(1).split("/").filter(Boolean);
-  if (pathSegments.length === 1 && !RESERVED_SINGLE_PATHS.has(pathSegments[0])) {
-    let slug = pathSegments[0];
+  if (normalized === LEGACY_RESEARCH_BASE_PATH) {
+    const config = DEFAULT_RESEARCH_CONFIG;
+    const canonicalPath = getWorkspacePath(config);
+    return {
+      kind: "research",
+      config,
+      pathname: raw,
+      canonicalPath,
+      shouldRedirect: true,
+    };
+  }
+
+  if (normalized.startsWith(`${LEGACY_RESEARCH_BASE_PATH}/`)) {
+    let slug = normalized.slice(LEGACY_RESEARCH_BASE_PATH.length + 1).split("/")[0];
     try {
       slug = decodeURIComponent(slug);
     } catch {
       slug = String(slug || "");
     }
     const config = getConfigBySlug(slug);
-    if (config) {
-      const canonicalPath = getResearchPath(config);
+    if (!config) {
       return {
-        kind: "research",
-        config,
+        kind: "not_found",
         pathname: raw,
-        canonicalPath,
-        shouldRedirect: raw !== canonicalPath,
+        canonicalPath: raw,
+        shouldRedirect: false,
       };
     }
+    const canonicalPath = getWorkspacePath(config);
+    return {
+      kind: "research",
+      config,
+      pathname: raw,
+      canonicalPath,
+      shouldRedirect: true,
+    };
   }
 
   return {
