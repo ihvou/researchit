@@ -119,7 +119,7 @@ function dimensionAcronym(label) {
 function renderTextWithLinks(text) {
   const input = String(text || "");
   if (!input) return "";
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^)\s]+)/g;
   const out = [];
   let lastIndex = 0;
   let match;
@@ -128,14 +128,19 @@ function renderTextWithLinks(text) {
     if (match.index > lastIndex) {
       out.push(input.slice(lastIndex, match.index));
     }
+    const markdownLabel = match[1];
+    const markdownUrl = match[2];
+    const plainUrl = match[3];
+    const href = markdownUrl || plainUrl;
+    const label = markdownLabel || "source";
     out.push(
       <a
         key={`methodology-link-${key++}`}
-        href={match[2]}
+        href={href}
         target="_blank"
         rel="noreferrer"
         style={{ color: "var(--ck-accent)", textDecoration: "none" }}>
-        {match[1]}
+        {label}
       </a>
     );
     lastIndex = pattern.lastIndex;
@@ -178,6 +183,7 @@ export default function App({
   const [importLoading, setImportLoading] = useState(false);
   const [importWarning, setImportWarning] = useState("");
   const [importError, setImportError] = useState("");
+  const [matrixSubjectConfirmationMode, setMatrixSubjectConfirmationMode] = useState(false);
 
   const ucRef = useRef(useCases);
   const cardRefs = useRef({});
@@ -202,13 +208,14 @@ export default function App({
   const matrixAttributes = cloneDims(activeConfig?.attributes || []);
 
   useEffect(() => {
-    const examples = activeConfig?.subjects?.examples || [];
-    setSubjectsText((prev) => {
-      if (String(prev || "").trim()) return prev;
-      if (!isMatrixMode || !examples.length) return "";
-      return examples.join("\n");
-    });
-  }, [activeConfig?.id, activeConfig?.subjects, isMatrixMode]);
+    if (!isMatrixMode) {
+      setSubjectsText("");
+      setMatrixSubjectConfirmationMode(false);
+      return;
+    }
+    setSubjectsText("");
+    setMatrixSubjectConfirmationMode(false);
+  }, [activeConfig?.id, isMatrixMode]);
 
   function setActiveDims(updater) {
     if (isMatrixMode) return;
@@ -317,6 +324,7 @@ export default function App({
     const desc = inputText.trim();
     if (!desc || globalAnalyzing) return;
     if (isMatrixMode) {
+      setMatrixSubjectConfirmationMode(false);
       const parsedSubjects = parseSubjectsInput(subjectsText).slice(0, matrixSubjectMax);
       const runtimeConfig = buildRuntimeConfig(activeConfig, dimsByConfig[activeConfig.id] || activeConfig.dimensions);
       let resolved;
@@ -349,6 +357,7 @@ export default function App({
       if (resolved?.requiresConfirmation) {
         setSubjectsText(resolvedSubjects.join("\n"));
         setImportWarning("Suggested subjects were prepared from your prompt. Review/edit them, then click Analyze again.");
+        setMatrixSubjectConfirmationMode(true);
         return;
       }
 
@@ -1018,13 +1027,13 @@ export default function App({
               resize: "vertical", lineHeight: 1.5, outline: "none",
             }}
           />
-          {isMatrixMode ? (
+          {isMatrixMode && matrixSubjectConfirmationMode ? (
             <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                {subjectsLabel} (Optional Override)
+                {subjectsLabel} (Confirm / Edit)
               </div>
               <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
-                {subjectsPrompt}. Leave blank to auto-detect subjects from your prompt; if needed, the app will suggest a list for confirmation.
+                Suggested subjects were generated from your prompt. Edit if needed, then click Analyze.
               </div>
               <textarea
                 value={subjectsText}
@@ -1046,7 +1055,7 @@ export default function App({
                 }}
               />
               <div style={{ fontSize: 11, color: parsedSubjects.length > matrixSubjectMax ? "var(--ck-text)" : "var(--ck-muted)" }}>
-                Parsed override: {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | target range: {matrixSubjectMin}-{matrixSubjectMax}
+                Parsed: {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | target range: {matrixSubjectMin}-{matrixSubjectMax}
               </div>
             </div>
           ) : null}
