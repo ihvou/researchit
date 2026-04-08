@@ -78,7 +78,7 @@ flowchart LR
 
 ## Analysis Pipeline
 
-Current pipeline (quality-first):
+Scorecard pipeline (quality-first):
 1. Analyst baseline pass (memory-only)
 2. Analyst web pass (live-search assisted)
 3. Reconcile pass (merge evidence, re-score)
@@ -88,7 +88,19 @@ Current pipeline (quality-first):
 7. Consistency check pass
 8. Discovery generation + candidate pre-validation
 
-Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals.
+Matrix pipeline:
+1. Plan + input resolution (decision question, subject set)
+2. Baseline matrix pass (memory-only)
+3. Web matrix pass
+4. Reconcile baseline + web drafts
+5. Targeted low-confidence cell recovery
+6. Critic matrix audit
+7. Analyst response (defend or concede contested cells)
+8. Matrix summary (+ optional matrix discovery suggestions)
+
+Source verification runs after source-producing phases in both scorecard and matrix flows. Cited URLs are checked with `fetchSource`; unverified claims can reduce confidence.
+
+Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals. Matrix follow-ups are supported at cell level (`subjectId` × `attributeId`) in addition to scorecard dimension threads.
 
 ## Architecture Reference
 
@@ -125,7 +137,8 @@ Default system prompts live in:
   name: "Startup / Product Idea Validation",
   tabLabel: "Startup Validation", // UI label for tabbed config selection
   outputMode: "scorecard", // "scorecard" | "matrix"
-  methodology: "Methodological foundation and positioning notes shown in UI",
+  shortDescription: "Short card copy used on homepage and discovery surfaces",
+  methodology: "Methodological foundation shown in UI (supports inline markdown links)",
   engineVersion: "1.0.0",
 
   inputSpec: {
@@ -160,7 +173,12 @@ Default system prompts live in:
       weight: 22,
       enabled: true,
       brief: "...",
-      fullDef: "..."
+      fullDef: "...",
+      polarityHint: "Higher score means stronger decision attractiveness",
+      researchHints: {
+        whereToLook: ["industry reports", "earnings calls", "regulatory filings"],
+        queryTemplates: ["<segment> pain evidence", "<product> adoption benchmark"]
+      }
     }
   ],
 
@@ -168,7 +186,7 @@ Default system prompts live in:
   matrixLayout: "auto", // "subjects-as-rows" | "subjects-as-columns" | "auto" (UI default hint)
   subjects: {
     label: "Competitors",
-    inputPrompt: "List the competitors to analyze",
+    inputPrompt: "List the competitors to analyze (optional override; auto-discovery supported)",
     examples: ["Notion", "Coda", "Confluence"],
     minCount: 2,
     maxCount: 8
@@ -221,6 +239,8 @@ Default system prompts live in:
   }
 }
 ```
+
+For matrix configs, a single free-form prompt is accepted. The engine can extract subjects from the prompt and, when needed, run subject discovery before analysis.
 
 In scorecard mode, analysis `attributes` also include an `inputFrame` block used by UI:
 

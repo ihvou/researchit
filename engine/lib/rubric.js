@@ -21,13 +21,17 @@ export function buildDimRubricReminder(dim, options = {}) {
   if (!dim) return "";
   const wordCap = options.wordCap || 14;
   const s5 = limitWords(extractScoreLine(dim.fullDef, 5), wordCap);
+  const s4 = limitWords(extractScoreLine(dim.fullDef, 4), wordCap);
   const s3 = limitWords(extractScoreLine(dim.fullDef, 3), wordCap);
+  const s2 = limitWords(extractScoreLine(dim.fullDef, 2), wordCap);
   const s1 = limitWords(extractScoreLine(dim.fullDef, 1), wordCap);
   return [
     `${dim.label} [${dim.id}]`,
     `- ${getPolarityHint(dim)}`,
     `- Score 5 anchor: ${s5 || "n/a"}`,
+    `- Score 4 anchor: ${s4 || "n/a"}`,
     `- Score 3 anchor: ${s3 || "n/a"}`,
+    `- Score 2 anchor: ${s2 || "n/a"}`,
     `- Score 1 anchor: ${s1 || "n/a"}`,
   ].join("\n");
 }
@@ -37,8 +41,11 @@ export function buildRubricCalibrationBlock(dims = [], options = {}) {
   return (dims || [])
     .map((d) => {
       const s5 = limitWords(extractScoreLine(d.fullDef, 5), wordCap);
+      const s4 = limitWords(extractScoreLine(d.fullDef, 4), wordCap);
+      const s3 = limitWords(extractScoreLine(d.fullDef, 3), wordCap);
+      const s2 = limitWords(extractScoreLine(d.fullDef, 2), wordCap);
       const s1 = limitWords(extractScoreLine(d.fullDef, 1), wordCap);
-      return `- ${d.label} [${d.id}]: ${getPolarityHint(d)} | Score5: ${s5 || "n/a"} | Score1: ${s1 || "n/a"}`;
+      return `- ${d.label} [${d.id}]: ${getPolarityHint(d)} | Score5: ${s5 || "n/a"} | Score4: ${s4 || "n/a"} | Score3: ${s3 || "n/a"} | Score2: ${s2 || "n/a"} | Score1: ${s1 || "n/a"}`;
     })
     .join("\n");
 }

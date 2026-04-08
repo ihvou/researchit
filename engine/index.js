@@ -1,5 +1,6 @@
 export { runAnalysis } from "./pipeline/analysis.js";
 export { handleFollowUp } from "./pipeline/followUp.js";
+export { runMatrixAnalysis, resolveMatrixResearchInput } from "./pipeline/matrix.js";
 
 export { createTransport } from "./lib/transport.js";
 export { callOpenAI } from "./providers/openai.js";

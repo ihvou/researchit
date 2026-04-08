@@ -34,11 +34,13 @@ const POWER_BLOCKS = [
   },
 ];
 
-function summarizeMethodology(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return "Config-driven decision research with evidence, confidence, and critique.";
-  const first = raw.split(/(?<=[.!?])\s+/)[0] || raw;
-  return first.length > 180 ? `${first.slice(0, 177)}...` : first;
+function cardDescription(config) {
+  const shortDescription = String(config?.shortDescription || "").trim();
+  if (shortDescription) return shortDescription;
+  const methodology = String(config?.methodology || "").trim();
+  if (!methodology) return "Config-driven decision research with evidence, confidence, and critique.";
+  const first = methodology.split(/(?<=[.!?])\s+/)[0] || methodology;
+  return first.length > 190 ? `${first.slice(0, 187)}...` : first;
 }
 
 export default function LandingPage({
@@ -118,7 +120,7 @@ export default function LandingPage({
                   <span className="landing-slug">/{config.slug}/</span>
                 </div>
                 <h3>{config.tabLabel || config.name}</h3>
-                <p>{summarizeMethodology(config.methodology)}</p>
+                <p>{cardDescription(config)}</p>
                 <button
                   type="button"
                   className="landing-btn landing-btn-ghost"

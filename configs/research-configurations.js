@@ -161,17 +161,24 @@ function normalizeFramingFields(framingFields = []) {
   return normalized.length ? normalized : DEFAULT_FRAMING_FIELDS;
 }
 
-function normalizeMethodologySources(sources = []) {
-  if (!Array.isArray(sources)) return [];
-  return sources
-    .map((source) => {
-      const label = String(source?.label || "").trim();
-      const url = String(source?.url || "").trim();
-      if (!label || !/^https?:\/\//i.test(url)) return null;
-      return { label, url };
-    })
-    .filter(Boolean)
-    .slice(0, 16);
+function normalizeResearchHints(hints = null) {
+  if (!hints || typeof hints !== "object") return null;
+  const whereToLook = Array.isArray(hints.whereToLook)
+    ? hints.whereToLook.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+    : [];
+  const queryTemplates = Array.isArray(hints.queryTemplates)
+    ? hints.queryTemplates.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+    : [];
+  if (!whereToLook.length && !queryTemplates.length) return null;
+  return { whereToLook, queryTemplates };
+}
+
+function deriveShortDescription(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "Evidence-first research workflow with analyst and critic review.";
+  const firstSentence = raw.split(/(?<=[.!?])\s+/)[0] || raw;
+  if (firstSentence.length <= 190) return firstSentence;
+  return `${firstSentence.slice(0, 187).trimEnd()}...`;
 }
 
 function normalizeOutputMode(value) {
@@ -229,6 +236,8 @@ function normalizeDimensionsList(dimensions = []) {
     enabled: dim?.enabled !== false,
     brief: String(dim?.brief || "").trim(),
     fullDef: String(dim?.fullDef || "").trim(),
+    polarityHint: String(dim?.polarityHint || "").trim(),
+    researchHints: normalizeResearchHints(dim?.researchHints),
   }));
 }
 
@@ -271,37 +280,8 @@ const CONFIG_SPECS = [
   {
     "id": "startup-product-idea-validation",
     "name": "Startup / Product Idea Validation",
-    "methodology": "This type of research combines Jobs to Be Done for clarifying customer progress, Outcome-Driven Innovation for identifying unmet outcomes, Sequoia Arc's product-market-fit archetypes for market/product/customer alignment, a16z guidance on startup metrics and distribution design for early traction realism, 7 Powers for defensibility assessment, and SVPG's product operating model principles for disciplined discovery and decision-making.",
-    "methodologySources": [
-      {
-        "label": "Jobs to Be Done Theory (Christensen Institute)",
-        "url": "https://www.christenseninstitute.org/video/what-is-jobs-to-be-done-theory/"
-      },
-      {
-        "label": "Outcome-Driven Innovation (Strategyn)",
-        "url": "https://strategyn.com/outcome-driven-innovation/"
-      },
-      {
-        "label": "The Arc Product-Market Fit Framework (Sequoia)",
-        "url": "https://www.sequoiacap.com/article/pmf-framework/"
-      },
-      {
-        "label": "16 Startup Metrics (a16z)",
-        "url": "https://a16z.com/16-startup-metrics/"
-      },
-      {
-        "label": "Distribution (a16z)",
-        "url": "https://a16z.com/distribution/"
-      },
-      {
-        "label": "7 Powers (Hamilton Helmer)",
-        "url": "https://7powers.com/"
-      },
-      {
-        "label": "TRANSFORMED: Moving to the Product Operating Model (SVPG)",
-        "url": "https://www.svpg.com/books/transformed-moving-to-the-product-operating-model/"
-      }
-    ],
+    "shortDescription": "Stress-test startup or product ideas with evidence on pain intensity, demand quality, GTM feasibility, and defensibility.",
+    "methodology": "This type of research combines [Jobs to Be Done](https://www.christenseninstitute.org/video/what-is-jobs-to-be-done-theory/) for clarifying customer progress, [Outcome-Driven Innovation](https://strategyn.com/outcome-driven-innovation/) for unmet outcomes, Sequoia Arc's [product-market-fit framework](https://www.sequoiacap.com/article/pmf-framework/) for market/product/customer alignment, a16z guidance on [startup metrics](https://a16z.com/16-startup-metrics/) and [distribution](https://a16z.com/distribution/) for early traction realism, [7 Powers](https://7powers.com/) for defensibility assessment, and SVPG's [product operating model](https://www.svpg.com/books/transformed-moving-to-the-product-operating-model/) principles for disciplined discovery and decision-making.",
     "relatedDiscovery": true,
     "dimensions": [
       {
@@ -366,6 +346,7 @@ const CONFIG_SPECS = [
   {
     "id": "market-entry-analysis",
     "name": "Market Entry Analysis",
+    "shortDescription": "Evaluate whether a specific offer has a credible right-to-win in a target geography or segment.",
     "methodology": "This type of research is grounded in McKinsey's current \"where to play\" and market-specific competitive-advantage work, especially its emphasis that advantage is context-specific at the intersection of offering, geography, and customer; BCG's strategy and sector work on uneven market conditions and local fit; Bain's strategic-fit logic; and classic strategy books that remain widely used in practice, especially Rumelt on diagnosis and coherent action. The result is not a generic \"country attractiveness\" template: it is a right-to-win test for a specific offer in a specific market.",
         "relatedDiscovery": true,
     "dimensions": [
@@ -423,6 +404,7 @@ const CONFIG_SPECS = [
   {
     "id": "competitive-landscape",
     "name": "Competitive Landscape",
+    "shortDescription": "Map category structure, competitor advantage quality, and whitespace to assess strategic exposure.",
     "methodology": "This type of research draws on Helmer's durable-advantage lens, McKinsey's granular competitive-advantage approach, and practitioner venture thinking from a16z and Sequoia that focuses less on feature comparison and more on what actually drives customer choice, market power, and white space. I excluded generic checklist competitor matrices as the scoring backbone; the point here is to understand the structure of advantage, not just list vendors.",
         "relatedDiscovery": false,
     "dimensions": [
@@ -480,6 +462,7 @@ const CONFIG_SPECS = [
   {
     "id": "build-vs-buy-technology-decision",
     "name": "Build vs. Buy / Technology Decision",
+    "shortDescription": "Pressure-test build, buy, and hybrid options using strategic criticality, speed, lock-in, and execution risk.",
     "methodology": "This type of research uses BCG's current buy-and-build logic, which explicitly favors hybrid approaches when companies need both speed and differentiation; McKinsey's recent framing that build-versus-buy should be evaluated in light of competitive advantage and strategic flexibility; Bain's execution-first view that capabilities should be sequenced to deliver value while building lasting internal strengths; and SVPG's product-operating-model view that capabilities matter only when they materially affect product outcomes. This is why the config gives high weight to strategic criticality and time-to-value instead of treating the choice as a pure cost comparison.",
         "relatedDiscovery": true,
     "dimensions": [
@@ -537,6 +520,7 @@ const CONFIG_SPECS = [
   {
     "id": "investment-m-and-a-screening",
     "name": "Investment / M&A Screening",
+    "shortDescription": "Screen investment or acquisition targets by strategic fit, advantage durability, and value-creation plausibility.",
     "methodology": "This type of research combines current M&A practice from McKinsey, BCG, and Bain with venture-style quality filters from Sequoia and a16z. The consulting side contributes strategic fit, synergy logic, diligence beyond the standard legal-financial checklist, and repeated emphasis on experienced acquirers, value creation, and deeper diligence. The venture side contributes market quality, growth quality, and defensibility. I deliberately weight quality of advantage and value-creation logic above raw market excitement because practitioners are trying to avoid expensive false positives, not just find \"interesting\" assets.",
         "relatedDiscovery": true,
     "dimensions": [
@@ -594,6 +578,7 @@ const CONFIG_SPECS = [
   {
     "id": "product-expansion-new-feature-adjacent-segment-new-geography",
     "name": "Product Expansion (new feature, adjacent segment, new geography)",
+    "shortDescription": "Assess whether core strengths can transfer into adjacent features, segments, or geographies without value dilution.",
     "methodology": "This type of research is based on McKinsey's current work on growing within and beyond the core, Bain's long-running but still practitioner-relevant adjacency and \"beyond the core\" logic, Sequoia's product-market-fit framing, and a16z's growth thinking around expansion metrics and land-and-expand behavior. I treat expansion as a transfer test: can the company carry real advantage from the core into a new feature, segment, or geography without destroying focus or economics?",
         "relatedDiscovery": true,
     "dimensions": [
@@ -651,6 +636,7 @@ const CONFIG_SPECS = [
   {
     "id": "market-sizing-tam-sam-som",
     "name": "Market Sizing (TAM/SAM/SOM)",
+    "shortDescription": "Validate TAM/SAM/SOM assumptions through evidence quality, segmentation clarity, and practical reachability.",
     "tabLabel": "Market Sizing",
     "outputMode": "scorecard",
     "methodology": "This type of research is anchored in bottom-up market sizing and triangulation practices used by Sequoia and a16z, with explicit pressure-testing of segment definition and reachability assumptions before trusting topline TAM claims.",
@@ -662,7 +648,7 @@ const CONFIG_SPECS = [
         "weight": 22,
         "enabled": true,
         "brief": "How well demand is evidenced via behavioral signals rather than stated intent.",
-        "fullDef": "Higher score means demand is supported by observable behavior such as spending, workarounds, search intent, hiring signals, and repeated buyer pull."
+        "fullDef": "What it measures: How strongly market demand is backed by observed buyer behavior.\nWhy it matters: Top-down sizing without behavioral demand evidence often inflates TAM and misleads sequencing.\n\nScoring rubric:\n- 5 (Strong): Multiple independent behavioral signals show active demand (budgeted spend, repeated buying triggers, concrete workarounds, or high-intent conversion signals) in the defined segment.\n- 4 (Good): Demand is clearly supported by at least one strong behavioral signal plus several directional indicators.\n- 3 (Moderate): Demand appears plausible but is supported mainly by interviews, intent statements, or partial proxies.\n- 2 (Weak): Evidence is mostly narrative (trend decks, broad market claims) with little segment-level behavior.\n- 1 (Poor): Little credible evidence that buyers are actively trying to solve or pay for this problem."
       },
       {
         "id": "market-definition-clarity",
@@ -670,7 +656,7 @@ const CONFIG_SPECS = [
         "weight": 18,
         "enabled": true,
         "brief": "How precisely segment boundaries are defined (role, company type, geo, trigger).",
-        "fullDef": "Higher score means tightly scoped market definition with explicit boundaries; lower score means broad labels that hide real constraints."
+        "fullDef": "What it measures: Precision of TAM/SAM/SOM boundaries by segment, role, geography, and trigger.\nWhy it matters: Ambiguous scope creates false comparability and hides unreachable sub-markets.\n\nScoring rubric:\n- 5 (Strong): Boundaries are explicit and operationally testable, with clear inclusion/exclusion logic and consistent segment language.\n- 4 (Good): Scope is mostly clear, though one boundary (such as geography or buyer role) still needs refinement.\n- 3 (Moderate): Segment definition exists but still groups materially different buyers or contexts.\n- 2 (Weak): Market definition relies on broad labels (for example SMB or enterprise) without operational boundaries.\n- 1 (Poor): No clear market boundary; TAM/SAM/SOM labels are used without defensible scope."
       },
       {
         "id": "size-estimation-methodology",
@@ -678,7 +664,7 @@ const CONFIG_SPECS = [
         "weight": 18,
         "enabled": true,
         "brief": "Whether sizing is built bottom-up with clear assumptions vs top-down headline extrapolation.",
-        "fullDef": "Higher score means explicit bottom-up logic and triangulation; lower score means weak methodology and unsupported assumptions."
+        "fullDef": "What it measures: Method quality behind TAM/SAM/SOM calculations.\nWhy it matters: Weak methodology can produce precise-looking numbers with low decision value.\n\nScoring rubric:\n- 5 (Strong): Sizing uses explicit bottom-up logic with transparent assumptions and triangulation against independent benchmarks.\n- 4 (Good): Method is mostly bottom-up and transparent, with limited reliance on top-down sanity checks.\n- 3 (Moderate): Mix of bottom-up and top-down methods, with partial assumption transparency.\n- 2 (Weak): Sizing is mostly top-down extrapolation with weak assumption traceability.\n- 1 (Poor): Method is unclear, inconsistent, or unsupported by verifiable inputs."
       },
       {
         "id": "growth-trajectory",
@@ -686,7 +672,7 @@ const CONFIG_SPECS = [
         "weight": 12,
         "enabled": true,
         "brief": "Whether demand trajectory is expanding, stable, or contracting with credible evidence.",
-        "fullDef": "Higher score means durable growth tailwinds and credible trend evidence; lower score means stagnation or decline risk."
+        "fullDef": "What it measures: Direction and durability of demand growth in the scoped market.\nWhy it matters: A large market with weak or volatile growth can still be a poor near-term priority.\n\nScoring rubric:\n- 5 (Strong): Multiple recent indicators show sustained growth tailwinds and durable adoption momentum.\n- 4 (Good): Growth outlook is positive with credible evidence, though durability is less certain.\n- 3 (Moderate): Growth is mixed across subsegments or time periods.\n- 2 (Weak): Signs of stagnation, cyclicality, or slowing demand are material.\n- 1 (Poor): Market trajectory is flat-to-declining with limited evidence of reversal."
       },
       {
         "id": "reachability",
@@ -694,7 +680,7 @@ const CONFIG_SPECS = [
         "weight": 18,
         "enabled": true,
         "brief": "Whether this market can be reached realistically with current GTM, budget, and channel access.",
-        "fullDef": "Higher score means the target segment is reachable with plausible acquisition motion; lower score means market may be large but inaccessible."
+        "fullDef": "What it measures: Practical ability to access and convert the scoped market.\nWhy it matters: TAM can be large while practical SOM remains small due to channel, budget, or trust barriers.\n\nScoring rubric:\n- 5 (Strong): Clear, evidence-backed channels can reach the target segment with realistic budget and conversion assumptions.\n- 4 (Good): Reach path is credible, though one or two execution assumptions remain unproven.\n- 3 (Moderate): Reachability is plausible but uncertain across channel efficiency or conversion steps.\n- 2 (Weak): Access depends on expensive or low-confidence channels with thin validation.\n- 1 (Poor): Market is largely unreachable under current GTM constraints."
       },
       {
         "id": "competitive-density",
@@ -702,13 +688,14 @@ const CONFIG_SPECS = [
         "weight": 12,
         "enabled": true,
         "brief": "How crowded the space is with credible alternatives competing for the same budget.",
-        "fullDef": "Higher score means competitive pressure is manageable relative to differentiation and entry position; lower score means heavy crowding and weak share-capture odds."
+        "fullDef": "What it measures: Intensity of direct and substitute competition for the same budget.\nWhy it matters: Crowded markets compress share capture and make SOM assumptions fragile.\n\nScoring rubric:\n- 5 (Strong): Competitive pressure is manageable due to clear wedge, defensible differentiation, or under-served pockets.\n- 4 (Good): Competition is present but does not obviously block viable entry.\n- 3 (Moderate): Competition is meaningful; success depends on strong execution and positioning.\n- 2 (Weak): Market is crowded with capable alternatives and limited visible whitespace.\n- 1 (Poor): Competitive intensity is severe enough to make projected SOM capture unrealistic."
       }
     ]
   },
   {
     "id": "icp-customer-persona-matrix",
     "name": "ICP / Customer Persona",
+    "shortDescription": "Compare candidate customer segments side by side to identify the strongest initial wedge.",
     "tabLabel": "ICP / Persona",
     "outputMode": "matrix",
     "matrixLayout": "subjects-as-columns",
@@ -735,6 +722,7 @@ const CONFIG_SPECS = [
   {
     "id": "competitors-comparison-matrix",
     "name": "Competitors Comparison",
+    "shortDescription": "Compare competitors across positioning, strengths, weaknesses, and moat quality for practical decision support.",
     "tabLabel": "Competitors Comparison",
     "outputMode": "matrix",
     "matrixLayout": "auto",
@@ -761,6 +749,7 @@ const CONFIG_SPECS = [
   {
     "id": "channel-gtm-analysis-scorecard",
     "name": "Channel / GTM Analysis (Scorecard)",
+    "shortDescription": "Evaluate overall GTM strategy quality across channel fit, distribution leverage, economics, and signal speed.",
     "tabLabel": "GTM Strategy",
     "outputMode": "scorecard",
     "methodology": "This type of research pressure-tests overall GTM strategy quality across ICP-channel fit, unit economics, and time-to-signal constraints.",
@@ -772,7 +761,7 @@ const CONFIG_SPECS = [
         "weight": 22,
         "enabled": true,
         "brief": "Whether target ICP actually inhabits and responds to the proposed channels.",
-        "fullDef": "Higher score means channel reach assumptions are grounded in behavioral evidence for the exact ICP."
+        "fullDef": "What it measures: Fit between chosen channels and the actual behavior of the target ICP.\nWhy it matters: GTM plans fail when channels are selected from generic best practices rather than segment behavior.\n\nScoring rubric:\n- 5 (Strong): Strong evidence shows the ICP is active in the channel and converts through this motion for comparable offers.\n- 4 (Good): Fit is credible with meaningful supporting evidence, though conversion assumptions are partly inferred.\n- 3 (Moderate): Some alignment exists, but evidence is mixed or segment coverage is incomplete.\n- 2 (Weak): Channel choice is mostly assumption-driven with limited ICP-specific behavior proof.\n- 1 (Poor): Little evidence the ICP uses or responds to the proposed channels."
       },
       {
         "id": "distribution-advantage",
@@ -780,7 +769,7 @@ const CONFIG_SPECS = [
         "weight": 20,
         "enabled": true,
         "brief": "Whether founder/company has structural head-start in the chosen channel mix.",
-        "fullDef": "Higher score means tangible founder/company leverage (audience, trust, relationships, authority)."
+        "fullDef": "What it measures: Structural leverage the team has in distribution execution.\nWhy it matters: Without structural advantage, CAC and ramp time often break otherwise sensible GTM plans.\n\nScoring rubric:\n- 5 (Strong): Team has clear channel leverage (audience, partner access, brand trust, founder reach, or embedded distribution) validated by comparable outcomes.\n- 4 (Good): At least one tangible advantage exists and appears actionable.\n- 3 (Moderate): Some advantage signals exist but are narrow or weakly validated.\n- 2 (Weak): Distribution plan depends mostly on generic execution without structural edge.\n- 1 (Poor): No visible distribution advantage over peers in the same channels."
       },
       {
         "id": "cac-sustainability",
@@ -788,7 +777,7 @@ const CONFIG_SPECS = [
         "weight": 18,
         "enabled": true,
         "brief": "Whether expected CAC is compatible with likely unit economics.",
-        "fullDef": "Higher score means acquisition economics remain viable under realistic conversion assumptions."
+        "fullDef": "What it measures: Durability of acquisition economics under realistic assumptions.\nWhy it matters: Early GTM appears promising until CAC, payback, or conversion assumptions are stress-tested.\n\nScoring rubric:\n- 5 (Strong): Evidence supports CAC/payback assumptions that remain viable under conservative conversion and retention scenarios.\n- 4 (Good): Economics look healthy with limited sensitivity to key assumptions.\n- 3 (Moderate): Economics are plausible but sensitive to one or two major assumptions.\n- 2 (Weak): CAC sustainability is doubtful without optimistic conversion, pricing, or retention.\n- 1 (Poor): Acquisition economics are structurally unattractive on realistic assumptions."
       },
       {
         "id": "channel-product-fit",
@@ -796,7 +785,7 @@ const CONFIG_SPECS = [
         "weight": 15,
         "enabled": true,
         "brief": "Whether product complexity, price, and buying process match channel constraints.",
-        "fullDef": "Higher score means the proposed channel supports the actual product and sales motion."
+        "fullDef": "What it measures: Compatibility between product buying motion and channel mechanics.\nWhy it matters: Channel mismatch (for example enterprise product in self-serve channel) creates avoidable GTM friction.\n\nScoring rubric:\n- 5 (Strong): Channel mechanics align well with product complexity, contract size, and buyer process.\n- 4 (Good): Fit is mostly strong, with manageable frictions.\n- 3 (Moderate): Fit is mixed; additional enablement or motion changes are likely needed.\n- 2 (Weak): Major mismatch between channel behavior and product sales reality.\n- 1 (Poor): Channel and product motion are fundamentally misaligned."
       },
       {
         "id": "competitive-channel-density",
@@ -804,7 +793,7 @@ const CONFIG_SPECS = [
         "weight": 13,
         "enabled": true,
         "brief": "How crowded proposed channels are with capable competitors for the same ICP.",
-        "fullDef": "Higher score means crowding is manageable relative to expected differentiation and costs."
+        "fullDef": "What it measures: Degree of competitive saturation inside selected channels.\nWhy it matters: Channel crowding can erase marginal advantage and inflate acquisition costs.\n\nScoring rubric:\n- 5 (Strong): Competitive saturation is manageable relative to differentiation, message quality, and channel economics.\n- 4 (Good): Crowding is present but still leaves practical room for efficient acquisition.\n- 3 (Moderate): Density is meaningful; success depends on consistent execution quality.\n- 2 (Weak): Channels are heavily contested with limited evidence of efficient wedge entry.\n- 1 (Poor): Saturation is severe enough to make channel-led growth unlikely."
       },
       {
         "id": "time-to-first-signal",
@@ -812,13 +801,14 @@ const CONFIG_SPECS = [
         "weight": 12,
         "enabled": true,
         "brief": "How quickly the proposed approach can produce actionable learning signals.",
-        "fullDef": "Higher score means strategy generates meaningful signal in weeks rather than quarters."
+        "fullDef": "What it measures: Speed at which GTM setup yields actionable feedback loops.\nWhy it matters: Long time-to-signal delays iteration and amplifies burn risk.\n\nScoring rubric:\n- 5 (Strong): Plan can produce high-quality learning signals quickly (typically weeks) with clear instrumentation.\n- 4 (Good): Signal loop is reasonably fast, though some dependencies could delay readouts.\n- 3 (Moderate): Signal timeline is acceptable but uncertain.\n- 2 (Weak): Meaningful signal likely arrives late, slowing learning velocity.\n- 1 (Poor): Time-to-signal is too slow for efficient GTM iteration."
       }
     ]
   },
   {
     "id": "channel-gtm-analysis-matrix",
     "name": "Channel / GTM Analysis (Matrix)",
+    "shortDescription": "Compare acquisition channels directly to prioritize where to invest first based on evidence and constraints.",
     "tabLabel": "GTM Channels",
     "outputMode": "matrix",
     "matrixLayout": "subjects-as-rows",
@@ -854,7 +844,7 @@ export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   framingFields: normalizeFramingFields(spec.framingFields || DEFAULT_FRAMING_FIELDS),
   relatedDiscovery: spec.relatedDiscovery !== false,
   methodology: spec.methodology || "",
-  methodologySources: normalizeMethodologySources(spec.methodologySources || []),
+  shortDescription: deriveShortDescription(spec.shortDescription || spec.methodology || spec.name),
   prompts: BASE_PROMPTS,
   models: SHARED_MODELS,
   limits: SHARED_LIMITS,

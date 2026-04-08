@@ -50,9 +50,14 @@ runAnalysis(input, config, callbacks)
 // callbacks: { transport, onProgress, onDebugSession? }
 
 handleFollowUp(input, config, callbacks)
-// input:     { ucId, dimId, challenge, ucState, options? }
+// input:     { ucId, dimId?, subjectId?, attributeId?, challenge, ucState, options? }
 // config:    ResearchConfig object
 // callbacks: { transport, onProgress }
+
+resolveMatrixResearchInput(input, config, callbacks, options)
+// input:     { description, options?.matrixSubjects?[] }
+// options:   { requireConfirmation?: boolean }
+// returns:   resolved subjects + decision question (+ discovery metadata when used)
 ```
 
 ### app/ — Product Shell
@@ -105,8 +110,9 @@ Results flow back through callbacks.onProgress → React state → UI
 
 ---
 
-## Analysis Pipeline (8 Phases)
+## Analysis Pipeline
 
+### Scorecard (8 phases)
 1. **Analyst baseline** — memory-only initial scoring across all dimensions
 2. **Analyst web pass** — live-search-assisted evidence gathering
 3. **Reconcile** — merge evidence from both passes, re-score
@@ -115,6 +121,19 @@ Results flow back through callbacks.onProgress → React state → UI
 6. **Analyst final response** — address critic challenges with evidence
 7. **Consistency check** — cross-dimension coherence validation
 8. **Discovery generation** — related opportunities + candidate pre-validation
+
+### Matrix
+1. **Plan/input resolution** — resolve decision question and matrix subjects
+2. **Baseline matrix pass** — memory-only matrix draft
+3. **Web matrix pass** — live-search-assisted matrix draft
+4. **Reconcile** — merge baseline + web drafts
+5. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
+6. **Critic matrix audit** — flag weak/contradictory cells
+7. **Analyst response** — defend or concede each contested cell
+8. **Summary** — finalize matrix outputs (+ optional discovery suggestions)
+
+### Source verification
+After source-producing passes, cited URLs are checked via `fetchSource`. Sources are tagged `verified_in_page`, `not_found_in_page`, or `fetch_failed`. Confidence can be downgraded when verification coverage is weak.
 
 ## Follow-Up Pipeline
 
@@ -126,6 +145,10 @@ Classifies user intent into one of 6 types, then executes intent-specific logic:
 - `note` — comment (no re-analysis)
 - `re_search` — re-run a specific dimension with web search
 
+Supports both:
+- scorecard threads (`dimId`)
+- matrix cell threads (`subjectId` + `attributeId`)
+
 ---
 
 ## ResearchConfig Contract
@@ -136,7 +159,8 @@ Classifies user intent into one of 6 types, then executes intent-specific logic:
   name,                  // human-readable name
   tabLabel,              // UI tab label
   outputMode,            // "scorecard" | "matrix"
-  methodology,           // methodology notes shown in UI
+  shortDescription,      // concise discovery/homepage copy
+  methodology,           // methodology notes shown in UI (supports inline links)
   engineVersion,         // semver
 
   inputSpec: { label, placeholder, description },

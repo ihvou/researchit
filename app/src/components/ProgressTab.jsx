@@ -66,19 +66,43 @@ const MATRIX_FLOW = [
     key: "matrix_plan",
     phase: "matrix_plan",
     title: "Matrix planning",
-    detail: "Validates subject list and builds subject × attribute coverage plan.",
+    detail: "Resolves decision question, subject set, and subject × attribute coverage plan.",
   },
   {
-    key: "matrix_evidence",
-    phase: "matrix_evidence",
-    title: "Analyst matrix evidence pass",
-    detail: "Builds evidence-backed findings for each matrix cell with confidence tags.",
+    key: "matrix_baseline",
+    phase: "matrix_baseline",
+    title: "Baseline matrix pass",
+    detail: "Builds a memory-only analyst draft for every matrix cell.",
+  },
+  {
+    key: "matrix_web",
+    phase: "matrix_web",
+    title: "Web matrix pass",
+    detail: "Builds a web-assisted draft for every matrix cell with current evidence.",
+  },
+  {
+    key: "matrix_reconcile",
+    phase: "matrix_reconcile",
+    title: "Matrix reconcile",
+    detail: "Merges baseline and web drafts, keeping stronger evidence-backed cells.",
+  },
+  {
+    key: "matrix_targeted",
+    phase: "matrix_targeted",
+    title: "Targeted low-confidence recovery",
+    detail: "Runs focused query plans for low-confidence cells and upgrades confidence where possible.",
   },
   {
     key: "matrix_critic",
     phase: "matrix_critic",
     title: "Critic matrix audit",
     detail: "Flags weak or contradictory cells and adjusts confidence where needed.",
+  },
+  {
+    key: "matrix_response",
+    phase: "matrix_response",
+    title: "Analyst response to flags",
+    detail: "Defends or concedes contested cells with updated evidence.",
   },
   {
     key: "matrix_summary",
@@ -152,7 +176,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
         {outputMode === "matrix"
-          ? "Live view of the matrix pipeline: planning, evidence harvest, critic audit, and cross-matrix synthesis."
+          ? "Live view of the matrix pipeline: planning, baseline/web reconcile, targeted low-confidence recovery, critic audit, and analyst resolution."
           : "Live view of the pipeline under the hood: baseline evidence pass, web evidence pass, reconcile, targeted low-confidence re-check, critic audit, and final score update."}
       </p>
 

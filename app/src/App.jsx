@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { getDimensionView } from "@researchit/engine";
+import { getDimensionView, resolveMatrixResearchInput } from "@researchit/engine";
 import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../configs/research-configurations.js";
 import { calcWeightedScore } from "./lib/scoring";
 import { runAnalysis } from "./hooks/useAnalysis";
@@ -20,6 +20,7 @@ import ConfidenceBadge from "./components/ConfidenceBadge";
 import ChevronIcon from "./components/ChevronIcon";
 import { downloadDebugLogsBundle } from "./lib/debug";
 import SiteFooter from "./components/SiteFooter";
+import { appTransport } from "./lib/api";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
@@ -113,6 +114,40 @@ function dimensionAcronym(label) {
   const letters = words.map((w) => w[0]?.toUpperCase() || "").join("");
   if (letters) return letters.slice(0, 4);
   return String(label || "").slice(0, 3).toUpperCase();
+}
+
+function renderTextWithLinks(text) {
+  const input = String(text || "");
+  if (!input) return "";
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const out = [];
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = pattern.exec(input)) !== null) {
+    if (match.index > lastIndex) {
+      out.push(input.slice(lastIndex, match.index));
+    }
+    out.push(
+      <a
+        key={`methodology-link-${key++}`}
+        href={match[2]}
+        target="_blank"
+        rel="noreferrer"
+        style={{ color: "var(--ck-accent)", textDecoration: "none" }}>
+        {match[1]}
+      </a>
+    );
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < input.length) {
+    out.push(input.slice(lastIndex));
+  }
+  return out;
+}
+
+function matrixFollowUpThreadKey(subjectId, attributeId) {
+  return `matrix::${subjectId}::${attributeId}`;
 }
 
 export default function App({
@@ -278,18 +313,46 @@ export default function App({
 
   async function startAnalysis() {
     setImportError("");
+    setImportWarning("");
     const desc = inputText.trim();
     if (!desc || globalAnalyzing) return;
     if (isMatrixMode) {
-      const parsedSubjects = parseSubjectsInput(subjectsText);
-      const minCount = Math.max(2, Number(activeConfig?.subjects?.minCount) || 2);
-      const maxCount = Math.max(minCount, Number(activeConfig?.subjects?.maxCount) || 8);
-      if (parsedSubjects.length < minCount) {
-        setImportError(`Please provide at least ${minCount} subjects.`);
+      const parsedSubjects = parseSubjectsInput(subjectsText).slice(0, matrixSubjectMax);
+      const runtimeConfig = buildRuntimeConfig(activeConfig, dimsByConfig[activeConfig.id] || activeConfig.dimensions);
+      let resolved;
+      try {
+        resolved = await resolveMatrixResearchInput(
+          {
+            id: `matrix-preflight-${Date.now()}`,
+            description: desc,
+            options: {
+              matrixSubjects: parsedSubjects,
+            },
+          },
+          runtimeConfig,
+          { transport: appTransport },
+          { requireConfirmation: true }
+        );
+      } catch (err) {
+        setImportError(err?.message || "Failed to prepare matrix subjects.");
         return;
       }
-      const boundedSubjects = parsedSubjects.slice(0, maxCount);
-      await runNewAnalysis(desc, null, null, boundedSubjects);
+
+      const resolvedSubjects = Array.isArray(resolved?.subjects)
+        ? resolved.subjects.map((subject) => String(subject?.label || "").trim()).filter(Boolean)
+        : [];
+      if (!resolvedSubjects.length) {
+        setImportError("Unable to prepare matrix subjects from this prompt.");
+        return;
+      }
+
+      if (resolved?.requiresConfirmation) {
+        setSubjectsText(resolvedSubjects.join("\n"));
+        setImportWarning("Suggested subjects were prepared from your prompt. Review/edit them, then click Analyze again.");
+        return;
+      }
+
+      await runNewAnalysis(desc, null, null, resolvedSubjects);
       return;
     }
     await runNewAnalysis(desc, null);
@@ -333,6 +396,49 @@ export default function App({
       }));
     }
     setFuLoading(prev => ({ ...prev, [fuKey]: false }));
+  }
+
+  async function onMatrixFollowUp(ucId, subjectId, attributeId, challenge, options = {}) {
+    if (!challenge.trim()) return;
+    const threadKey = matrixFollowUpThreadKey(subjectId, attributeId);
+    const fuKey = `${ucId}::${threadKey}`;
+    setFuLoading((prev) => ({ ...prev, [fuKey]: true }));
+
+    try {
+      const targetUseCase = ucRef.current.find((u) => u.id === ucId);
+      const targetConfigId = targetUseCase?.researchConfigId || activeConfig.id;
+      const targetConfig = RESEARCH_CONFIGS.find((config) => config.id === targetConfigId) || activeConfig;
+      const targetDims = dimsByConfig[targetConfig.id] || targetConfig.dimensions;
+      await handleFollowUp(
+        ucId,
+        null,
+        challenge,
+        targetDims,
+        ucRef,
+        updateUC,
+        {
+          ...options,
+          subjectId,
+          attributeId,
+          config: buildRuntimeConfig(targetConfig, targetDims),
+        }
+      );
+    } catch (err) {
+      updateUC(ucId, (u) => ({
+        ...u,
+        followUps: {
+          ...u.followUps,
+          [threadKey]: [...(u.followUps?.[threadKey] || []), {
+            id: `fu-analyst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            role: "analyst",
+            response: `Error: ${err.message}`,
+            sources: [],
+          }],
+        },
+      }));
+    }
+
+    setFuLoading((prev) => ({ ...prev, [fuKey]: false }));
   }
 
   function onDiscardArgument(ucId, dimId, argument, reason = "") {
@@ -488,7 +594,6 @@ export default function App({
   const activeDims = isMatrixMode ? [] : dims.filter(d => d.enabled);
   const totalWeight = isMatrixMode ? 0 : dims.reduce((s, d) => s + d.weight, 0);
   const methodology = activeConfig?.methodology || "";
-  const methodologySources = Array.isArray(activeConfig?.methodologySources) ? activeConfig.methodologySources : [];
   const activeInputSpec = activeConfig?.inputSpec || {};
   const inputPanelLabel = String(activeInputSpec?.label || "New Research - describe what should be researched").trim();
   const inputPanelPlaceholder = String(
@@ -503,7 +608,7 @@ export default function App({
   const matrixSubjectMin = Math.max(2, Number(subjectsSpec?.minCount) || 2);
   const matrixSubjectMax = Math.max(matrixSubjectMin, Number(subjectsSpec?.maxCount) || 8);
   const parsedSubjects = isMatrixMode ? parseSubjectsInput(subjectsText) : [];
-  const hasValidSubjectCount = !isMatrixMode || parsedSubjects.length >= matrixSubjectMin;
+  const hasValidSubjectCount = true;
   const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
   const desktopTabConfigs = (() => {
     const initial = RESEARCH_CONFIGS.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
@@ -524,8 +629,13 @@ export default function App({
     finalizing: "Debate...",
     discover: "Discover...",
     matrix_plan: "Planning...",
+    matrix_baseline: "Baseline pass...",
+    matrix_web: "Web pass...",
+    matrix_reconcile: "Reconcile pass...",
+    matrix_targeted: "Low-confidence deep search...",
     matrix_evidence: "Matrix evidence...",
     matrix_critic: "Critic audit...",
+    matrix_response: "Analyst response...",
     matrix_summary: "Summarizing...",
     matrix_discover: "Coverage discover...",
   };
@@ -754,27 +864,8 @@ export default function App({
               Methodology / Description
             </div>
             <p className="methodology-text" style={{ fontSize: 13, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-              {methodology || "No methodology description is available for this configuration yet."}
+              {methodology ? renderTextWithLinks(methodology) : "No methodology description is available for this configuration yet."}
             </p>
-            {methodologySources.length ? (
-              <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                  Source References
-                </div>
-                <div style={{ display: "grid", gap: 3 }}>
-                  {methodologySources.map((source) => (
-                    <a
-                      key={`${source.label}-${source.url}`}
-                      href={source.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ fontSize: 12, color: "var(--ck-accent)", textDecoration: "none", lineHeight: 1.45 }}>
-                      {source.label}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ) : null}
             {isMatrixMode && subjectsSpec ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
                 <strong style={{ color: "var(--ck-text)" }}>{subjectsLabel} input:</strong> {subjectsPrompt}
@@ -930,10 +1021,10 @@ export default function App({
           {isMatrixMode ? (
             <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                {subjectsLabel}
+                {subjectsLabel} (Optional Override)
               </div>
               <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
-                {subjectsPrompt}
+                {subjectsPrompt}. Leave blank to auto-detect subjects from your prompt; if needed, the app will suggest a list for confirmation.
               </div>
               <textarea
                 value={subjectsText}
@@ -955,7 +1046,7 @@ export default function App({
                 }}
               />
               <div style={{ fontSize: 11, color: parsedSubjects.length > matrixSubjectMax ? "var(--ck-text)" : "var(--ck-muted)" }}>
-                Parsed {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | required: {matrixSubjectMin}-{matrixSubjectMax}
+                Parsed override: {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | target range: {matrixSubjectMin}-{matrixSubjectMax}
               </div>
             </div>
           ) : null}
@@ -974,11 +1065,6 @@ export default function App({
             <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>
               Cmd/Ctrl+Enter to submit
             </span>
-            {isMatrixMode && !hasValidSubjectCount ? (
-              <span style={{ fontSize: 11, color: "var(--ck-text)" }}>
-                Add at least {matrixSubjectMin} subjects.
-              </span>
-            ) : null}
             <button
               onClick={() => setShowInputPanel(false)}
               style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--ck-line-strong)", color: "var(--ck-muted)", padding: "7px 14px", borderRadius: 2, fontSize: 12 }}>
@@ -1394,6 +1480,7 @@ export default function App({
                       onFuInputChange={setFuInput}
                       fuLoading={fuLoading}
                       onFollowUp={onFollowUp}
+                      onMatrixFollowUp={onMatrixFollowUp}
                       onDiscardArgument={onDiscardArgument}
                       onResolveFollowUpProposal={onResolveFollowUpProposal}
                       onAnalyzeRelated={(candidate) => onAnalyzeRelated(uc, candidate)}

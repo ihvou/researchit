@@ -375,6 +375,9 @@ function normalizeSourceList(items, maxItems = 12) {
       name: String(item.name || "").trim(),
       quote: String(item.quote || "").trim(),
       url: String(item.url || "").trim(),
+      sourceType: String(item.sourceType || "").trim().toLowerCase(),
+      verificationStatus: String(item.verificationStatus || "").trim(),
+      verificationNote: String(item.verificationNote || "").trim(),
     };
     if (!source.name && !source.quote && !source.url) continue;
     const key = `${source.name}|${source.quote}|${source.url}`;
@@ -399,6 +402,230 @@ function mergeSourceLists(...lists) {
     }
   }
   return out.slice(0, 16);
+}
+
+function normalizeMatchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/["'`]+/g, "")
+    .replace(/[^a-z0-9\s:/._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripExistingVerificationReason(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\s*Source verification check:[^.]*\.\s*/gi, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeHttpUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
+function quotedClaimFoundInPage(source = {}, snapshot = null) {
+  const pageText = normalizeMatchText(`${snapshot?.title || ""} ${snapshot?.text || ""}`);
+  if (!pageText) return false;
+
+  const normalizedQuote = normalizeMatchText(source.quote);
+  if (normalizedQuote.length >= 12) {
+    if (pageText.includes(normalizedQuote)) return true;
+    const quoteParts = normalizedQuote.split(" ").filter(Boolean);
+    if (quoteParts.length >= 6) {
+      const head = quoteParts.slice(0, 6).join(" ");
+      const tail = quoteParts.slice(-6).join(" ");
+      if (pageText.includes(head) && pageText.includes(tail)) return true;
+    }
+  }
+
+  const normalizedName = normalizeMatchText(source.name);
+  if (normalizedName.length >= 4 && pageText.includes(normalizedName)) return true;
+  return false;
+}
+
+async function fetchSourceWithCache(url, sourceFetchCache = new Map()) {
+  const normalizedUrl = normalizeHttpUrl(url);
+  if (!normalizedUrl) {
+    return { ok: false, error: "invalid_url", snapshot: null };
+  }
+  if (sourceFetchCache.has(normalizedUrl)) {
+    return sourceFetchCache.get(normalizedUrl);
+  }
+
+  const transport = getRuntime()?.transport;
+  if (!transport?.fetchSource) {
+    const unavailable = { ok: false, error: "fetch_source_unavailable", snapshot: null };
+    sourceFetchCache.set(normalizedUrl, unavailable);
+    return unavailable;
+  }
+
+  try {
+    const snapshot = await transport.fetchSource(normalizedUrl);
+    const result = { ok: true, error: "", snapshot };
+    sourceFetchCache.set(normalizedUrl, result);
+    return result;
+  } catch (err) {
+    const result = { ok: false, error: err?.message || "fetch_failed", snapshot: null };
+    sourceFetchCache.set(normalizedUrl, result);
+    return result;
+  }
+}
+
+async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysisMeta) {
+  const normalizedSources = normalizeSourceList(sources, 16);
+  if (!getRuntime()?.transport?.fetchSource) {
+    if (!analysisMeta.sourceVerificationSkippedReason) {
+      analysisMeta.sourceVerificationSkippedReason = "fetchSource transport is not available.";
+    }
+    return {
+      sources: normalizedSources,
+      counters: {
+        checked: 0,
+        verified: 0,
+        notFound: 0,
+        fetchFailed: 0,
+      },
+    };
+  }
+  const counters = {
+    checked: 0,
+    verified: 0,
+    notFound: 0,
+    fetchFailed: 0,
+  };
+
+  const out = [];
+  for (const source of normalizedSources) {
+    const normalizedUrl = normalizeHttpUrl(source.url);
+    if (!normalizedUrl) {
+      out.push({
+        ...source,
+        verificationStatus: source.verificationStatus || "",
+        verificationNote: source.verificationNote || "",
+      });
+      continue;
+    }
+
+    counters.checked += 1;
+    const fetched = await fetchSourceWithCache(normalizedUrl, sourceFetchCache);
+    if (!fetched.ok) {
+      counters.fetchFailed += 1;
+      out.push({
+        ...source,
+        url: normalizedUrl,
+        verificationStatus: "fetch_failed",
+        verificationNote: `Source fetch failed: ${fetched.error}`,
+      });
+      continue;
+    }
+
+    const found = quotedClaimFoundInPage(source, fetched.snapshot);
+    if (found) {
+      counters.verified += 1;
+      out.push({
+        ...source,
+        url: normalizedUrl,
+        verificationStatus: "verified_in_page",
+        verificationNote: "Quoted claim text appears in fetched source content.",
+      });
+    } else {
+      counters.notFound += 1;
+      out.push({
+        ...source,
+        url: normalizedUrl,
+        verificationStatus: "not_found_in_page",
+        verificationNote: "Quoted claim text was not found in fetched source content.",
+      });
+    }
+  }
+
+  analysisMeta.sourceVerificationChecked += counters.checked;
+  analysisMeta.sourceVerificationVerified += counters.verified;
+  analysisMeta.sourceVerificationNotFound += counters.notFound;
+  analysisMeta.sourceVerificationFetchFailed += counters.fetchFailed;
+
+  return { sources: out, counters };
+}
+
+function applySourceVerificationPenalty(dim = {}, counters = {}, analysisMeta = {}) {
+  const checked = Number(counters.checked || 0);
+  if (!checked) return { penalized: false };
+
+  const verified = Number(counters.verified || 0);
+  const ratio = verified / checked;
+  if (ratio >= 0.5) {
+    const baseReason = stripExistingVerificationReason(dim.confidenceReason);
+    dim.confidenceReason = baseReason;
+    return { penalized: false };
+  }
+
+  const current = normalizeConfidenceLevel(dim.confidence) || "medium";
+  const downgraded = confidenceFromRank(confidenceRank(current) - 1, current);
+  const note = `Source verification check: ${verified}/${checked} cited URLs contained the quoted claim text.`;
+  const baseReason = stripExistingVerificationReason(dim.confidenceReason);
+  dim.confidenceReason = [baseReason, note].filter(Boolean).join(" ");
+  if (downgraded !== current) {
+    dim.confidence = downgraded;
+    analysisMeta.sourceVerificationPenalizedDimensions += 1;
+    return { penalized: true, from: current, to: downgraded };
+  }
+  return { penalized: false };
+}
+
+async function verifyScorecardSources({
+  payload,
+  dims,
+  analysisMeta,
+  sourceFetchCache,
+  debugSession,
+  phase,
+  penalizeConfidence = true,
+}) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(dims) || !dims.length) return payload;
+  payload.dimensions = payload.dimensions || {};
+
+  for (const dim of dims) {
+    const dimState = payload.dimensions?.[dim.id];
+    if (!dimState || typeof dimState !== "object") continue;
+
+    const verified = await verifySourceListWithFetch(dimState.sources, sourceFetchCache, analysisMeta);
+    dimState.sources = verified.sources;
+
+    if (penalizeConfidence) {
+      const penalty = applySourceVerificationPenalty(dimState, verified.counters, analysisMeta);
+      if (penalty.penalized) {
+        appendAnalysisDebugEvent(debugSession, {
+          type: "source_verification_penalty",
+          phase,
+          attempt: dim.id,
+          extra: {
+            dimensionId: dim.id,
+            checked: verified.counters.checked,
+            verified: verified.counters.verified,
+            notFound: verified.counters.notFound,
+            fetchFailed: verified.counters.fetchFailed,
+            confidenceFrom: penalty.from,
+            confidenceTo: penalty.to,
+          },
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(payload.sources)) {
+    const verifiedTop = await verifySourceListWithFetch(payload.sources, sourceFetchCache, analysisMeta);
+    payload.sources = verifiedTop.sources;
+  }
+  return payload;
 }
 
 function normalizedSourceName(value) {
@@ -1873,7 +2100,6 @@ function absorbDiscoveryMeta(analysisMeta, meta) {
 
 function absorbLowConfidenceMeta(analysisMeta, meta) {
   if (!meta) return;
-  absorbAnalystMeta(analysisMeta, meta);
   if (meta.liveSearchUsed) analysisMeta.lowConfidenceTargetedSearchUsed = true;
   analysisMeta.lowConfidenceTargetedWebSearchCalls += Number(meta.webSearchCalls || 0);
   if (!analysisMeta.lowConfidenceTargetedFallbackReason && meta.liveSearchFallbackReason) {
@@ -2429,6 +2655,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     rawInput: desc,
     dims,
   });
+  const sourceFetchCache = new Map();
   appendAnalysisDebugEvent(debugSession, {
     type: "analysis_start",
     phase: "analyst",
@@ -2464,6 +2691,12 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     lowConfidenceTargetedSearchUsed: false,
     lowConfidenceTargetedWebSearchCalls: 0,
     lowConfidenceTargetedFallbackReason: null,
+    sourceVerificationChecked: 0,
+    sourceVerificationVerified: 0,
+    sourceVerificationNotFound: 0,
+    sourceVerificationFetchFailed: 0,
+    sourceVerificationPenalizedDimensions: 0,
+    sourceVerificationSkippedReason: null,
     phase3DecisionGuardAdjustments: 0,
     phase3ConfidenceGuardAdjustments: 0,
     hybridStats: null,
@@ -2502,6 +2735,24 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
       p1 = p1Base;
     }
     p1.attributes = normalizeAttributesShape(p1?.attributes, desc, framingFields);
+    try {
+      p1 = await verifyScorecardSources({
+        payload: p1,
+        dims,
+        analysisMeta,
+        sourceFetchCache,
+        debugSession,
+        phase: "analyst_source_verification",
+        penalizeConfidence: true,
+      });
+    } catch (verificationErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "source_verification_failed",
+        phase: "analyst_source_verification",
+        attempt: "phase1",
+        error: verificationErr.message || String(verificationErr),
+      });
+    }
 
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
@@ -2596,6 +2847,24 @@ STRICT JSON RULES:
       attempt: "final",
       responseLength: JSON.stringify(p2 || {}).length,
     });
+    try {
+      p2 = await verifyScorecardSources({
+        payload: p2,
+        dims,
+        analysisMeta,
+        sourceFetchCache,
+        debugSession,
+        phase: "critic_source_verification",
+        penalizeConfidence: false,
+      });
+    } catch (verificationErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "source_verification_failed",
+        phase: "critic_source_verification",
+        attempt: "phase2",
+        error: verificationErr.message || String(verificationErr),
+      });
+    }
 
     debate.push({ phase: "critique", content: p2 });
     updateUC(id, (u) => ({
@@ -2897,6 +3166,24 @@ STRICT JSON RULES:
     }
     finalResponse = finalResponse && typeof finalResponse === "object" ? finalResponse : {};
     finalResponse.attributes = normalizeAttributesShape(finalResponse?.attributes, desc, framingFields);
+    try {
+      finalResponse = await verifyScorecardSources({
+        payload: finalResponse,
+        dims,
+        analysisMeta,
+        sourceFetchCache,
+        debugSession,
+        phase: "final_source_verification",
+        penalizeConfidence: true,
+      });
+    } catch (verificationErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "source_verification_failed",
+        phase: "final_source_verification",
+        attempt: "phase3",
+        error: verificationErr.message || String(verificationErr),
+      });
+    }
 
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
@@ -3141,6 +3428,12 @@ function createInitialUseCaseState(input) {
       lowConfidenceTargetedSearchUsed: false,
       lowConfidenceTargetedWebSearchCalls: 0,
       lowConfidenceTargetedFallbackReason: null,
+      sourceVerificationChecked: 0,
+      sourceVerificationVerified: 0,
+      sourceVerificationNotFound: 0,
+      sourceVerificationFetchFailed: 0,
+      sourceVerificationPenalizedDimensions: 0,
+      sourceVerificationSkippedReason: null,
       hybridStats: null,
     },
   };

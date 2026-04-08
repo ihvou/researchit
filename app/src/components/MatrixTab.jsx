@@ -13,7 +13,14 @@ function getCellMap(cells = []) {
   return map;
 }
 
-function matrixCell(cell) {
+function matrixThreadKey(subjectId, attributeId) {
+  return `matrix::${subjectId}::${attributeId}`;
+}
+
+function matrixCell(cell, options = {}) {
+  const onChallenge = typeof options.onChallenge === "function" ? options.onChallenge : null;
+  const loading = !!options.loading;
+  const threadCount = Number(options.threadCount) || 0;
   if (!cell) {
     return (
       <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>
@@ -44,15 +51,49 @@ function matrixCell(cell) {
           Critic: {cell.criticNote}
         </div>
       ) : null}
+      {onChallenge ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => {
+              const draft = window.prompt("Challenge this matrix cell with specific evidence or question:");
+              if (draft && draft.trim()) {
+                onChallenge(draft.trim());
+              }
+            }}
+            disabled={loading}
+            style={{
+              border: "1px solid var(--ck-line)",
+              background: "var(--ck-surface)",
+              color: "var(--ck-text)",
+              padding: "3px 7px",
+              fontSize: 10,
+              fontWeight: 700,
+              opacity: loading ? 0.6 : 1,
+            }}>
+            {loading ? "Sending..." : "Challenge"}
+          </button>
+          {threadCount > 0 ? (
+            <span style={{ fontSize: 10, color: "var(--ck-muted)" }}>
+              {threadCount} follow-up{threadCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export default function MatrixTab({ uc }) {
+export default function MatrixTab({
+  uc,
+  fuLoading = {},
+  onFollowUpCell = null,
+}) {
   const matrix = uc?.matrix || {};
   const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
   const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
   const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const followUps = uc?.followUps && typeof uc.followUps === "object" ? uc.followUps : {};
   const subjectSummaries = Array.isArray(matrix?.subjectSummaries) ? matrix.subjectSummaries : [];
   const coverage = matrix?.coverage || {};
   const initialLayout = matrix?.layout === "subjects-as-columns"
@@ -158,7 +199,13 @@ export default function MatrixTab({ uc }) {
                   </td>
                   {attributes.map((attr) => (
                     <td key={`${subject.id}-${attr.id}`} style={{ borderBottom: "1px solid var(--ck-line)", borderRight: "1px solid var(--ck-line)", padding: "8px 10px", verticalAlign: "top", minWidth: 220 }}>
-                      {matrixCell(cellMap.get(`${subject.id}::${attr.id}`))}
+                      {matrixCell(cellMap.get(`${subject.id}::${attr.id}`), {
+                        loading: !!fuLoading[`${uc?.id || ""}::${matrixThreadKey(subject.id, attr.id)}`],
+                        threadCount: (followUps[matrixThreadKey(subject.id, attr.id)] || []).length,
+                        onChallenge: onFollowUpCell
+                          ? (challenge) => onFollowUpCell(uc.id, subject.id, attr.id, challenge)
+                          : null,
+                      })}
                     </td>
                   ))}
                 </tr>
@@ -188,7 +235,13 @@ export default function MatrixTab({ uc }) {
                   </td>
                   {subjects.map((subject) => (
                     <td key={`${attr.id}-${subject.id}`} style={{ borderBottom: "1px solid var(--ck-line)", borderRight: "1px solid var(--ck-line)", padding: "8px 10px", verticalAlign: "top", minWidth: 220 }}>
-                      {matrixCell(cellMap.get(`${subject.id}::${attr.id}`))}
+                      {matrixCell(cellMap.get(`${subject.id}::${attr.id}`), {
+                        loading: !!fuLoading[`${uc?.id || ""}::${matrixThreadKey(subject.id, attr.id)}`],
+                        threadCount: (followUps[matrixThreadKey(subject.id, attr.id)] || []).length,
+                        onChallenge: onFollowUpCell
+                          ? (challenge) => onFollowUpCell(uc.id, subject.id, attr.id, challenge)
+                          : null,
+                      })}
                     </td>
                   ))}
                 </tr>

@@ -7,15 +7,6 @@ import { HOME_PATH, getResearchPath, resolveAppRoute } from "./lib/routes";
 import { applySeoMeta, buildHomeSeoMeta, buildNotFoundSeoMeta, buildResearchSeoMeta } from "./lib/seo";
 import { downloadDebugLogsBundle } from "./lib/debug";
 
-const FEATURED_CONFIG_IDS = [
-  "startup-product-idea-validation",
-  "market-entry-analysis",
-  "competitors-comparison-matrix",
-  "channel-gtm-analysis-matrix",
-  "competitive-landscape",
-  "market-sizing-tam-sam-som",
-];
-
 function readPathname() {
   if (typeof window === "undefined") return HOME_PATH;
   return window.location.pathname || HOME_PATH;
@@ -26,13 +17,6 @@ export default function ResearchitRoot() {
   const route = useMemo(() => resolveAppRoute(pathname), [pathname]);
   const handleExportDebugLogs = useCallback(() => {
     downloadDebugLogsBundle();
-  }, []);
-
-  const featuredConfigs = useMemo(() => {
-    const selected = FEATURED_CONFIG_IDS
-      .map((id) => RESEARCH_CONFIGS.find((config) => config.id === id))
-      .filter(Boolean);
-    return selected.length ? selected : RESEARCH_CONFIGS.slice(0, 6);
   }, []);
 
   const navigateTo = useCallback((nextPath, options = {}) => {
@@ -130,7 +114,7 @@ export default function ResearchitRoot() {
 
   return (
     <LandingPage
-      featuredConfigs={featuredConfigs}
+      featuredConfigs={RESEARCH_CONFIGS}
       onOpenConfig={(config) => navigateTo(getResearchPath(config))}
       onOpenWorkspace={() => navigateTo(getResearchPath(DEFAULT_RESEARCH_CONFIG))}
       onExportDebug={handleExportDebugLogs}

@@ -16,8 +16,13 @@ const PHASE_LABELS = {
   finalizing: "Analyst responding...",
   discover: "Discovering related research...",
   matrix_plan: "Planning matrix...",
+  matrix_baseline: "Running baseline matrix pass...",
+  matrix_web: "Running web-assisted matrix pass...",
+  matrix_reconcile: "Reconciling baseline and web drafts...",
+  matrix_targeted: "Running targeted low-confidence recovery...",
   matrix_evidence: "Collecting matrix evidence...",
   matrix_critic: "Critic auditing matrix...",
+  matrix_response: "Analyst responding to critic flags...",
   matrix_summary: "Finalizing matrix...",
   matrix_discover: "Discovering missing subjects/attributes...",
 };
@@ -29,6 +34,7 @@ export default function ExpandedRow({
   onFuInputChange,
   fuLoading,
   onFollowUp,
+  onMatrixFollowUp,
   onDiscardArgument,
   onResolveFollowUpProposal,
   onAnalyzeRelated,
@@ -117,7 +123,13 @@ export default function ExpandedRow({
             Warning: {uc.errorMsg}
           </div>
         )}
-        {tab === "matrix" && <MatrixTab uc={uc} />}
+        {tab === "matrix" && (
+          <MatrixTab
+            uc={uc}
+            fuLoading={fuLoading}
+            onFollowUpCell={onMatrixFollowUp}
+          />
+        )}
         {tab === "dimensions" && <DimensionsTab uc={uc} dims={dims} />}
         {tab === "debate" && !isMatrixMode && (
           <DebateTab

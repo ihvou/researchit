@@ -149,7 +149,33 @@ function patchThreadMessage(updateUC, dimId, messageId, patch) {
   }), "follow_up_thread");
 }
 
-async function classifyIntent({ uc, dim, challenge, existingThread, callAnalyst, maxTokens }) {
+function matrixThreadKey(subjectId, attributeId) {
+  return `matrix::${subjectId}::${attributeId}`;
+}
+
+function mergeUniqueSources(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    normalizeSources(list).forEach((source) => {
+      const key = `${source.name}|${source.quote}|${source.url}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(source);
+    });
+  }
+  return out.slice(0, 16);
+}
+
+async function classifyIntent({
+  uc,
+  dim,
+  challenge,
+  existingThread,
+  callAnalyst,
+  maxTokens,
+  contextLabel = "",
+}) {
   const fallback = fallbackIntentFromText(challenge);
   const prior = existingThread
     .slice(-4)
@@ -157,7 +183,7 @@ async function classifyIntent({ uc, dim, challenge, existingThread, callAnalyst,
     .join("\n");
 
   const prompt = `Use case: "${uc.attributes?.title || uc.rawInput}"
-Dimension: "${dim?.label || "Unknown"}"
+Target: "${contextLabel || dim?.label || "Unknown"}"
 Message: "${challenge}"
 ${prior ? `Recent thread context:\n${prior}\n` : ""}
 
@@ -537,6 +563,208 @@ Return ONLY JSON:
   return { parsed: safeParseJSON(data.text), meta: data.meta || null };
 }
 
+function renderMatrixPromptHeader({ uc, subject, attribute, cell, threadHistory }) {
+  return `Use case: "${uc.attributes?.title || uc.rawInput}"
+Matrix cell: "${subject?.label || "Unknown subject"}" x "${attribute?.label || "Unknown attribute"}"
+Current confidence: ${normalizeConfidenceLevel(cell?.confidence) || "low"}
+Current value: ${cell?.value || ""}
+Current confidence reason: ${cell?.confidenceReason || ""}
+${threadHistory ? `Previous thread:\n${threadHistory}\n` : ""}`;
+}
+
+async function runMatrixIntentResponse({
+  intent,
+  uc,
+  subject,
+  attribute,
+  cell,
+  challenge,
+  threadHistory,
+  callAnalyst,
+  fetchSource,
+  followUpPrompt,
+  limits,
+}) {
+  const baseHeader = renderMatrixPromptHeader({ uc, subject, attribute, cell, threadHistory });
+
+  if (intent === FOLLOW_UP_INTENTS.NOTE) {
+    return { skipAnalyst: true };
+  }
+
+  if (intent === FOLLOW_UP_INTENTS.QUESTION) {
+    const prompt = `${baseHeader}
+PM question: "${challenge}"
+
+Answer as a plain-language explanation. Do not change the matrix cell directly in this response.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "response": "<clear explanation, 3-5 sentences, non-defensive>",
+  "brief": "<1-2 sentence concise answer>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": <true|false>,
+  "searchReason": "<1 sentence>"
+}`;
+    const raw = await callAnalyst([{ role: "user", content: prompt }], followUpPrompt, limits.question);
+    const parsed = safeParseJSON(raw);
+
+    if (!wantsLiveSearch(parsed)) {
+      return { parsed, meta: null };
+    }
+
+    const reason = searchReasonText(parsed, "Need fresh external evidence for this matrix-cell question.");
+    const searchPrompt = `${baseHeader}
+PM question: "${challenge}"
+
+Evidence gap: "${reason}"
+Run focused live web research and answer with current evidence.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "response": "<clear explanation, 3-5 sentences, non-defensive>",
+  "brief": "<1-2 sentence concise answer>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": false,
+  "searchReason": "<short note on what was searched>"
+}`;
+    const data = await callAnalyst(
+      [{ role: "user", content: searchPrompt }],
+      followUpPrompt,
+      Math.max(limits.question, 1800),
+      { liveSearch: true, includeMeta: true }
+    );
+    return { parsed: safeParseJSON(data.text), meta: data.meta || null };
+  }
+
+  if (intent === FOLLOW_UP_INTENTS.REFRAME) {
+    const prompt = `${baseHeader}
+PM reframe request: "${challenge}"
+
+Rewrite explanation style only. Do not change the underlying assessment.
+
+Return ONLY JSON:
+{
+  "brief": "<2-3 sentence rewritten brief>",
+  "response": "<rewritten detailed explanation, 3-6 sentences>",
+  "sources": []
+}`;
+    const raw = await callAnalyst([{ role: "user", content: prompt }], followUpPrompt, limits.reframe);
+    return { parsed: safeParseJSON(raw), meta: null };
+  }
+
+  if (intent === FOLLOW_UP_INTENTS.ADD_EVIDENCE) {
+    const urls = extractUrls(challenge);
+    const evidence = await buildEvidenceContext(challenge, urls, fetchSource);
+    const prompt = `${baseHeader}
+PM evidence submission: "${challenge}"
+
+New evidence content:
+${evidence.contextText || "No external source content was retrievable."}
+
+Assess what changes and what does not for this matrix cell.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "value": "<updated cell value or keep current wording>",
+  "confidence": "<high|medium|low>",
+  "confidenceReason": "<1 sentence>",
+  "brief": "<1-2 sentence concise update>",
+  "response": "<3-6 sentences explaining impact of this evidence>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}]
+}`;
+    const raw = await callAnalyst([{ role: "user", content: prompt }], followUpPrompt, limits.addEvidence);
+    const parsed = safeParseJSON(raw);
+    if (!parsed?.sources?.length && evidence.fetchedSources.length) {
+      parsed.sources = evidence.fetchedSources;
+    }
+    return { parsed, meta: null };
+  }
+
+  if (intent === FOLLOW_UP_INTENTS.RE_SEARCH) {
+    const prompt = `${baseHeader}
+PM requested targeted re-search: "${challenge}"
+
+Run focused live web research for this matrix cell and update only this cell if evidence justifies it.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "value": "<updated cell value>",
+  "confidence": "<high|medium|low>",
+  "confidenceReason": "<1 sentence>",
+  "brief": "<1-2 sentence concise update>",
+  "response": "<3-6 sentences with fresh findings>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}]
+}`;
+
+    const data = await callAnalyst(
+      [{ role: "user", content: prompt }],
+      followUpPrompt,
+      limits.reSearch,
+      { liveSearch: true, includeMeta: true }
+    );
+    return { parsed: safeParseJSON(data.text), meta: data.meta || null };
+  }
+
+  const prompt = `${baseHeader}
+PM challenge: "${challenge}"
+
+Respond directly to the challenge for this one matrix cell.
+- If valid, concede and update value/confidence.
+- If not valid, defend with stronger evidence.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "decision": "<defend|concede>",
+  "value": "<updated or defended cell value>",
+  "confidence": "<high|medium|low>",
+  "confidenceReason": "<1 sentence>",
+  "brief": "<1-2 sentence concise update>",
+  "response": "<3-6 sentence analytical response>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": <true|false>,
+  "searchReason": "<1 sentence>"
+}`;
+  const raw = await callAnalyst([{ role: "user", content: prompt }], followUpPrompt, limits.challenge);
+  const parsed = safeParseJSON(raw);
+
+  if (!wantsLiveSearch(parsed)) {
+    return { parsed, meta: null };
+  }
+
+  const reason = searchReasonText(parsed, "Need fresh evidence for this matrix-cell challenge.");
+  const searchPrompt = `${baseHeader}
+PM challenge: "${challenge}"
+
+Initial draft highlighted this evidence gap: "${reason}"
+Run focused live web research and update this matrix cell.
+${FOLLOW_UP_SOURCE_QUALITY_RULES}
+
+Return ONLY JSON:
+{
+  "decision": "<defend|concede>",
+  "value": "<updated or defended cell value>",
+  "confidence": "<high|medium|low>",
+  "confidenceReason": "<1 sentence>",
+  "brief": "<1-2 sentence concise update>",
+  "response": "<3-6 sentence analytical response>",
+  "sources": [{"name":"...","quote":"<max 15 words>","url":"...","sourceType":"<vendor|press|independent>"}],
+  "searchNeeded": false,
+  "searchReason": "<short note on what was searched>"
+}`;
+  const data = await callAnalyst(
+    [{ role: "user", content: searchPrompt }],
+    followUpPrompt,
+    Math.max(limits.challenge, 2400),
+    { liveSearch: true, includeMeta: true }
+  );
+  return { parsed: safeParseJSON(data.text), meta: data.meta || null };
+}
+
 function copyState(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -544,11 +772,13 @@ function copyState(value) {
 export async function handleFollowUp(input, config, callbacks) {
   const ucId = input?.ucId;
   const dimId = input?.dimId;
+  const subjectId = String(input?.subjectId || input?.options?.subjectId || "").trim();
+  const attributeId = String(input?.attributeId || input?.options?.attributeId || "").trim();
   const challenge = String(input?.challenge || "");
   const options = input?.options || {};
 
-  if (!ucId || !dimId) {
-    throw new Error("handleFollowUp requires ucId and dimId.");
+  if (!ucId) {
+    throw new Error("handleFollowUp requires ucId.");
   }
   if (!challenge.trim()) {
     throw new Error("Follow-up challenge cannot be empty.");
@@ -576,10 +806,6 @@ export async function handleFollowUp(input, config, callbacks) {
     return transport.callAnalyst(messages, systemPrompt, maxTokens, merged);
   };
 
-  const dims = config?.dimensions || [];
-  const dim = dims.find((d) => d.id === dimId);
-  if (!dim) throw new Error(`Dimension not found: ${dimId}`);
-
   const prompts = {
     followUp: config?.prompts?.followUp || SYS_FOLLOWUP,
   };
@@ -602,6 +828,161 @@ export async function handleFollowUp(input, config, callbacks) {
     onProgress(phase, copyState(uc));
     return uc;
   };
+
+  const isMatrixMode = String(uc?.outputMode || (uc?.matrix ? "matrix" : "scorecard")).trim().toLowerCase() === "matrix";
+  if (isMatrixMode || (subjectId && attributeId)) {
+    const matrix = uc?.matrix || {};
+    const targetSubjectId = subjectId || String(options?.subjectId || "").trim();
+    const targetAttributeId = attributeId || String(options?.attributeId || "").trim();
+    if (!targetSubjectId || !targetAttributeId) {
+      throw new Error("Matrix follow-up requires subjectId and attributeId.");
+    }
+
+    const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
+    const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
+    const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+    const subject = subjects.find((entry) => entry.id === targetSubjectId);
+    const attribute = attributes.find((entry) => entry.id === targetAttributeId);
+    if (!subject || !attribute) {
+      throw new Error(`Matrix target not found for ${targetSubjectId} x ${targetAttributeId}.`);
+    }
+    const cell = cells.find((entry) => (
+      entry?.subjectId === targetSubjectId && entry?.attributeId === targetAttributeId
+    ));
+    if (!cell) {
+      throw new Error(`Matrix cell not found for ${targetSubjectId} x ${targetAttributeId}.`);
+    }
+
+    const threadKey = matrixThreadKey(targetSubjectId, targetAttributeId);
+    const forcedIntent = normalizeFollowUpIntent(options?.forceIntent);
+    const existingThread = uc.followUps?.[threadKey] || [];
+    const threadHistory = existingThread
+      .map((m) => `${m.role === "pm" ? "PM" : "Analyst"}: ${m.text || m.response || ""}`)
+      .join("\n\n");
+
+    const pmId = makeId("fu-pm");
+    appendThreadMessage(updateUC, threadKey, {
+      id: pmId,
+      role: "pm",
+      text: challenge,
+      intent: forcedIntent || "pending",
+      matrixTarget: {
+        subjectId: targetSubjectId,
+        attributeId: targetAttributeId,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const classification = forcedIntent
+      ? {
+          intent: forcedIntent,
+          rationale: "Intent forced by UI action.",
+          urls: extractUrls(challenge),
+        }
+      : await classifyIntent({
+          uc,
+          dim: null,
+          challenge,
+          existingThread,
+          callAnalyst,
+          maxTokens: tokenLimits.intentClassification,
+          contextLabel: `${subject.label} x ${attribute.label}`,
+        });
+
+    const intent = classification.intent;
+    patchThreadMessage(updateUC, threadKey, pmId, {
+      intent,
+      intentRationale: classification.rationale,
+    });
+
+    if (!intentNeedsAnalystResponse(intent)) {
+      return uc;
+    }
+
+    const matrixResponse = await runMatrixIntentResponse({
+      intent,
+      uc,
+      subject,
+      attribute,
+      cell,
+      challenge,
+      threadHistory,
+      callAnalyst,
+      fetchSource: transport.fetchSource,
+      followUpPrompt: prompts.followUp,
+      limits: tokenLimits,
+    });
+
+    if (matrixResponse?.skipAnalyst) {
+      return uc;
+    }
+
+    const parsed = matrixResponse?.parsed || {};
+    const meta = matrixResponse?.meta || null;
+    const decision = String(parsed?.decision || "").trim().toLowerCase();
+    const nextValue = String(parsed?.value || "").trim();
+    const nextConfidence = normalizeConfidenceLevel(parsed?.confidence)
+      || normalizeConfidenceLevel(cell?.confidence)
+      || "medium";
+    const nextConfidenceReason = String(parsed?.confidenceReason || "").trim()
+      || String(cell?.confidenceReason || "").trim()
+      || "Confidence remains constrained by available evidence.";
+    const mergedSources = mergeUniqueSources(cell?.sources, parsed?.sources);
+    const shouldApplyCellUpdate = [
+      FOLLOW_UP_INTENTS.CHALLENGE,
+      FOLLOW_UP_INTENTS.ADD_EVIDENCE,
+      FOLLOW_UP_INTENTS.RE_SEARCH,
+    ].includes(intent);
+
+    if (shouldApplyCellUpdate) {
+      updateUC((u) => ({
+        ...u,
+        matrix: {
+          ...(u.matrix || {}),
+          cells: (u.matrix?.cells || []).map((entry) => {
+            if (entry?.subjectId !== targetSubjectId || entry?.attributeId !== targetAttributeId) return entry;
+            return {
+              ...entry,
+              value: nextValue || entry.value,
+              confidence: nextConfidence,
+              confidenceReason: nextConfidenceReason,
+              sources: mergedSources.length ? mergedSources : normalizeSources(entry.sources),
+              contested: false,
+              criticNote: String(entry.criticNote || ""),
+              analystDecision: decision === "concede" ? "concede" : "defend",
+              analystNote: String(parsed?.response || parsed?.brief || "").trim(),
+            };
+          }),
+        },
+      }), "follow_up_matrix_cell");
+    }
+
+    appendThreadMessage(updateUC, threadKey, {
+      id: makeId("fu-analyst"),
+      role: "analyst",
+      intent,
+      matrixTarget: {
+        subjectId: targetSubjectId,
+        attributeId: targetAttributeId,
+      },
+      decision: decision === "concede" ? "concede" : "defend",
+      response: String(parsed?.response || "").trim() || "No response generated.",
+      brief: String(parsed?.brief || "").trim(),
+      sources: normalizeSources(parsed?.sources),
+      confidence: nextConfidence,
+      confidenceReason: nextConfidenceReason,
+      cellValue: nextValue || cell.value || "",
+      cellUpdateApplied: shouldApplyCellUpdate,
+      searchMeta: meta || null,
+      timestamp: new Date().toISOString(),
+    });
+
+    return uc;
+  }
+
+  const dims = config?.dimensions || [];
+  const dim = dims.find((d) => d.id === dimId);
+  if (!dim) throw new Error(`Dimension not found: ${dimId}`);
 
   const forcedIntent = normalizeFollowUpIntent(options?.forceIntent);
   const targetArgument = normalizeTargetArgument(options?.targetArgument);
@@ -627,13 +1008,14 @@ export async function handleFollowUp(input, config, callbacks) {
         rationale: "Intent forced by UI action.",
         urls: extractUrls(challenge),
       }
-    : await classifyIntent({
+      : await classifyIntent({
         uc,
         dim,
         challenge,
         existingThread,
         callAnalyst,
         maxTokens: tokenLimits.intentClassification,
+        contextLabel: dim?.label || "",
       });
 
   const intent = classification.intent;
