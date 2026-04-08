@@ -19,6 +19,7 @@ import ExpandedRow from "./components/ExpandedRow";
 import ConfidenceBadge from "./components/ConfidenceBadge";
 import ChevronIcon from "./components/ChevronIcon";
 import { downloadDebugLogsBundle } from "./lib/debug";
+import SiteFooter from "./components/SiteFooter";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
@@ -531,8 +532,9 @@ export default function App({
 
   return (
     <div className="app-shell">
-      <div className="app-header">
-        <div className="header-row" style={{ justifyContent: "space-between" }}>
+      <div className="app-main">
+        <div className="app-header">
+          <div className="header-row" style={{ justifyContent: "space-between" }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
             <div style={{
               position: "relative",
@@ -1404,29 +1406,8 @@ export default function App({
             })}
         </div>
       </div>
-
-      <footer className="app-footer">
-        <button
-          type="button"
-          onClick={handleExportDebugLogs}
-          className="app-footer-button">
-          Export Debug Logs
-        </button>
-        <a
-          href="https://github.com/ihvou/researchit"
-          target="_blank"
-          rel="noreferrer"
-          className="app-footer-link">
-          GitHub
-        </a>
-        <a
-          href="https://www.linkedin.com/in/serhii-knyr-aa332b27/"
-          target="_blank"
-          rel="noreferrer"
-          className="app-footer-link">
-          Contact
-        </a>
-      </footer>
+      </div>
+      <SiteFooter onExportDebug={handleExportDebugLogs} />
     </div>
   );
 }

@@ -122,6 +122,12 @@ a:hover {
   color: var(--ck-text);
   font-family: "IBM Plex Sans", "Segoe UI", -apple-system, sans-serif;
   font-size: 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1 0 auto;
 }
 
 .app-header {
@@ -251,35 +257,33 @@ a:hover {
   margin: 0 0 8px;
 }
 
-.app-footer {
-  margin-top: 10px;
-  border-top: 1px solid var(--ck-line);
-  background: var(--ck-surface);
-  padding: 10px 20px;
+.site-footer {
+  margin-top: auto;
+  padding: 10px 20px 14px;
   display: flex;
   align-items: center;
-  gap: 12px;
   justify-content: flex-end;
+  gap: 12px;
   flex-wrap: wrap;
+  background: transparent;
 }
 
-.app-footer-button {
-  background: var(--ck-surface);
-  border: 1px solid var(--ck-line);
-  color: var(--ck-text);
-  padding: 6px 10px;
+.site-footer-action,
+.site-footer-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--ck-muted);
   font-size: 12px;
-  font-weight: 600;
-}
-
-.app-footer-link {
-  color: var(--ck-text);
-  font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
+  line-height: 1.2;
   text-decoration: none;
 }
 
-.app-footer-link:hover {
+.site-footer-action:hover,
+.site-footer-link:hover {
+  color: var(--ck-text);
   text-decoration: underline;
 }
 
@@ -361,6 +365,8 @@ a:hover {
   min-height: 100vh;
   background: var(--ck-bg);
   color: var(--ck-text);
+  display: flex;
+  flex-direction: column;
 }
 
 .landing-top {
@@ -429,6 +435,7 @@ a:hover {
   padding: 26px 20px 36px;
   display: grid;
   gap: 28px;
+  flex: 1 0 auto;
 }
 
 .landing-hero {
@@ -634,8 +641,8 @@ a:hover {
   .research-list-toolbar {
     margin-bottom: 6px;
   }
-  .app-footer {
-    padding: 10px 12px;
+  .site-footer {
+    padding: 8px 12px 12px;
     justify-content: flex-start;
     gap: 10px;
   }

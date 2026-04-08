@@ -1,3 +1,5 @@
+import SiteFooter from "./SiteFooter.jsx";
+
 const AUDIENCE_BLOCKS = [
   {
     title: "Founders",
@@ -43,6 +45,7 @@ export default function LandingPage({
   featuredConfigs = [],
   onOpenConfig,
   onOpenWorkspace,
+  onExportDebug,
 }) {
   return (
     <div className="landing-shell">
@@ -127,6 +130,7 @@ export default function LandingPage({
           </div>
         </section>
       </main>
+      <SiteFooter onExportDebug={onExportDebug} />
     </div>
   );
 }

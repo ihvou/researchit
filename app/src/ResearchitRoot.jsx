@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import App from "./App.jsx";
 import LandingPage from "./components/LandingPage.jsx";
+import SiteFooter from "./components/SiteFooter.jsx";
 import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../configs/research-configurations.js";
 import { HOME_PATH, getResearchPath, resolveAppRoute } from "./lib/routes";
 import { applySeoMeta, buildHomeSeoMeta, buildNotFoundSeoMeta, buildResearchSeoMeta } from "./lib/seo";
+import { downloadDebugLogsBundle } from "./lib/debug";
 
 const FEATURED_CONFIG_IDS = [
   "startup-product-idea-validation",
@@ -22,6 +24,9 @@ function readPathname() {
 export default function ResearchitRoot() {
   const [pathname, setPathname] = useState(readPathname);
   const route = useMemo(() => resolveAppRoute(pathname), [pathname]);
+  const handleExportDebugLogs = useCallback(() => {
+    downloadDebugLogsBundle();
+  }, []);
 
   const featuredConfigs = useMemo(() => {
     const selected = FEATURED_CONFIG_IDS
@@ -118,6 +123,7 @@ export default function ResearchitRoot() {
             </div>
           </section>
         </main>
+        <SiteFooter onExportDebug={handleExportDebugLogs} />
       </div>
     );
   }
@@ -127,6 +133,7 @@ export default function ResearchitRoot() {
       featuredConfigs={featuredConfigs}
       onOpenConfig={(config) => navigateTo(getResearchPath(config))}
       onOpenWorkspace={() => navigateTo(getResearchPath(DEFAULT_RESEARCH_CONFIG))}
+      onExportDebug={handleExportDebugLogs}
     />
   );
 }

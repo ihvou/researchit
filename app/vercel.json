@@ -1,5 +1,27 @@
 {
   "buildCommand": "vite build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/workspace",
+      "destination": "/"
+    },
+    {
+      "source": "/workspace/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/research",
+      "destination": "/"
+    },
+    {
+      "source": "/research/:path*",
+      "destination": "/"
+    },
+    {
+      "source": "/((?!api($|/)|assets($|/)|.*\\..*).*)",
+      "destination": "/"
+    }
+  ]
 }
