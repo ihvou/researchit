@@ -44,7 +44,7 @@ At research launch, the user sees a toggle or selector:
 ```
 Evidence Mode:
   ○ Quick (Native)     — Fast, ~30s-2min, lower cost
-  ● Deep Assist        — Thorough, ~3-8min, higher cost, decision-grade
+  ● Deep Assist        — Thorough, ~3-8min, 3 providers by default, decision-grade
 ```
 
 The selection is passed through to the engine as a runtime option. No config changes required.
@@ -247,8 +247,8 @@ Each deep research provider needs an adapter that conforms to:
 {
   evidenceMode: "deep-assist",
   deepAssist: {
-    providers: ["claude", "chatgpt", "gemini"],  // default: all available
-    minProviders: 1,      // minimum providers that must succeed
+    providers: ["claude", "chatgpt", "gemini"],  // default: all three
+    minProviders: 2,      // minimum providers that must succeed before marked degraded
     maxWaitMs: 300000,    // 5 minute timeout per provider
   }
 }
@@ -258,6 +258,7 @@ Each deep research provider needs an adapter that conforms to:
 - If a provider fails or times out, the run continues with remaining providers
 - If fewer than `minProviders` succeed, the subject/cluster is marked as degraded
 - Provider availability is checked before launching (API key present, rate limit OK)
+- Deep Assist is quality-first: no hard spend cap is applied to truncate a run
 
 ### 5.4 Transport Integration
 
@@ -329,7 +330,7 @@ When multiple providers return evidence for the same cell/dimension:
 | Baseline matrix pass (memory-only) | Deep Research per subject (replaces) |
 | Web matrix pass (web_search) | Deep Research per subject (replaces) |
 | Reconcile (merge baseline + web) | Evidence Merge (replaces) |
-| Low-confidence recovery | Not needed — deep research rarely leaves empty cells |
+| Low-confidence recovery | Keep bounded targeted recovery for unresolved/contradicted cells |
 
 ### 7.2 Phases Replaced by Deep Assist (Scorecard)
 
@@ -338,7 +339,7 @@ When multiple providers return evidence for the same cell/dimension:
 | Analyst baseline (memory-only) | Deep Research per dimension cluster (replaces) |
 | Analyst web pass (web_search) | Deep Research per dimension cluster (replaces) |
 | Reconcile (merge passes) | Evidence Merge (replaces) |
-| Low-confidence cycle | Not needed in most cases; optional fallback |
+| Low-confidence cycle | Keep bounded fallback for unresolved/contradicted dimensions |
 
 ### 7.3 Phases That Stay Unchanged
 
@@ -389,9 +390,19 @@ These run identically regardless of evidence mode:
 
 ### 8.2 Cost Controls
 
-- Default to 1 provider (cheapest) — user can opt into multi-provider
-- Show estimated cost before launch: "This run will use ~5 deep research calls across 2 providers. Estimated cost: $3-8."
-- Provider selection per run (e.g., "use only Claude for this run")
+- Default to 3 providers (ChatGPT + Claude + Gemini) for maximum quality and explicit cross-provider validation
+- Show estimated cost range before launch: "This run will use ~15 deep research calls across 3 providers. Estimated cost: $X-$Y."
+- Show live spend/progress during run and actual by phase/provider after completion
+- Provider selection per run remains available as an override for advanced users
+
+### 8.3 No-Cap Safety Policy
+
+- No hard budget cap is enforced (quality-first policy)
+- Enforce safety limits to prevent accidental runaway spend:
+  - Max retries per step
+  - Per-step timeout
+  - Terminal degraded states with explicit failure reason
+- Distinguish "quality work continued" from "bug loop prevented" in diagnostics
 
 ---
 
@@ -455,25 +466,25 @@ The prompt templates should be influenced by the ResearchConfig's existing field
 
 ## 11. Implementation Plan
 
-### Phase 1: Single-Provider Matrix (MVP)
+### Phase 1: Three-Provider Matrix (MVP)
 
 1. Define `DeepResearchAdapter` interface in engine
-2. Implement OpenAI adapter in app (using existing `callOpenAI` with extended parameters)
+2. Implement OpenAI, Anthropic, and Gemini adapters in app
 3. Add `evidenceMode` runtime option to `runMatrixAnalysis`
 4. Build evidence structuring step (map prose → matrix cells)
-5. Wire Deep Assist evidence into existing critic/verification flow
-6. Add UI toggle for evidence mode selection
-7. Add progress reporting for deep research phase
+5. Build provider agreement/disagreement markers in matrix cell payload
+6. Wire Deep Assist evidence into existing critic/verification flow
+7. Add UI toggle for evidence mode selection
+8. Add progress reporting for deep research phase
 
-**Validates:** Does a single-provider deep research call produce meaningfully better matrix evidence than native web_search?
+**Validates:** Does 3-provider Deep Assist produce meaningfully better matrix evidence than a single mainstream deep research run?
 
 ### Phase 2: Multi-Provider + Scorecard
 
-1. Add Claude and Gemini adapters
-2. Build evidence merge algorithm (dedup, agreement detection, contradiction flagging)
-3. Extend `runAnalysis` (scorecard) with `evidenceMode` support
-4. Add dimension clustering logic for scorecard prompts
-5. Add provider agreement as a confidence signal in calibration engine
+1. Extend `runAnalysis` (scorecard) with `evidenceMode` support
+2. Add dimension clustering logic for scorecard prompts
+3. Add provider agreement as a confidence signal in calibration engine
+4. Keep bounded targeted recovery after merge for unresolved/contradicted dimensions
 
 ### Phase 3: Polish
 
@@ -481,6 +492,7 @@ The prompt templates should be influenced by the ResearchConfig's existing field
 2. Provider-level diagnostics in run output
 3. Per-provider contribution tracking in `analysisMeta`
 4. Graceful degradation when providers are unavailable
+5. Publish benchmark deltas vs ChatGPT/Claude/Gemini deep research baselines
 
 ---
 
@@ -500,7 +512,7 @@ The prompt templates should be influenced by the ResearchConfig's existing field
    → Mitigation: Adapter pattern means we can swap/add providers without pipeline changes.
 
 2. **Evidence structuring quality**: Mapping long-form prose into cell-level evidence is a non-trivial extraction task. How reliable is LLM extraction here?
-   → Mitigation: Start with single-provider MVP and measure cell fill rates before adding merge complexity.
+   → Mitigation: Start with 3-provider matrix MVP and measure cell fill rates plus agreement quality before scaling scorecard complexity.
 
 3. **Provider-specific prompt tuning**: Each deep research API may respond better to different prompt styles. How much per-provider customization is needed?
    → Mitigation: Start with a single prompt template, measure per-provider evidence quality, tune as needed.
@@ -537,6 +549,22 @@ These improvements apply regardless of evidence source and are tracked separatel
 
 ### 14.4 What We Explicitly Chose NOT to Build
 
-- **Hybrid mode** (native first → deep assist for gaps): More latency, similar cost, added complexity. Deep research APIs do not work well at the single-cell level — you would still need per-subject calls, making the cost savings negligible.
+- **Hybrid mode as default** (native first → deep assist for gaps): Not default in quality-first policy because it adds orchestration complexity and often duplicates work. It can be revisited later as an optional cost-optimized mode.
 - **Domain adapters** (RQ-16): Cannot direct web_search to specific sources. Deep Assist providers handle domain-specific retrieval naturally.
 - **Full-page content extraction in Native mode**: Would require building a headless browser infrastructure for page rendering, JS execution, paywall handling, etc. Deep Assist providers already do this.
+
+---
+
+## 15. Benchmark Gate (Beating Mainstream Deep Research)
+
+Deep Assist should not be declared "better" without repeatable evidence. Add a release gate:
+
+- Fixed benchmark prompt set (at least 8 scenarios across domains)
+- Side-by-side runs against ChatGPT Deep Research, Claude Research, Gemini Research
+- Scoring rubric:
+  - Factual accuracy / verifiability
+  - Source quality and diversity
+  - Contradiction handling
+  - Decision utility
+  - Uncertainty transparency
+- Publish win/loss deltas in debug artifacts and CI reports
