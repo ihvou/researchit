@@ -407,6 +407,7 @@ export default function App({
     const threadKey = matrixFollowUpThreadKey(subjectId, attributeId);
     const fuKey = `${ucId}::${threadKey}`;
     setFuLoading((prev) => ({ ...prev, [fuKey]: true }));
+    setFuInput(fuKey, "");
 
     try {
       const targetUseCase = ucRef.current.find((u) => u.id === ucId);

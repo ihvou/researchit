@@ -5,6 +5,7 @@ import DebateTab from "./DebateTab";
 import DiscoverTab from "./DiscoverTab";
 import ProgressTab from "./ProgressTab";
 import MatrixTab from "./MatrixTab";
+import MatrixDebateTab from "./MatrixDebateTab";
 
 const PHASE_LABELS = {
   analyst: "Analyst researching...",
@@ -58,6 +59,7 @@ export default function ExpandedRow({
   const tabs = isMatrixMode
     ? [
       { id: "matrix", label: "Matrix" },
+      { id: "debate", label: "Debate & Challenges" },
       { id: "progress", label: "Progress" },
     ]
     : [
@@ -124,8 +126,13 @@ export default function ExpandedRow({
           </div>
         )}
         {tab === "matrix" && (
-          <MatrixTab
+          <MatrixTab uc={uc} />
+        )}
+        {tab === "debate" && isMatrixMode && (
+          <MatrixDebateTab
             uc={uc}
+            fuInputs={fuInputs}
+            onFuInputChange={onFuInputChange}
             fuLoading={fuLoading}
             onFollowUpCell={onMatrixFollowUp}
           />

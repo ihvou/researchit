@@ -257,23 +257,32 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
         })}
       </div>
 
-      {outputMode !== "matrix" && (
-        <div style={{
-          marginTop: 12,
-          padding: "10px 12px",
-          borderRadius: 2,
-          border: "1px solid var(--ck-line)",
-          background: "var(--ck-surface-soft)",
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
-            Challenge Loop
-          </div>
-          <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-            In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
-            The Analyst LLM responds in-thread and may propose score updates; you explicitly accept or dismiss each proposal.
-          </div>
+      <div style={{
+        marginTop: 12,
+        padding: "10px 12px",
+        borderRadius: 2,
+        border: "1px solid var(--ck-line)",
+        background: "var(--ck-surface-soft)",
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ck-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.7 }}>
+          Challenge Loop
         </div>
-      )}
+        <div style={{ fontSize: 12, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+          {outputMode === "matrix"
+            ? (
+              <>
+                In <strong>Debate & Challenges</strong>, challenge any matrix cell directly in its thread.
+                The Analyst responds with evidence updates and confidence adjustments for that exact subject-attribute cell.
+              </>
+            )
+            : (
+              <>
+                In <strong>Debate & Challenges</strong>, send follow-up facts, questions, or objections on any dimension.
+                The Analyst LLM responds in-thread and may propose score updates; you explicitly accept or dismiss each proposal.
+              </>
+            )}
+        </div>
+      </div>
 
       {uc.status === "error" && (
         <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 2, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", color: "var(--ck-text)", fontSize: 12 }}>
