@@ -92,13 +92,6 @@ function getMatrixCoverage(uc) {
   };
 }
 
-function trimText(text, max = 170) {
-  const str = String(text || "").trim();
-  if (!str) return "";
-  if (str.length <= max) return str;
-  return `${str.slice(0, max - 1).trimEnd()}...`;
-}
-
 function normalizeAssumptions(values) {
   if (!Array.isArray(values)) return [];
   return values
@@ -1133,7 +1126,7 @@ export default function App({
               const score = ucIsMatrix ? null : calcWeightedScore(uc, ucDims);
               const matrixCoverage = ucIsMatrix ? getMatrixCoverage(uc) : null;
               const isExpanded = expandAllResearches || expandedId === uc.id;
-              const title = uc.attributes?.title || trimText(uc.rawInput, 80) || "Untitled research";
+              const title = uc.attributes?.title || uc.rawInput || "Untitled research";
               const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
               const inputFrame = uc.attributes?.inputFrame || {};
               const providedInput = String(inputFrame?.providedInput || uc.rawInput || "");
@@ -1155,6 +1148,9 @@ export default function App({
               const canExportResearch = uc.status === "complete";
               const researchExportItems = ucIsMatrix
                 ? [
+                  { key: "html", label: "Export HTML", action: () => openSingleUseCaseHtml(uc, ucConfig?.attributes || []) },
+                  { key: "pdf", label: "Export PDF", action: () => exportSingleUseCasePdf(uc, ucConfig?.attributes || []) },
+                  { key: "images", label: "Export Images ZIP", action: () => exportSingleUseCaseImagesZip(uc, ucConfig?.attributes || []) },
                   {
                     key: "markdown",
                     label: "Export Markdown",
@@ -1208,7 +1204,7 @@ export default function App({
                           }}>
                           <ChevronIcon direction={isExpanded ? "up" : "down"} size={11} />
                         </button>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ck-text)", lineHeight: 1.3, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ck-text)", lineHeight: 1.3, minWidth: 0, overflowWrap: "anywhere" }}>
                           {title}
                         </div>
                       </div>

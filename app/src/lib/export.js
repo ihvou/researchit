@@ -644,6 +644,221 @@ function renderDimensionPage(uc, d, options = {}) {
   `;
 }
 
+function resolveUseCaseOutputMode(uc) {
+  const mode = String(uc?.outputMode || (uc?.matrix ? "matrix" : "scorecard")).trim().toLowerCase();
+  return mode === "matrix" ? "matrix" : "scorecard";
+}
+
+function matrixCoverageSnapshot(matrix = {}) {
+  const coverage = matrix?.coverage;
+  if (coverage && Number.isFinite(Number(coverage.totalCells))) {
+    return {
+      totalCells: Number(coverage.totalCells),
+      lowConfidenceCells: Number(coverage.lowConfidenceCells) || 0,
+      contestedCells: Number(coverage.contestedCells) || 0,
+    };
+  }
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  return {
+    totalCells: cells.length,
+    lowConfidenceCells: cells.filter((cell) => normalizeConfidence(cell?.confidence) === "low").length,
+    contestedCells: cells.filter((cell) => !!cell?.contested).length,
+  };
+}
+
+function matrixCellMap(matrix = {}) {
+  const map = new Map();
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  cells.forEach((cell) => {
+    const key = `${String(cell?.subjectId || "")}::${String(cell?.attributeId || "")}`;
+    map.set(key, cell);
+  });
+  return map;
+}
+
+function matrixCompactTableHtml(matrix = {}) {
+  const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
+  const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
+  if (!subjects.length || !attributes.length) {
+    return "<div class=\"muted\">Matrix subjects/attributes are not available.</div>";
+  }
+
+  const cellByKey = matrixCellMap(matrix);
+  const headerCells = attributes
+    .map((attr) => `<th>${escapeHtml(attr?.label || attr?.id || "Attribute")}</th>`)
+    .join("");
+
+  const rows = subjects.map((subject) => {
+    const cells = attributes.map((attr) => {
+      const key = `${String(subject?.id || "")}::${String(attr?.id || "")}`;
+      const cell = cellByKey.get(key) || {};
+      const confidence = normalizeConfidence(cell?.confidence) || "low";
+      const confidenceLabelShort = confidence === "high" ? "H" : confidence === "medium" ? "M" : "L";
+      const cellText = limitWords(cell?.value || "No reliable evidence found.", 14);
+      return `
+        <td>
+          <div class="matrix-mini-cell">
+            <span class="matrix-mini-conf matrix-mini-conf-${confidence}">${confidenceLabelShort}</span>
+            <span>${escapeHtml(cellText)}</span>
+          </div>
+        </td>
+      `;
+    }).join("");
+
+    return `
+      <tr>
+        <th>${escapeHtml(subject?.label || subject?.id || "Subject")}</th>
+        ${cells}
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <div class="matrix-scroll">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>Subject</th>
+            ${headerCells}
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderMatrixSummaryPage(uc, options = {}) {
+  const mode = options.mode || "html";
+  const isPdf = mode === "pdf";
+  const title = uc?.attributes?.title || uc?.rawInput || "Untitled matrix research";
+  const matrix = uc?.matrix || {};
+  const coverage = matrixCoverageSnapshot(matrix);
+  const decisionQuestion = matrix?.decisionQuestion || uc?.rawInput || "";
+  const subjectCount = Array.isArray(matrix?.subjects) ? matrix.subjects.length : 0;
+  const attributeCount = Array.isArray(matrix?.attributes) ? matrix.attributes.length : 0;
+  const discover = uc?.discover || {};
+  const suggestedSubjects = Array.isArray(discover?.suggestedSubjects) ? discover.suggestedSubjects : [];
+  const suggestedAttributes = Array.isArray(discover?.suggestedAttributes) ? discover.suggestedAttributes : [];
+
+  const summaryMeta = `
+    <div class="matrix-meta-grid">
+      <div><span class="meta-k">Subjects</span><span class="meta-v">${subjectCount}</span></div>
+      <div><span class="meta-k">Attributes</span><span class="meta-v">${attributeCount}</span></div>
+      <div><span class="meta-k">Cells</span><span class="meta-v">${coverage.totalCells}</span></div>
+      <div><span class="meta-k">Low confidence</span><span class="meta-v">${coverage.lowConfidenceCells}</span></div>
+      <div><span class="meta-k">Critic flags</span><span class="meta-v">${coverage.contestedCells}</span></div>
+      <div><span class="meta-k">Mode</span><span class="meta-v">Matrix</span></div>
+    </div>
+  `;
+
+  const discoveryBody = suggestedSubjects.length || suggestedAttributes.length
+    ? `
+      ${suggestedSubjects.length ? `
+        <div class="small-text"><strong>Suggested subjects</strong></div>
+        <ul class="brief-list">
+          ${suggestedSubjects.slice(0, 10).map((item) => `<li>${escapeHtml(item?.label || "")}${item?.reason ? ` - ${escapeHtml(item.reason)}` : ""}</li>`).join("")}
+        </ul>
+      ` : ""}
+      ${suggestedAttributes.length ? `
+        <div class="small-text" style="margin-top:4px;"><strong>Suggested attributes</strong></div>
+        <ul class="brief-list">
+          ${suggestedAttributes.slice(0, 10).map((item) => `<li>${escapeHtml(item?.label || "")}${item?.reason ? ` - ${escapeHtml(item.reason)}` : ""}</li>`).join("")}
+        </ul>
+      ` : ""}
+    `
+    : "<div class=\"muted\">No additional discovery suggestions.</div>";
+
+  return `
+    <article class="page matrix-summary-page">
+      <div class="page-topline">Research it Matrix Report</div>
+      <h1 class="uc-title">${escapeHtml(title)}</h1>
+      <div class="summary-desc">${escapeHtml(uc?.rawInput || "")}</div>
+      ${summaryMeta}
+      ${section("Decision Question", `<div class="small-text pre-wrap">${escapeHtml(decisionQuestion)}</div>`)}
+      ${section("Matrix Overview", matrixCompactTableHtml(matrix), "compact")}
+      ${section("Discovery Suggestions", discoveryBody, "compact")}
+      <div class="small-text" style="margin-top:${isPdf ? "8px" : "10px"};">
+        Confidence markers: H = high, M = medium, L = low.
+      </div>
+    </article>
+  `;
+}
+
+function renderMatrixSubjectPage(uc, subject, attributes = [], cellByKey = new Map()) {
+  const subjectLabel = subject?.label || subject?.id || "Subject";
+  const rows = attributes.map((attr) => {
+    const key = `${String(subject?.id || "")}::${String(attr?.id || "")}`;
+    const cell = cellByKey.get(key) || {};
+    const confidence = normalizeConfidence(cell?.confidence) || "low";
+    const confidenceReason = cell?.confidenceReason ? ` - ${escapeHtml(cell.confidenceReason)}` : "";
+    const value = escapeHtml(cell?.value || "No reliable evidence found.");
+    const sourcesHtml = sourceChipArrayHtml(cell?.sources || [], { maxItems: 6 });
+    const criticNote = cell?.criticNote ? `<div class="small-text"><strong>Critic:</strong> ${escapeHtml(cell.criticNote)}</div>` : "";
+    const analystNote = cell?.analystNote ? `<div class="small-text"><strong>Analyst:</strong> ${escapeHtml(cell.analystNote)}</div>` : "";
+    return `
+      <tr>
+        <td>${escapeHtml(attr?.label || attr?.id || "Attribute")}</td>
+        <td><span class="matrix-mini-conf matrix-mini-conf-${confidence}">${confidence.toUpperCase()}</span><div class="small-text">${confidenceReason || ""}</div></td>
+        <td>
+          <div class="small-text pre-wrap">${value}</div>
+          ${criticNote}
+          ${analystNote}
+        </td>
+        <td>${sourcesHtml}</td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <article class="page matrix-subject-page">
+      <div class="page-topline">Subject Detail</div>
+      <h2 class="dim-page-title">${escapeHtml(subjectLabel)}</h2>
+      <div class="matrix-scroll">
+        <table class="matrix-detail-table">
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Confidence</th>
+              <th>Finding</th>
+              <th>Sources</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function buildSingleUseCaseMatrixReportHtml(uc, options = {}) {
+  const mode = options.mode || "html";
+  const matrix = uc?.matrix || {};
+  const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
+  const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
+  const cellByKey = matrixCellMap(matrix);
+  const summaryPage = renderMatrixSummaryPage(uc, { mode });
+  const subjectPages = subjects.map((subject) => renderMatrixSubjectPage(uc, subject, attributes, cellByKey)).join("");
+
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Research it Matrix Report</title>
+        <style>${reportCss(mode)}</style>
+      </head>
+      <body>
+        <main class="report">
+          ${summaryPage}
+          ${subjectPages}
+        </main>
+      </body>
+    </html>
+  `;
+}
+
 function buildPortfolioTable(useCases, dims) {
   if (!useCases.length) {
     return "<div class=\"muted\">No researches available.</div>";
@@ -1205,6 +1420,80 @@ function reportCss(mode = "html") {
       color: #73736f;
       letter-spacing: 0.04em;
     }
+    .matrix-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px 12px;
+      margin: 10px 0 12px;
+    }
+    .matrix-meta-grid > div {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid #d5d5d2;
+      padding-bottom: 4px;
+    }
+    .matrix-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .matrix-table,
+    .matrix-detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      font-size: 12px;
+      min-width: 760px;
+    }
+    .matrix-table th,
+    .matrix-table td,
+    .matrix-detail-table th,
+    .matrix-detail-table td {
+      border: 1px solid #d5d5d2;
+      padding: 6px;
+      vertical-align: top;
+      text-align: left;
+    }
+    .matrix-table th,
+    .matrix-detail-table th {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #4b4b48;
+      background: #f0f0ef;
+      font-weight: 700;
+    }
+    .matrix-mini-cell {
+      display: grid;
+      gap: 4px;
+    }
+    .matrix-mini-conf {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: fit-content;
+      min-width: 28px;
+      padding: 1px 6px;
+      border: 1px solid #d5d5d2;
+      border-radius: 2px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.2;
+      color: #121212;
+      background: #f7f7f6;
+      text-transform: uppercase;
+    }
+    .matrix-mini-conf-high {
+      border-color: #c8c8c5;
+      background: #f7f7f6;
+    }
+    .matrix-mini-conf-medium {
+      border-color: #cfcfcb;
+      background: #f7f7f6;
+    }
+    .matrix-mini-conf-low {
+      border-color: #b8b8b4;
+      background: #f3f3f1;
+    }
     .muted {
       color: #73736f;
       font-size: 12px;
@@ -1235,6 +1524,9 @@ function reportCss(mode = "html") {
         font-size: 58px;
       }
       .dim-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .matrix-meta-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .score-brief-band {
@@ -1291,8 +1583,12 @@ function buildReportHtml(useCases, dims, options = {}) {
   `;
 }
 
-export function buildSingleUseCaseReportHtml(uc, dims) {
-  return buildReportHtml([uc], dims, { mode: "html", includePortfolio: false });
+export function buildSingleUseCaseReportHtml(uc, dims, options = {}) {
+  const mode = options.mode || "html";
+  if (resolveUseCaseOutputMode(uc) === "matrix") {
+    return buildSingleUseCaseMatrixReportHtml(uc, { mode });
+  }
+  return buildReportHtml([uc], dims, { mode, includePortfolio: false });
 }
 
 function openHtmlInNewTab(html) {
@@ -1329,6 +1625,23 @@ function markdownEscapeInline(value) {
 
 function markdownTextBlock(value) {
   return String(value == null ? "" : value).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function markdownNormalizeComparableText(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function markdownArgumentBullet(arg, fallbackLabel, discardedTag = "discarded") {
+  const claimRaw = String(arg?.claim || "").trim();
+  const detailRaw = String(arg?.detail || "").trim();
+  const claim = markdownEscapeInline(claimRaw || fallbackLabel);
+  const detail = markdownEscapeInline(detailRaw);
+  const discarded = arg?.status === "discarded";
+  const prefix = discarded ? `[${discardedTag}] ` : "";
+  const claimComparable = markdownNormalizeComparableText(claimRaw);
+  const detailComparable = markdownNormalizeComparableText(detailRaw);
+  const includeDetail = Boolean(detailRaw) && detailComparable !== claimComparable;
+  return `- ${prefix}${claim}${includeDetail ? ` - ${detail}` : ""}`;
 }
 
 function markdownSourceLine(source, index) {
@@ -1445,11 +1758,7 @@ function buildScorecardMarkdown(uc, dims = []) {
     lines.push("");
     if (supporting.length) {
       supporting.forEach((arg) => {
-        const claim = markdownEscapeInline(arg?.claim || "Unnamed claim");
-        const detail = markdownEscapeInline(arg?.detail || "");
-        const discarded = arg?.status === "discarded";
-        const prefix = discarded ? "[discarded] " : "";
-        lines.push(`- ${prefix}${claim}${detail ? ` - ${detail}` : ""}`);
+        lines.push(markdownArgumentBullet(arg, "Unnamed claim"));
       });
     } else {
       lines.push("- None.");
@@ -1460,11 +1769,7 @@ function buildScorecardMarkdown(uc, dims = []) {
     lines.push("");
     if (limiting.length) {
       limiting.forEach((arg) => {
-        const claim = markdownEscapeInline(arg?.claim || "Unnamed factor");
-        const detail = markdownEscapeInline(arg?.detail || "");
-        const discarded = arg?.status === "discarded";
-        const prefix = discarded ? "[discarded] " : "";
-        lines.push(`- ${prefix}${claim}${detail ? ` - ${detail}` : ""}`);
+        lines.push(markdownArgumentBullet(arg, "Unnamed factor"));
       });
     } else {
       lines.push("- None.");
@@ -1584,7 +1889,7 @@ function buildMatrixMarkdown(uc) {
         const cell = cellMap.get(key);
         const confidence = String(cell?.confidence || "").trim().toLowerCase();
         const confidenceMark = confidence === "high" ? "H" : confidence === "medium" ? "M" : confidence === "low" ? "L" : "-";
-        const value = markdownEscapeInline(limitWords(cell?.value || "", 16) || "-");
+        const value = markdownEscapeInline(cell?.value || "-");
         return `[${confidenceMark}] ${value}`;
       });
       lines.push(`| ${markdownEscapeInline(subject?.label || subject?.id || "Unknown subject")} | ${row.join(" | ")} |`);
@@ -1925,7 +2230,7 @@ export async function exportAnalysisPdf(useCases, dims) {
 }
 
 export async function exportSingleUseCaseHtml(uc, dims) {
-  const html = buildSingleUseCaseReportHtml(uc, dims);
+  const html = buildSingleUseCaseReportHtml(uc, dims, { mode: "html" });
   const tag = safeFilePart(uc?.attributes?.title || uc?.id || "research");
   const opened = openHtmlInNewTab(html);
   if (!opened) {
@@ -1935,7 +2240,7 @@ export async function exportSingleUseCaseHtml(uc, dims) {
 }
 
 export async function openSingleUseCaseHtml(uc, dims) {
-  const html = buildSingleUseCaseReportHtml(uc, dims);
+  const html = buildSingleUseCaseReportHtml(uc, dims, { mode: "html" });
   const opened = openHtmlInNewTab(html);
   if (!opened) {
     const tag = safeFilePart(uc?.attributes?.title || uc?.id || "research");
@@ -1945,14 +2250,14 @@ export async function openSingleUseCaseHtml(uc, dims) {
 }
 
 export async function exportSingleUseCasePdf(uc, dims) {
-  const html = buildReportHtml([uc], dims, { mode: "pdf", includePortfolio: false });
+  const html = buildSingleUseCaseReportHtml(uc, dims, { mode: "pdf" });
   return printHtmlFromHiddenFrame(html);
 }
 
 export async function exportSingleUseCaseImagesZip(uc, dims) {
   const title = uc?.attributes?.title || uc?.rawInput || uc?.id || "research";
   const baseTag = safeFilePart(title);
-  const html = buildReportHtml([uc], dims, { mode: "html", includePortfolio: false });
+  const html = buildSingleUseCaseReportHtml(uc, dims, { mode: "html" });
   const host = buildOffscreenReportHost(html);
 
   document.body.appendChild(host);
