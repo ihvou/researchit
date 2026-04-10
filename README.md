@@ -81,24 +81,25 @@ flowchart LR
 Scorecard pipeline (quality-first):
 1. Analyst baseline pass (memory-only)
 2. Analyst web pass (live-search assisted)
-3. Reconcile pass (merge evidence, re-score)
+3. Reconcile pass (merge evidence, re-score, apply quality guard retry/fail-fast if merge looks implausible)
 4. Targeted low-confidence cycle (query plan -> web harvest -> re-score)
 5. Critic audit pass
 6. Analyst final response pass
-7. Consistency check pass
+7. Consistency check pass + decision/confidence/polarity post-guards
 8. Discovery generation + candidate pre-validation
 
 Matrix pipeline:
 1. Plan + input resolution (decision question, subject set)
 2. Baseline matrix pass (memory-only)
 3. Web matrix pass
-4. Reconcile baseline + web drafts
+4. Reconcile baseline + web drafts (with quality guard retry/fail-fast)
 5. Targeted low-confidence cell recovery
 6. Critic matrix audit
 7. Analyst response (defend or concede contested cells)
 8. Matrix summary (+ optional matrix discovery suggestions)
 
 Source verification runs after source-producing phases in both scorecard and matrix flows. Cited URLs are checked with `fetchSource`; unverified claims can reduce confidence.
+Run diagnostics are captured in `analysisMeta` and surfaced in Progress UI + exports (HTML/PDF/Markdown).
 
 Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals. Matrix follow-ups are supported at cell level (`subjectId` × `attributeId`) in addition to scorecard dimension threads.
 
@@ -227,6 +228,16 @@ Default system prompts live in:
   limits: {
     maxSourcesPerDim: 14,
     discoveryMaxCandidates: 5,
+    matrixCoverageSLA: {
+      minSourcesPerCell: 2,
+      minSubjectEvidenceCoverage: 0.5,
+      maxUnresolvedCellsRatio: 0.35
+    },
+    criticFlagMonitoring: {
+      minAuditedCells: 8,
+      minFlagRate: 0.1,
+      highLowConfidenceRate: 0.3
+    },
     tokenLimits: {
       phase1Evidence: 10000,
       phase1Scoring: 12000,

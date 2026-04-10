@@ -115,18 +115,18 @@ Results flow back through callbacks.onProgress → React state → UI
 ### Scorecard (8 phases)
 1. **Analyst baseline** — memory-only initial scoring across all dimensions
 2. **Analyst web pass** — live-search-assisted evidence gathering
-3. **Reconcile** — merge evidence from both passes, re-score
+3. **Reconcile** — merge evidence from both passes, re-score, then apply reconcile quality guard (targeted retry + fail-fast on implausible merge)
 4. **Targeted low-confidence cycle** — query plan → web harvest → re-score for weak dimensions
 5. **Critic audit** — independent critical review of all findings
 6. **Analyst final response** — address critic challenges with evidence
-7. **Consistency check** — cross-dimension coherence validation
+7. **Consistency check** — cross-dimension coherence validation + decision/confidence/polarity post-guards
 8. **Discovery generation** — related opportunities + candidate pre-validation
 
 ### Matrix
 1. **Plan/input resolution** — resolve decision question and matrix subjects
 2. **Baseline matrix pass** — memory-only matrix draft
 3. **Web matrix pass** — live-search-assisted matrix draft
-4. **Reconcile** — merge baseline + web drafts
+4. **Reconcile** — merge baseline + web drafts, with reconcile quality guard retry/fail-fast
 5. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
 6. **Critic matrix audit** — flag weak/contradictory cells
 7. **Analyst response** — defend or concede each contested cell
@@ -134,6 +134,9 @@ Results flow back through callbacks.onProgress → React state → UI
 
 ### Source verification
 After source-producing passes, cited URLs are checked via `fetchSource`. Sources are tagged `verified_in_page`, `not_found_in_page`, or `fetch_failed`. Confidence can be downgraded when verification coverage is weak.
+
+### Run diagnostics surface
+Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
 
 ## Follow-Up Pipeline
 
@@ -193,6 +196,12 @@ Supports both:
   limits: {
     maxSourcesPerDim,
     discoveryMaxCandidates,
+    matrixCoverageSLA: {
+      minSourcesPerCell, minSubjectEvidenceCoverage, maxUnresolvedCellsRatio, maxUnresolvedCells?
+    },
+    criticFlagMonitoring: {
+      minAuditedCells, minFlagRate, highLowConfidenceRate
+    },
     tokenLimits: { phase1Evidence, phase1Scoring, critic, phase3Response,
                    followUpQuestion, followUpChallenge, intentClassification }
   }
