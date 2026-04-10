@@ -377,6 +377,7 @@ function createInitialState(input) {
       discoveryLiveSearchUsed: false,
       discoveryWebSearchCalls: 0,
       discoveryLiveSearchFallbackReason: null,
+      discoveryFailureReason: null,
       generatedDiscoverCandidatesCount: 0,
       discoverCandidatesCount: 0,
       rejectedDiscoverCandidatesCount: 0,
@@ -402,6 +403,14 @@ function createInitialState(input) {
       contestedCellsResolved: 0,
       contestedCellsConceded: 0,
       contestedCellsDefended: 0,
+      criticCellsAudited: 0,
+      criticFlagsRaised: 0,
+      criticFlagRate: 0,
+      criticFlagRateLowConfidenceRate: 0,
+      criticFlagRateAlert: "",
+      matrixCoverageSLAPassed: false,
+      matrixCoverageSLAFailureReason: "",
+      matrixCoverageSLA: null,
     },
   };
 }
@@ -555,6 +564,162 @@ function summarizeCoverage(cells = []) {
   const lowConfidenceCells = cells.filter((cell) => normalizeConfidence(cell.confidence) === "low").length;
   const contestedCells = cells.filter((cell) => cell.contested).length;
   return { totalCells, lowConfidenceCells, contestedCells };
+}
+
+function resolveMatrixCoverageSla(config = {}) {
+  const raw = config?.limits?.matrixCoverageSLA || {};
+  const minSourcesPerCell = Math.max(1, Number(raw?.minSourcesPerCell) || 2);
+  const minSubjectEvidenceCoverage = Math.min(1, Math.max(0, Number(raw?.minSubjectEvidenceCoverage) || 0.5));
+  const maxUnresolvedCellsRatio = Math.min(1, Math.max(0, Number(raw?.maxUnresolvedCellsRatio) || 0.35));
+  const maxUnresolvedCellsRaw = Number(raw?.maxUnresolvedCells);
+  const maxUnresolvedCells = Number.isFinite(maxUnresolvedCellsRaw) && maxUnresolvedCellsRaw >= 0
+    ? Math.floor(maxUnresolvedCellsRaw)
+    : null;
+  return {
+    minSourcesPerCell,
+    minSubjectEvidenceCoverage,
+    maxUnresolvedCellsRatio,
+    maxUnresolvedCells,
+  };
+}
+
+function resolveCriticFlagMonitoring(config = {}) {
+  const raw = config?.limits?.criticFlagMonitoring || {};
+  return {
+    minAuditedCells: Math.max(1, Number(raw?.minAuditedCells) || 8),
+    minFlagRate: Math.min(1, Math.max(0, Number(raw?.minFlagRate) || 0.1)),
+    highLowConfidenceRate: Math.min(1, Math.max(0, Number(raw?.highLowConfidenceRate) || 0.3)),
+  };
+}
+
+function hasExplicitFailureReason(cell = {}) {
+  const text = `${cleanText(cell?.value)} ${cleanText(cell?.confidenceReason)}`.toLowerCase();
+  if (!text) return false;
+  return /no reliable evidence|no evidence|insufficient evidence|insufficient public evidence|could not find|unable to find|not found|retrieval failed|data unavailable|public data unavailable/.test(text);
+}
+
+function evaluateMatrixCoverageSla(matrix = {}, subjects = [], attributes = [], config = {}) {
+  const sla = resolveMatrixCoverageSla(config);
+  const subjectList = Array.isArray(subjects) ? subjects : [];
+  const attributeList = Array.isArray(attributes) ? attributes : [];
+  const cellMap = new Map();
+  (Array.isArray(matrix?.cells) ? matrix.cells : []).forEach((cell) => {
+    cellMap.set(buildCellKey(cell.subjectId, cell.attributeId), cell);
+  });
+
+  const totalCells = subjectList.length * attributeList.length;
+  const subjectDiagnostics = [];
+  const failingSubjects = [];
+  let unresolvedCells = 0;
+  let explicitFailureCells = 0;
+  let evidenceSatisfiedCells = 0;
+
+  for (const subject of subjectList) {
+    let subjectEvidenceCells = 0;
+    let subjectUnresolvedCells = 0;
+    for (const attribute of attributeList) {
+      const key = buildCellKey(subject.id, attribute.id);
+      const cell = cellMap.get(key);
+      if (!cell) {
+        unresolvedCells += 1;
+        subjectUnresolvedCells += 1;
+        continue;
+      }
+      const sourceCount = normalizeSourceList(cell.sources).length;
+      if (sourceCount >= sla.minSourcesPerCell) {
+        subjectEvidenceCells += 1;
+        evidenceSatisfiedCells += 1;
+        continue;
+      }
+      if (hasExplicitFailureReason(cell)) {
+        explicitFailureCells += 1;
+        continue;
+      }
+      unresolvedCells += 1;
+      subjectUnresolvedCells += 1;
+    }
+
+    const subjectTotal = attributeList.length || 1;
+    const evidenceCoverage = subjectEvidenceCells / subjectTotal;
+    const subjectDiag = {
+      subjectId: subject.id,
+      subjectLabel: subject.label,
+      totalCells: attributeList.length,
+      evidenceCells: subjectEvidenceCells,
+      unresolvedCells: subjectUnresolvedCells,
+      evidenceCoverage,
+      pass: evidenceCoverage >= sla.minSubjectEvidenceCoverage,
+    };
+    subjectDiagnostics.push(subjectDiag);
+    if (!subjectDiag.pass) failingSubjects.push(subjectDiag);
+  }
+
+  const unresolvedByRatio = Math.ceil(totalCells * sla.maxUnresolvedCellsRatio);
+  const maxUnresolvedCellsAllowed = sla.maxUnresolvedCells == null
+    ? unresolvedByRatio
+    : Math.min(sla.maxUnresolvedCells, unresolvedByRatio);
+  const unresolvedRatio = totalCells ? unresolvedCells / totalCells : 0;
+  const globalPass = unresolvedCells <= maxUnresolvedCellsAllowed;
+  const pass = globalPass && failingSubjects.length === 0;
+
+  let failureReason = "";
+  if (!pass) {
+    const bits = [];
+    if (!globalPass) {
+      bits.push(`Unresolved cells ${unresolvedCells}/${totalCells} exceed max ${maxUnresolvedCellsAllowed}.`);
+    }
+    if (failingSubjects.length) {
+      const subjectText = failingSubjects
+        .map((item) => `${item.subjectLabel} ${Math.round(item.evidenceCoverage * 100)}%`)
+        .join(", ");
+      bits.push(`Subject evidence coverage below ${Math.round(sla.minSubjectEvidenceCoverage * 100)}%: ${subjectText}.`);
+    }
+    failureReason = bits.join(" ");
+  }
+
+  return {
+    pass,
+    failureReason,
+    diagnostics: {
+      enabled: true,
+      config: { ...sla },
+      totalCells,
+      evidenceSatisfiedCells,
+      explicitFailureCells,
+      unresolvedCells,
+      unresolvedRatio,
+      maxUnresolvedCellsAllowed,
+      failingSubjectsCount: failingSubjects.length,
+      failingSubjects,
+      subjects: subjectDiagnostics,
+    },
+  };
+}
+
+function computeCriticFlagMonitoring({ matrix = {}, criticFlags = [], config = {} } = {}) {
+  const thresholds = resolveCriticFlagMonitoring(config);
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const totalAuditedCells = cells.length;
+  const lowConfidenceCells = cells.filter((cell) => normalizeConfidence(cell.confidence) === "low").length;
+  const lowConfidenceRate = totalAuditedCells ? (lowConfidenceCells / totalAuditedCells) : 0;
+  const flagsRaised = Array.isArray(criticFlags) ? criticFlags.length : 0;
+  const flagRate = totalAuditedCells ? (flagsRaised / totalAuditedCells) : 0;
+  const alert = totalAuditedCells >= thresholds.minAuditedCells
+    && lowConfidenceRate >= thresholds.highLowConfidenceRate
+    && flagRate < thresholds.minFlagRate;
+  const alertMessage = alert
+    ? `Critic flag rate ${Math.round(flagRate * 100)}% is below threshold ${Math.round(thresholds.minFlagRate * 100)}% with high low-confidence share ${Math.round(lowConfidenceRate * 100)}%.`
+    : "";
+
+  return {
+    totalAuditedCells,
+    flagsRaised,
+    flagRate,
+    lowConfidenceRate,
+    thresholds,
+    alert,
+    alertMessage,
+  };
 }
 
 function matrixHybridStats(subjects = [], attributes = [], baseline = {}, web = {}, reconciled = {}) {
@@ -1627,6 +1792,26 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     );
     state.analysisMeta = mergeMeta(state.analysisMeta, criticRes?.meta, "critic");
     const criticFlags = normalizeCriticFlags(extractJson(criticRes?.text || criticRes, {}), subjects, attributes);
+    const criticMonitoring = computeCriticFlagMonitoring({
+      matrix: reconciledMatrix,
+      criticFlags,
+      config,
+    });
+    state.analysisMeta.criticCellsAudited = criticMonitoring.totalAuditedCells;
+    state.analysisMeta.criticFlagsRaised = criticMonitoring.flagsRaised;
+    state.analysisMeta.criticFlagRate = criticMonitoring.flagRate;
+    state.analysisMeta.criticFlagRateLowConfidenceRate = criticMonitoring.lowConfidenceRate;
+    state.analysisMeta.criticFlagRateAlert = criticMonitoring.alertMessage;
+    if (criticMonitoring.alert) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "critic_flag_rate_alert",
+        phase: "matrix_critic",
+        flagRate: criticMonitoring.flagRate,
+        lowConfidenceRate: criticMonitoring.lowConfidenceRate,
+        thresholds: criticMonitoring.thresholds,
+        note: criticMonitoring.alertMessage,
+      });
+    }
     const critiquedCells = applyCriticFlags(reconciledMatrix.cells, criticFlags);
 
     update("matrix_response", {
@@ -1727,26 +1912,54 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       analysisMeta: state.analysisMeta,
     });
 
+    const coverageSlaResult = evaluateMatrixCoverageSla(resolvedMatrix, subjects, attributes, config);
+    state.analysisMeta.matrixCoverageSLA = coverageSlaResult.diagnostics;
+    state.analysisMeta.matrixCoverageSLAPassed = !!coverageSlaResult.pass;
+    state.analysisMeta.matrixCoverageSLAFailureReason = coverageSlaResult.failureReason || "";
+    if (!coverageSlaResult.pass) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "coverage_sla_failed",
+        phase: "matrix_summary",
+        diagnostics: coverageSlaResult.diagnostics,
+        note: coverageSlaResult.failureReason,
+      });
+      throw new Error(`Coverage SLA failed. ${coverageSlaResult.failureReason || "Matrix coverage requirements were not met."}`);
+    }
+
     if (relatedDiscovery) {
       update("matrix_discover", {});
-      const discoveryPromptText = buildMatrixDiscoveryPrompt({
-        rawInput: state.rawInput,
-        decisionQuestion,
-        subjects,
-        attributes,
-      });
-      const discoverRes = await transport.callAnalyst(
-        [{ role: "user", content: discoveryPromptText }],
-        MATRIX_DISCOVERY_PROMPT,
-        discoveryTokens,
-        {
-          ...roleOptions(config, "analyst"),
-          liveSearch: true,
-          includeMeta: true,
-        }
-      );
-      state.analysisMeta = mergeMeta(state.analysisMeta, discoverRes?.meta, "discover");
-      const discovery = normalizeMatrixDiscovery(extractJson(discoverRes?.text || discoverRes, {}));
+      let discovery = {
+        suggestedSubjects: [],
+        suggestedAttributes: [],
+        notes: "",
+      };
+      try {
+        const discoveryPromptText = buildMatrixDiscoveryPrompt({
+          rawInput: state.rawInput,
+          decisionQuestion,
+          subjects,
+          attributes,
+        });
+        const discoverRes = await transport.callAnalyst(
+          [{ role: "user", content: discoveryPromptText }],
+          MATRIX_DISCOVERY_PROMPT,
+          discoveryTokens,
+          {
+            ...roleOptions(config, "analyst"),
+            liveSearch: true,
+            includeMeta: true,
+          }
+        );
+        state.analysisMeta = mergeMeta(state.analysisMeta, discoverRes?.meta, "discover");
+        discovery = normalizeMatrixDiscovery(extractJson(discoverRes?.text || discoverRes, {}));
+      } catch (discoveryErr) {
+        state.analysisMeta.discoveryFailureReason = cleanText(discoveryErr?.message || "Discovery step failed.");
+        appendAnalysisDebugEvent(debugSession, {
+          type: "phase_degraded",
+          phase: "matrix_discover",
+          note: state.analysisMeta.discoveryFailureReason,
+        });
+      }
 
       state.analysisMeta.generatedDiscoverCandidatesCount = Number(discovery.suggestedSubjects.length + discovery.suggestedAttributes.length);
       state.analysisMeta.discoverCandidatesCount = Number(discovery.suggestedSubjects.length + discovery.suggestedAttributes.length);

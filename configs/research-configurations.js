@@ -21,6 +21,16 @@ const SHARED_MODELS = {
 const SHARED_LIMITS = {
   maxSourcesPerDim: 14,
   discoveryMaxCandidates: 5,
+  matrixCoverageSLA: {
+    minSourcesPerCell: 2,
+    minSubjectEvidenceCoverage: 0.5,
+    maxUnresolvedCellsRatio: 0.35,
+  },
+  criticFlagMonitoring: {
+    minAuditedCells: 8,
+    minFlagRate: 0.1,
+    highLowConfidenceRate: 0.3,
+  },
   tokenLimits: {
     phase1Evidence: 10000,
     phase1Scoring: 12000,
