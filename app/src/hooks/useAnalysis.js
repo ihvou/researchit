@@ -41,18 +41,25 @@ function mergeProgressState(prevState = {}, nextState = {}, config = null) {
 
 export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const config = mergeConfig(options?.config || defaultConfig, dims);
+  const evidenceMode = String(options?.evidenceMode || "native").trim().toLowerCase() === "deep-assist"
+    ? "deep-assist"
+    : "native";
   const debugDims = String(config?.outputMode || "").trim().toLowerCase() === "matrix"
     ? (Array.isArray(config?.attributes) ? config.attributes : [])
     : (Array.isArray(config?.dimensions) ? config.dimensions : []);
   const fallbackDebugSession = createAnalysisDebugSession({
     useCaseId: id,
-    analysisMode: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix" ? "matrix" : "hybrid",
+    analysisMode: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
+      ? (evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
+      : (evidenceMode === "deep-assist" ? "deep-assist" : "hybrid"),
     rawInput: desc,
     dims: debugDims,
   });
   appendAnalysisDebugEvent(fallbackDebugSession, {
     type: "analysis_start",
-    phase: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix" ? "matrix_plan" : "analyst_baseline",
+    phase: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
+      ? "matrix_plan"
+      : (evidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline"),
   });
   let debugSessionReceived = false;
   let caughtError = null;
@@ -68,6 +75,9 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
         options: {
           downloadDebugLog: !!options?.downloadDebugLog,
           matrixSubjects: Array.isArray(options?.matrixSubjects) ? options.matrixSubjects : [],
+          researchSetup: options?.researchSetup || null,
+          evidenceMode: options?.evidenceMode || "native",
+          deepAssist: options?.deepAssist || null,
         },
       },
       config,

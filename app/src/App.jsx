@@ -149,6 +149,14 @@ function matrixFollowUpThreadKey(subjectId, attributeId) {
   return `matrix::${subjectId}::${attributeId}`;
 }
 
+function normalizeResearchSetup(raw = {}) {
+  return {
+    decisionContext: String(raw?.decisionContext || "").trim(),
+    userRoleContext: String(raw?.userRoleContext || "").trim(),
+    subjectsText: String(raw?.subjectsText || "").trim(),
+  };
+}
+
 export default function App({
   initialConfigId = DEFAULT_RESEARCH_CONFIG.id,
   routeConfigId = null,
@@ -163,8 +171,19 @@ export default function App({
     )
   ));
   const [inputText, setInputText] = useState("");
-  const [subjectsText, setSubjectsText] = useState("");
+  const [setupByConfig, setSetupByConfig] = useState(() => (
+    Object.fromEntries(
+      RESEARCH_CONFIGS.map((config) => [config.id, normalizeResearchSetup({})])
+    )
+  ));
+  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [setupMode, setSetupMode] = useState("scorecard");
+  const [setupDraft, setSetupDraft] = useState(normalizeResearchSetup({}));
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupError, setSetupError] = useState("");
+  const [setupNotice, setSetupNotice] = useState("");
   const [showInputPanel, setShowInputPanel] = useState(false);
+  const [evidenceMode, setEvidenceMode] = useState("native");
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
@@ -177,7 +196,6 @@ export default function App({
   const [importLoading, setImportLoading] = useState(false);
   const [importWarning, setImportWarning] = useState("");
   const [importError, setImportError] = useState("");
-  const [matrixSubjectConfirmationMode, setMatrixSubjectConfirmationMode] = useState(false);
 
   const ucRef = useRef(useCases);
   const cardRefs = useRef({});
@@ -202,13 +220,10 @@ export default function App({
   const matrixAttributes = cloneDims(activeConfig?.attributes || []);
 
   useEffect(() => {
-    if (!isMatrixMode) {
-      setSubjectsText("");
-      setMatrixSubjectConfirmationMode(false);
-      return;
-    }
-    setSubjectsText("");
-    setMatrixSubjectConfirmationMode(false);
+    setSetupError("");
+    setSetupNotice("");
+    setShowSetupModal(false);
+    setSetupBusy(false);
   }, [activeConfig?.id, isMatrixMode]);
 
   function setActiveDims(updater) {
@@ -231,19 +246,47 @@ export default function App({
     setFuInputs(prev => ({ ...prev, [key]: val }));
   }
 
-  async function runNewAnalysis(descInput, origin = null, configOverride = null, matrixSubjects = []) {
+  function getConfigSetup(configId = activeConfig.id) {
+    return normalizeResearchSetup(setupByConfig[configId] || {});
+  }
+
+  function persistConfigSetup(configId = activeConfig.id, nextSetup = {}) {
+    const normalized = normalizeResearchSetup(nextSetup);
+    setSetupByConfig((prev) => ({
+      ...prev,
+      [configId]: normalized,
+    }));
+    return normalized;
+  }
+
+  async function runNewAnalysis(descInput, origin = null, configOverride = null, matrixSubjects = [], researchSetup = null) {
     const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
 
     const selectedConfig = configOverride || activeConfig;
     const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
+    const normalizedSetup = normalizeResearchSetup(researchSetup || setupByConfig[selectedConfig.id] || {});
+    const normalizedEvidenceMode = String(evidenceMode || "").trim().toLowerCase() === "deep-assist"
+      ? "deep-assist"
+      : "native";
+    const deepAssistDefaults = selectedConfig?.deepAssist?.defaults || {};
+    const deepAssistRunOptions = {
+      providers: Array.isArray(deepAssistDefaults?.providers) && deepAssistDefaults.providers.length
+        ? deepAssistDefaults.providers
+        : ["chatgpt", "claude", "gemini"],
+      minProviders: Number(deepAssistDefaults?.minProviders) || 2,
+      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || 300000,
+      maxRetries: Number(deepAssistDefaults?.maxRetries) || 1,
+    };
     const selectedDims = selectedMode === "scorecard"
       ? (dimsByConfig[selectedConfig.id] || selectedConfig.dimensions)
       : [];
     const runtimeConfig = buildRuntimeConfig(selectedConfig, selectedDims);
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const initialPhase = selectedMode === "matrix" ? "matrix_plan" : "analyst_baseline";
+    const initialPhase = selectedMode === "matrix"
+      ? "matrix_plan"
+      : (normalizedEvidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline");
     const blankUC = {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
       attributes: null, dimScores: null, critique: null, finalScores: null,
@@ -251,6 +294,7 @@ export default function App({
       researchConfigId: selectedConfig.id,
       researchConfigName: selectedConfig.name,
       outputMode: selectedMode,
+      researchSetup: normalizedSetup,
       matrix: selectedMode === "matrix"
         ? {
           layout: selectedConfig?.matrixLayout || "auto",
@@ -259,12 +303,16 @@ export default function App({
           cells: [],
           subjectSummaries: [],
           crossMatrixSummary: "",
+          executiveSummary: null,
           coverage: { totalCells: 0, lowConfidenceCells: 0, contestedCells: 0 },
           discovery: null,
         }
         : null,
       analysisMeta: {
-        analysisMode: selectedMode === "matrix" ? "matrix" : INTERNAL_ANALYSIS_MODE,
+        analysisMode: selectedMode === "matrix"
+          ? (normalizedEvidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
+          : (normalizedEvidenceMode === "deep-assist" ? "deep-assist" : INTERNAL_ANALYSIS_MODE),
+        evidenceMode: normalizedEvidenceMode,
         liveSearchRequested: true,
         liveSearchUsed: false,
         webSearchCalls: 0,
@@ -288,13 +336,22 @@ export default function App({
         lowConfidenceTargetedWebSearchCalls: 0,
         lowConfidenceTargetedFallbackReason: null,
         hybridStats: null,
+        qualityGrade: "standard",
+        degradedReasons: [],
+        deepAssistProvidersRequested: normalizedEvidenceMode === "deep-assist"
+          ? deepAssistRunOptions.providers.length
+          : 0,
+        deepAssistProvidersSucceeded: 0,
+        deepAssistProvidersFailed: 0,
+        deepAssistProviderRuns: [],
+        decisionContext: normalizedSetup.decisionContext,
+        userRoleContext: normalizedSetup.userRoleContext,
       },
     };
 
     setUseCases(prev => [...prev, blankUC]);
     setShowInputPanel(false);
     setInputText("");
-    if (selectedMode === "matrix") setSubjectsText("");
     setExpandedId(id);
     setGlobalAnalyzing(true);
 
@@ -304,6 +361,9 @@ export default function App({
         origin,
         config: runtimeConfig,
         matrixSubjects,
+        researchSetup: normalizedSetup,
+        evidenceMode: normalizedEvidenceMode,
+        deepAssist: normalizedEvidenceMode === "deep-assist" ? deepAssistRunOptions : null,
         initialState: blankUC,
       });
     } catch (err) {
@@ -313,53 +373,121 @@ export default function App({
     setGlobalAnalyzing(false);
   }
 
+  function openScorecardSetupModal() {
+    if (globalAnalyzing || !showInputPanel) return;
+    setSetupMode("scorecard");
+    setSetupError("");
+    setSetupNotice("");
+    setSetupBusy(false);
+    const current = getConfigSetup(activeConfig.id);
+    setSetupDraft({
+      decisionContext: current.decisionContext,
+      userRoleContext: current.userRoleContext,
+      subjectsText: "",
+    });
+    setShowSetupModal(true);
+  }
+
+  async function openMatrixSetupModal(descInput) {
+    const desc = String(descInput || "").trim();
+    if (!desc || globalAnalyzing) return;
+
+    setSetupMode("matrix");
+    setSetupError("");
+    setSetupNotice("");
+    setSetupBusy(true);
+    setShowSetupModal(true);
+
+    const existing = getConfigSetup(activeConfig.id);
+    let nextDraft = {
+      decisionContext: existing.decisionContext,
+      userRoleContext: existing.userRoleContext,
+      subjectsText: existing.subjectsText,
+    };
+    const runtimeConfig = buildRuntimeConfig(activeConfig, dimsByConfig[activeConfig.id] || activeConfig.dimensions);
+    try {
+      const parsedExisting = parseSubjectsInput(existing.subjectsText).slice(0, matrixSubjectMax);
+      const resolved = await resolveMatrixResearchInput(
+        {
+          id: `matrix-preflight-${Date.now()}`,
+          description: desc,
+          options: {
+            matrixSubjects: parsedExisting,
+            researchSetup: {
+              decisionContext: existing.decisionContext,
+              userRoleContext: existing.userRoleContext,
+            },
+          },
+        },
+        runtimeConfig,
+        { transport: appTransport },
+        { requireConfirmation: true }
+      );
+      const resolvedSubjects = Array.isArray(resolved?.subjects)
+        ? resolved.subjects.map((subject) => String(subject?.label || "").trim()).filter(Boolean)
+        : [];
+      if (resolvedSubjects.length) {
+        const existingParsed = parseSubjectsInput(existing.subjectsText);
+        const shouldReplace = !existingParsed.length || (resolved?.requiresConfirmation && resolved?.usedSubjectDiscovery);
+        if (shouldReplace) {
+          nextDraft.subjectsText = resolvedSubjects.join("\n");
+        }
+      }
+      if (resolved?.usedSubjectDiscovery) {
+        setSetupNotice("Suggested subjects were generated from your prompt. Edit before running if needed.");
+      } else if (resolved?.extractedSubjects?.length) {
+        setSetupNotice("Subjects were extracted from your prompt. You can edit them before running.");
+      }
+    } catch (err) {
+      setSetupError(err?.message || "Failed to prepare matrix setup.");
+    } finally {
+      setSetupDraft(nextDraft);
+      setSetupBusy(false);
+    }
+  }
+
+  async function submitMatrixSetupAndAnalyze() {
+    if (setupBusy || globalAnalyzing) return;
+    const desc = inputText.trim();
+    if (!desc) {
+      setSetupError("Research prompt is empty.");
+      return;
+    }
+    const parsedSubjects = parseSubjectsInput(setupDraft.subjectsText).slice(0, matrixSubjectMax);
+    if (parsedSubjects.length < matrixSubjectMin) {
+      setSetupError(`Please provide at least ${matrixSubjectMin} subjects.`);
+      return;
+    }
+    const savedSetup = persistConfigSetup(activeConfig.id, {
+      ...setupDraft,
+      subjectsText: parsedSubjects.join("\n"),
+    });
+    setShowSetupModal(false);
+    setSetupNotice("");
+    setSetupError("");
+    await runNewAnalysis(desc, null, null, parsedSubjects, savedSetup);
+  }
+
+  function saveScorecardSetupOnly() {
+    persistConfigSetup(activeConfig.id, {
+      ...setupDraft,
+      subjectsText: "",
+    });
+    setShowSetupModal(false);
+    setSetupNotice("");
+    setSetupError("");
+  }
+
   async function startAnalysis() {
     setImportError("");
     setImportWarning("");
     const desc = inputText.trim();
     if (!desc || globalAnalyzing) return;
     if (isMatrixMode) {
-      setMatrixSubjectConfirmationMode(false);
-      const parsedSubjects = parseSubjectsInput(subjectsText).slice(0, matrixSubjectMax);
-      const runtimeConfig = buildRuntimeConfig(activeConfig, dimsByConfig[activeConfig.id] || activeConfig.dimensions);
-      let resolved;
-      try {
-        resolved = await resolveMatrixResearchInput(
-          {
-            id: `matrix-preflight-${Date.now()}`,
-            description: desc,
-            options: {
-              matrixSubjects: parsedSubjects,
-            },
-          },
-          runtimeConfig,
-          { transport: appTransport },
-          { requireConfirmation: true }
-        );
-      } catch (err) {
-        setImportError(err?.message || "Failed to prepare matrix subjects.");
-        return;
-      }
-
-      const resolvedSubjects = Array.isArray(resolved?.subjects)
-        ? resolved.subjects.map((subject) => String(subject?.label || "").trim()).filter(Boolean)
-        : [];
-      if (!resolvedSubjects.length) {
-        setImportError("Unable to prepare matrix subjects from this prompt.");
-        return;
-      }
-
-      if (resolved?.requiresConfirmation) {
-        setSubjectsText(resolvedSubjects.join("\n"));
-        setImportWarning("Suggested subjects were prepared from your prompt. Review/edit them, then click Analyze again.");
-        setMatrixSubjectConfirmationMode(true);
-        return;
-      }
-
-      await runNewAnalysis(desc, null, null, resolvedSubjects);
+      await openMatrixSetupModal(desc);
       return;
     }
-    await runNewAnalysis(desc, null);
+    await runNewAnalysis(desc, null, null, [], getConfigSetup(activeConfig.id));
   }
 
   async function onFollowUp(ucId, dimId, challenge, options = {}) {
@@ -612,8 +740,9 @@ export default function App({
   const subjectsExamples = Array.isArray(subjectsSpec?.examples) ? subjectsSpec.examples : [];
   const matrixSubjectMin = Math.max(2, Number(subjectsSpec?.minCount) || 2);
   const matrixSubjectMax = Math.max(matrixSubjectMin, Number(subjectsSpec?.maxCount) || 8);
-  const parsedSubjects = isMatrixMode ? parseSubjectsInput(subjectsText) : [];
-  const hasValidSubjectCount = true;
+  const activeSetup = getConfigSetup(activeConfig.id);
+  const decisionHints = Array.isArray(activeConfig?.decisionHints) ? activeConfig.decisionHints : [];
+  const setupParsedSubjects = parseSubjectsInput(setupDraft.subjectsText).slice(0, matrixSubjectMax);
   const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
   const desktopTabConfigs = (() => {
     const initial = RESEARCH_CONFIGS.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
@@ -629,6 +758,8 @@ export default function App({
     analyst_baseline: "Baseline pass...",
     analyst_web: "Web pass...",
     analyst_reconcile: "Reconcile pass...",
+    deep_assist_collect: "Deep Assist collect...",
+    deep_assist_merge: "Deep Assist merge...",
     analyst_targeted: "Low-confidence deep search...",
     critic: "Critic review...",
     finalizing: "Debate...",
@@ -637,10 +768,14 @@ export default function App({
     matrix_baseline: "Baseline pass...",
     matrix_web: "Web pass...",
     matrix_reconcile: "Reconcile pass...",
+    matrix_deep_assist: "Deep Assist merge...",
     matrix_targeted: "Low-confidence deep search...",
     matrix_evidence: "Matrix evidence...",
     matrix_critic: "Critic audit...",
     matrix_response: "Analyst response...",
+    matrix_consistency: "Consistency audit...",
+    matrix_derived: "Derived attributes...",
+    matrix_synthesis: "Executive synthesis...",
     matrix_summary: "Summarizing...",
     matrix_discover: "Coverage discover...",
   };
@@ -1011,6 +1146,44 @@ export default function App({
               {inputPanelDescription}
             </div>
           ) : null}
+          <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+              Evidence Mode
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setEvidenceMode("native")}
+                style={{
+                  border: `1px solid ${evidenceMode === "native" ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                  background: evidenceMode === "native" ? "var(--ck-surface-soft)" : "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                Native
+              </button>
+              <button
+                type="button"
+                onClick={() => setEvidenceMode("deep-assist")}
+                style={{
+                  border: `1px solid ${evidenceMode === "deep-assist" ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                  background: evidenceMode === "deep-assist" ? "var(--ck-surface-soft)" : "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                Deep Assist
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+              {evidenceMode === "deep-assist"
+                ? "Deep Assist runs multi-provider evidence collection and agreement checks before finalization."
+                : "Native uses the default analyst/critic pipeline with live web evidence and targeted recovery."}
+            </div>
+          </div>
           <textarea
             autoFocus
             value={inputText}
@@ -1023,49 +1196,50 @@ export default function App({
               resize: "vertical", lineHeight: 1.5, outline: "none",
             }}
           />
-          {isMatrixMode && matrixSubjectConfirmationMode ? (
+          {!isMatrixMode ? (
             <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                {subjectsLabel} (Confirm / Edit)
-              </div>
-              <div style={{ fontSize: 12, color: "var(--ck-muted)" }}>
-                Suggested subjects were generated from your prompt. Edit if needed, then click Analyze.
-              </div>
-              <textarea
-                value={subjectsText}
-                onChange={(e) => setSubjectsText(e.target.value)}
-                placeholder={subjectsExamples.length ? subjectsExamples.join("\n") : "One subject per line or comma-separated"}
-                onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startAnalysis(); }}
+              <button
+                type="button"
+                onClick={openScorecardSetupModal}
                 style={{
-                  width: "100%",
-                  minHeight: 90,
-                  background: "var(--ck-surface-soft)",
-                  border: "1px solid var(--ck-line-strong)",
-                  borderRadius: 2,
+                  width: "fit-content",
+                  background: "var(--ck-surface)",
+                  border: "1px solid var(--ck-line)",
                   color: "var(--ck-text)",
-                  padding: "10px 14px",
-                  fontSize: 13,
-                  resize: "vertical",
-                  lineHeight: 1.5,
-                  outline: "none",
-                }}
-              />
-              <div style={{ fontSize: 11, color: parsedSubjects.length > matrixSubjectMax ? "var(--ck-text)" : "var(--ck-muted)" }}>
-                Parsed: {parsedSubjects.length} subject{parsedSubjects.length === 1 ? "" : "s"} | target range: {matrixSubjectMin}-{matrixSubjectMax}
-              </div>
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                Configure research
+              </button>
+              {(activeSetup.decisionContext || activeSetup.userRoleContext) ? (
+                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                  {activeSetup.decisionContext ? `Decision context: ${activeSetup.decisionContext}` : "Decision context: not set"}
+                  {" | "}
+                  {activeSetup.userRoleContext ? `Role: ${activeSetup.userRoleContext}` : "Role: not set"}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                  Optional setup is available for decision context and role.
+                </div>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+              Matrix setup opens after Analyze. You will confirm subjects ({matrixSubjectMin}-{matrixSubjectMax}), decision context, and role before the run starts.
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
             <button
               onClick={startAnalysis}
-              disabled={!inputText.trim() || globalAnalyzing || !hasValidSubjectCount}
+              disabled={!inputText.trim() || globalAnalyzing}
               style={{
                 background: "var(--ck-accent)", border: "none", color: "var(--ck-accent-ink)",
                 padding: "8px 20px", borderRadius: 2, fontWeight: 700, fontSize: 13,
-                opacity: !inputText.trim() || globalAnalyzing || !hasValidSubjectCount ? 0.5 : 1,
+                opacity: !inputText.trim() || globalAnalyzing ? 0.5 : 1,
                 display: "inline-flex", alignItems: "center", gap: 6,
               }}>
-              {globalAnalyzing ? <><Spinner size={11} color="var(--ck-accent-ink)" /> Analyzing...</> : "Analyze"}
+              {globalAnalyzing ? <><Spinner size={11} color="var(--ck-accent-ink)" /> Analyzing...</> : (isMatrixMode ? "Continue to setup" : "Analyze")}
             </button>
             <span style={{ fontSize: 11, color: "var(--ck-muted)" }}>
               Cmd/Ctrl+Enter to submit
@@ -1075,6 +1249,204 @@ export default function App({
               style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--ck-line-strong)", color: "var(--ck-muted)", padding: "7px 14px", borderRadius: 2, fontSize: 12 }}>
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {showSetupModal && (
+        <div className="setup-modal-backdrop" onClick={() => !setupBusy && setShowSetupModal(false)}>
+          <div className="setup-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="setup-modal-header">
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ck-text)" }}>
+                {setupMode === "matrix" ? "Research Setup" : "Configure Research"}
+              </div>
+              <button
+                type="button"
+                onClick={() => !setupBusy && setShowSetupModal(false)}
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+              {setupMode === "matrix"
+                ? "Set subjects and optional context before starting this matrix research."
+                : "Optional context that shapes evidence collection, critic review, and synthesis."}
+            </div>
+
+            {setupError ? (
+              <div style={{ marginTop: 8, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "8px 10px", color: "var(--ck-text)", fontSize: 12 }}>
+                {setupError}
+              </div>
+            ) : null}
+            {setupNotice ? (
+              <div style={{ marginTop: 8, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "8px 10px", color: "var(--ck-muted)", fontSize: 12 }}>
+                {setupNotice}
+              </div>
+            ) : null}
+
+            {setupMode === "matrix" ? (
+              <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                  {subjectsLabel}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ck-muted)" }}>
+                  {subjectsPrompt} ({matrixSubjectMin}-{matrixSubjectMax} items)
+                </div>
+                <textarea
+                  value={setupDraft.subjectsText}
+                  onChange={(e) => setSetupDraft((prev) => ({ ...prev, subjectsText: e.target.value }))}
+                  placeholder={subjectsExamples.length ? subjectsExamples.join("\n") : "One subject per line or comma-separated"}
+                  style={{
+                    width: "100%",
+                    minHeight: 100,
+                    background: "var(--ck-surface-soft)",
+                    border: "1px solid var(--ck-line-strong)",
+                    borderRadius: 2,
+                    color: "var(--ck-text)",
+                    padding: "10px 12px",
+                    fontSize: 13,
+                    resize: "vertical",
+                    lineHeight: 1.45,
+                    outline: "none",
+                  }}
+                />
+                <div style={{ fontSize: 11, color: setupParsedSubjects.length > matrixSubjectMax ? "var(--ck-text)" : "var(--ck-muted)" }}>
+                  Parsed: {setupParsedSubjects.length} subject{setupParsedSubjects.length === 1 ? "" : "s"}
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                Decision Context (optional)
+              </div>
+              {decisionHints.length ? (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {decisionHints.map((hint, idx) => (
+                    <button
+                      key={`hint-${idx}`}
+                      type="button"
+                      onClick={() => setSetupDraft((prev) => ({ ...prev, decisionContext: hint }))}
+                      style={{
+                        border: "1px solid var(--ck-line)",
+                        background: setupDraft.decisionContext === hint ? "var(--ck-blue-soft)" : "var(--ck-surface)",
+                        color: "var(--ck-text)",
+                        padding: "5px 8px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                      }}>
+                      {hint}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <textarea
+                value={setupDraft.decisionContext}
+                onChange={(e) => setSetupDraft((prev) => ({ ...prev, decisionContext: e.target.value }))}
+                placeholder="What concrete decision should this research support?"
+                style={{
+                  width: "100%",
+                  minHeight: 76,
+                  background: "var(--ck-surface-soft)",
+                  border: "1px solid var(--ck-line)",
+                  borderRadius: 2,
+                  color: "var(--ck-text)",
+                  padding: "9px 11px",
+                  fontSize: 12,
+                  resize: "vertical",
+                  lineHeight: 1.45,
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+                Role / Context (optional)
+              </div>
+              <input
+                value={setupDraft.userRoleContext}
+                onChange={(e) => setSetupDraft((prev) => ({ ...prev, userRoleContext: e.target.value }))}
+                placeholder="e.g. VP Product deciding whether to build or buy under a six-month timeline"
+                style={{
+                  width: "100%",
+                  background: "var(--ck-surface-soft)",
+                  border: "1px solid var(--ck-line)",
+                  borderRadius: 2,
+                  color: "var(--ck-text)",
+                  padding: "9px 11px",
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setShowSetupModal(false)}
+                disabled={setupBusy}
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  padding: "7px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  opacity: setupBusy ? 0.6 : 1,
+                }}>
+                Cancel
+              </button>
+              {setupMode === "matrix" ? (
+                <button
+                  type="button"
+                  onClick={() => { void submitMatrixSetupAndAnalyze(); }}
+                  disabled={setupBusy || globalAnalyzing}
+                  style={{
+                    border: "1px solid var(--ck-accent)",
+                    background: "var(--ck-accent)",
+                    color: "var(--ck-accent-ink)",
+                    padding: "7px 12px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity: (setupBusy || globalAnalyzing) ? 0.65 : 1,
+                  }}>
+                  {setupBusy ? <><Spinner size={10} color="var(--ck-accent-ink)" /> Preparing...</> : "Run research"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={saveScorecardSetupOnly}
+                  disabled={setupBusy}
+                  style={{
+                    border: "1px solid var(--ck-accent)",
+                    background: "var(--ck-accent)",
+                    color: "var(--ck-accent-ink)",
+                    padding: "7px 12px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    opacity: setupBusy ? 0.65 : 1,
+                  }}>
+                  Save setup
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1212,6 +1584,8 @@ export default function App({
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", color: "var(--ck-muted)", fontSize: 11 }}>
                         {uc.attributes?.vertical ? <span>{uc.attributes.vertical}</span> : null}
                         {uc.attributes?.buyerPersona ? <span>| {uc.attributes.buyerPersona}</span> : null}
+                        {uc.analysisMeta?.evidenceMode === "deep-assist" ? <span>| Deep Assist</span> : null}
+                        {uc.analysisMeta?.qualityGrade === "degraded" ? <span>| degraded quality</span> : null}
                         {uc.origin?.type === "discover" ? <span>| related</span> : null}
                       </div>
                     </div>

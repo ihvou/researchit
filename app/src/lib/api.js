@@ -1,4 +1,4 @@
-import { createTransport } from "@researchit/engine";
+import { createTransport, DEFAULT_RETRYABLE_STATUS } from "@researchit/engine";
 
 async function callRoute(role, payload) {
   let res;
@@ -26,7 +26,7 @@ async function callRoute(role, payload) {
     const err = new Error(data?.error || `Request failed: /api/${role} (${res.status})`);
     err.status = res.status;
     err.role = role;
-    err.retryable = [408, 409, 425, 429, 500, 502, 503, 504].includes(res.status);
+    err.retryable = DEFAULT_RETRYABLE_STATUS.includes(res.status);
     throw err;
   }
 
@@ -34,7 +34,7 @@ async function callRoute(role, payload) {
     const err = new Error(data.error || `Request failed: /api/${role}`);
     err.status = Number(data?.status) || 500;
     err.role = role;
-    err.retryable = [408, 409, 425, 429, 500, 502, 503, 504].includes(err.status);
+    err.retryable = DEFAULT_RETRYABLE_STATUS.includes(err.status);
     throw err;
   }
 

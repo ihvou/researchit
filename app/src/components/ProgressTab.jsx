@@ -12,18 +12,35 @@ const HYBRID_FLOW = [
     phase: "analyst_baseline",
     title: "Analyst LLM baseline pass",
     detail: "Enumerates evidence first, then applies rubric scoring from that evidence (memory-only pass).",
+    modes: ["native"],
   },
   {
     key: "analyst_web",
     phase: "analyst_web",
     title: "Web-search LLM pass",
     detail: "Enumerates live web evidence, then applies rubric scoring from the enumerated evidence.",
+    modes: ["native"],
   },
   {
     key: "analyst_reconcile",
     phase: "analyst_reconcile",
     title: "Reliability reconcile",
     detail: "Compares baseline and web drafts, then keeps the strongest evidence-backed points.",
+    modes: ["native"],
+  },
+  {
+    key: "deep_assist_collect",
+    phase: "deep_assist_collect",
+    title: "Deep Assist provider collection",
+    detail: "Runs independent Deep Assist evidence passes (ChatGPT / Claude / Gemini profile adapters).",
+    modes: ["deep-assist"],
+  },
+  {
+    key: "deep_assist_merge",
+    phase: "deep_assist_merge",
+    title: "Deep Assist merge",
+    detail: "Merges provider evidence, computes agreement/disagreement, and carries conflicts into targeted recovery.",
+    modes: ["deep-assist"],
   },
   {
     key: "analyst_targeted",
@@ -89,6 +106,12 @@ const MATRIX_FLOW = [
     detail: "Merges baseline and web drafts, keeping stronger evidence-backed cells.",
   },
   {
+    key: "matrix_deep_assist",
+    phase: "matrix_deep_assist",
+    title: "Deep Assist matrix enrichment",
+    detail: "Merges provider-level matrix passes and records per-cell agreement signals.",
+  },
+  {
     key: "matrix_targeted",
     phase: "matrix_targeted",
     title: "Targeted low-confidence recovery",
@@ -105,6 +128,24 @@ const MATRIX_FLOW = [
     phase: "matrix_response",
     title: "Analyst response to flags",
     detail: "Defends or concedes contested cells with updated evidence.",
+  },
+  {
+    key: "matrix_consistency",
+    phase: "matrix_consistency",
+    title: "Cross-subject consistency audit",
+    detail: "Detects and downgrades contradictory cells across subjects within the same attribute.",
+  },
+  {
+    key: "matrix_derived",
+    phase: "matrix_derived",
+    title: "Derived attributes",
+    detail: "Computes derived columns only after evidence, critic, and consistency checks finish.",
+  },
+  {
+    key: "matrix_synthesis",
+    phase: "matrix_synthesis",
+    title: "Executive synthesis",
+    detail: "Builds decision-grade summary with threats, whitespace, risks, and uncertainty notes.",
   },
   {
     key: "matrix_summary",
@@ -145,10 +186,13 @@ const SCORECARD_PHASE_ALIASES = {
   critic_source_verification: "critic",
   finalizing_consistency: "finalizing",
   final_source_verification: "finalizing",
+  deep_assist_collect: "deep_assist_collect",
+  deep_assist_merge: "deep_assist_merge",
 };
 
 const MATRIX_PHASE_ALIASES = {
   matrix_evidence: "matrix_web",
+  matrix_deep_assist: "matrix_deep_assist",
 };
 
 function resolveProgressPhase(phase, outputMode) {
@@ -156,6 +200,13 @@ function resolveProgressPhase(phase, outputMode) {
   if (!value) return "submitted";
   if (outputMode === "matrix") return MATRIX_PHASE_ALIASES[value] || value;
   return SCORECARD_PHASE_ALIASES[value] || value;
+}
+
+function flowByEvidenceMode(flow = [], evidenceMode = "native") {
+  return flow.filter((step) => {
+    if (!Array.isArray(step?.modes) || !step.modes.length) return true;
+    return step.modes.includes(evidenceMode);
+  });
 }
 
 function getStepState(step, idx, currentIdx, uc) {
@@ -196,19 +247,39 @@ function percent(value, decimals = 0) {
   return `${(n * 100).toFixed(decimals)}%`;
 }
 
-function diagnosticRows(uc, outputMode = "scorecard") {
+export function diagnosticRows(uc, outputMode = "scorecard") {
   const meta = uc?.analysisMeta || {};
   const rows = [];
+
+  if (meta?.qualityGrade === "degraded") {
+    const reasons = Array.isArray(meta?.degradedReasons) ? meta.degradedReasons : [];
+    rows.push({
+      label: "Quality grade",
+      value: "Degraded",
+      detail: reasons.length
+        ? reasons.map((entry) => entry?.detail || entry?.code).filter(Boolean).join(" | ")
+        : "Quality guard triggered one or more degraded-complete reasons.",
+    });
+  } else {
+    rows.push({
+      label: "Quality grade",
+      value: "Standard",
+      detail: "Run completed without degraded-quality guard triggers.",
+    });
+  }
 
   const checked = Number(meta.sourceVerificationChecked || 0);
   const verified = Number(meta.sourceVerificationVerified || 0);
   const notFound = Number(meta.sourceVerificationNotFound || 0);
   const failed = Number(meta.sourceVerificationFetchFailed || 0);
+  const invalidUrl = Number(meta.sourceVerificationInvalidUrl || 0);
+  const partial = Number(meta.sourceVerificationPartialMatch || 0);
+  const nameOnly = Number(meta.sourceVerificationNameOnly || 0);
   if (checked > 0) {
     rows.push({
       label: "Source verification",
       value: `${verified}/${checked} verified (${percent(checked ? verified / checked : 0)})`,
-      detail: `${notFound} not found in page, ${failed} fetch failures`,
+      detail: `${notFound} not found, ${failed} fetch failures, ${invalidUrl} invalid URL, ${partial + nameOnly} partial/name-only matches`,
     });
   } else if (meta.sourceVerificationSkippedReason) {
     rows.push({
@@ -227,6 +298,57 @@ function diagnosticRows(uc, outputMode = "scorecard") {
     value: `${analystCalls + criticCalls + discoveryCalls + targetedCalls} calls`,
     detail: `analyst ${analystCalls}, critic ${criticCalls}, targeted ${targetedCalls}, discovery ${discoveryCalls}`,
   });
+
+  const staleRatio = Number(meta.staleEvidenceRatio);
+  if (Number.isFinite(staleRatio)) {
+    rows.push({
+      label: "Stale evidence ratio",
+      value: percent(staleRatio, 1),
+      detail: outputMode === "matrix"
+        ? `${Number(meta.staleEvidenceObservedCells || 0)} cells assessed for freshness`
+        : `${Number(meta.staleEvidenceObservedDimensions || 0)} dimensions assessed for freshness`,
+    });
+  }
+
+  const providerBreakdown = [];
+  const pushProviderRows = (items = []) => {
+    (Array.isArray(items) ? items : []).forEach((entry) => {
+      const name = String(entry?.label || entry?.provider || entry?.providerId || "").trim();
+      if (!name) return;
+      const calls = Number(entry?.webSearchCalls || 0);
+      const status = String(entry?.status || "").trim();
+      providerBreakdown.push(`${name}${status ? ` (${status})` : ""}: ${calls}`);
+    });
+  };
+  pushProviderRows(meta?.providerContributions?.deepAssist);
+  pushProviderRows(meta?.providerContributions?.native);
+  if (providerBreakdown.length) {
+    rows.push({
+      label: "Provider contribution",
+      value: `${providerBreakdown.length} channels`,
+      detail: providerBreakdown.join(" | "),
+    });
+  }
+
+  const budgetUnits = Number(meta.lowConfidenceBudgetUnits || meta.lowConfidenceBudgetCells || 0);
+  const budgetUsed = Number(meta.lowConfidenceBudgetUsed || 0);
+  if (budgetUnits > 0) {
+    rows.push({
+      label: "Targeted budget",
+      value: `${budgetUsed}/${budgetUnits}`,
+      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
+    });
+  }
+
+  if (meta.targetedRetrievalNiche || (Array.isArray(meta.targetedRetrievalAliases) && meta.targetedRetrievalAliases.length)) {
+    rows.push({
+      label: "Niche strategist",
+      value: String(meta.targetedRetrievalNiche || "detected"),
+      detail: Array.isArray(meta.targetedRetrievalAliases) && meta.targetedRetrievalAliases.length
+        ? `Aliases: ${meta.targetedRetrievalAliases.join(", ")}`
+        : "No alias expansions returned",
+    });
+  }
 
   if (outputMode === "matrix") {
     const coverage = uc?.matrix?.coverage || {};
@@ -307,7 +429,10 @@ function diagnosticRows(uc, outputMode = "scorecard") {
 }
 
 export default function ProgressTab({ uc, outputMode = "scorecard" }) {
-  const flow = outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW;
+  const evidenceMode = String(uc?.analysisMeta?.evidenceMode || "native").trim().toLowerCase() === "deep-assist"
+    ? "deep-assist"
+    : "native";
+  const flow = flowByEvidenceMode(outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW, evidenceMode);
   const rank = phaseRankMap(flow);
   const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
   const currentIdx = rank[resolvedPhase] ?? 0;
@@ -320,8 +445,12 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
         {outputMode === "matrix"
-          ? "Live view of the matrix pipeline: planning, baseline/web reconcile, targeted low-confidence recovery, critic audit, and analyst resolution."
-          : "Live view of the pipeline under the hood: baseline evidence pass, web evidence pass, reconcile, targeted low-confidence re-check, critic audit, and final score update."}
+          ? (evidenceMode === "deep-assist"
+            ? "Live view of matrix flow: native evidence passes, Deep Assist provider merge, targeted recovery, critic audit, consistency checks, and executive synthesis."
+            : "Live view of the matrix pipeline: planning, baseline/web reconcile, targeted low-confidence recovery, critic audit, and analyst resolution.")
+          : (evidenceMode === "deep-assist"
+            ? "Live view of Deep Assist flow: multi-provider evidence collection, agreement merge, targeted recovery, critic audit, and final score update."
+            : "Live view of the pipeline under the hood: baseline evidence pass, web evidence pass, reconcile, targeted low-confidence re-check, critic audit, and final score update.")}
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

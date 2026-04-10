@@ -18,6 +18,21 @@ function buildCellMap(cells = []) {
   return map;
 }
 
+function argumentList(argumentsList = []) {
+  const items = Array.isArray(argumentsList) ? argumentsList : [];
+  if (!items.length) return null;
+  return (
+    <ul style={{ margin: "4px 0 0 16px", padding: 0, display: "grid", gap: 4 }}>
+      {items.map((entry, idx) => (
+        <li key={`arg-${idx}`} style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+          <strong style={{ color: "var(--ck-text)" }}>{cleanText(entry?.claim) || "Claim"}:</strong>{" "}
+          {cleanText(entry?.detail) || "No detail."}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function MatrixDebateTab({
   uc,
   fuInputs,
@@ -75,6 +90,11 @@ export default function MatrixDebateTab({
                 {cell ? (
                   <ConfidenceBadge level={cell.confidence} reason={cell.confidenceReason} compact={true} />
                 ) : null}
+                {cleanText(cell?.providerAgreement) ? (
+                  <span style={{ fontSize: 10, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+                    Provider: {cleanText(cell.providerAgreement)}
+                  </span>
+                ) : null}
                 <div style={{ marginLeft: "auto", fontSize: 10, color: "var(--ck-muted)", fontWeight: 700 }}>
                   {sourceCount} source{sourceCount === 1 ? "" : "s"}
                 </div>
@@ -94,6 +114,32 @@ export default function MatrixDebateTab({
                 <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.6 }}>
                   {cleanText(cell?.value) || "No evidence captured."}
                 </div>
+                {cleanText(cell?.full) ? (
+                  <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.6 }}>
+                    {cleanText(cell.full)}
+                  </div>
+                ) : null}
+                {Array.isArray(cell?.arguments?.supporting) && cell.arguments.supporting.length ? (
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+                      Supporting Arguments
+                    </div>
+                    {argumentList(cell.arguments.supporting)}
+                  </div>
+                ) : null}
+                {Array.isArray(cell?.arguments?.limiting) && cell.arguments.limiting.length ? (
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+                      Limiting Arguments
+                    </div>
+                    {argumentList(cell.arguments.limiting)}
+                  </div>
+                ) : null}
+                {cleanText(cell?.risks) ? (
+                  <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+                    <strong style={{ color: "var(--ck-text)" }}>Risks:</strong> {cleanText(cell.risks)}
+                  </div>
+                ) : null}
                 {cell?.contested && cleanText(cell?.criticNote) ? (
                   <div style={{ padding: "8px 10px", border: "1px solid var(--ck-warn-line)", background: "var(--ck-warn-bg)", borderRadius: 2, fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
                     Critic: {cleanText(cell.criticNote)}

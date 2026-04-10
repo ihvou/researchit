@@ -45,7 +45,7 @@ researchit/
 **Key function signatures:**
 ```js
 runAnalysis(input, config, callbacks)
-// input:     { description, id, origin? }
+// input:     { description, id, origin?, options?: { evidenceMode?, deepAssist?, ... } }
 // config:    ResearchConfig object
 // callbacks: { transport, onProgress, onDebugSession? }
 
@@ -112,31 +112,38 @@ Results flow back through callbacks.onProgress → React state → UI
 
 ## Analysis Pipeline
 
-### Scorecard (8 phases)
-1. **Analyst baseline** — memory-only initial scoring across all dimensions
-2. **Analyst web pass** — live-search-assisted evidence gathering
-3. **Reconcile** — merge evidence from both passes, re-score, then apply reconcile quality guard (targeted retry + fail-fast on implausible merge)
-4. **Targeted low-confidence cycle** — query plan → web harvest → re-score for weak dimensions
+### Scorecard (8 phases, evidence-mode aware)
+1. **Phase 1 evidence collection**
+   - Native: analyst baseline + analyst web pass + reconcile
+   - Deep Assist: multi-provider deep collection + merge + provider agreement synthesis
+2. **Targeted low-confidence cycle** — query plan → web harvest → re-score for weak dimensions
 5. **Critic audit** — independent critical review of all findings
 6. **Analyst final response** — address critic challenges with evidence
 7. **Consistency check** — cross-dimension coherence validation + decision/confidence/polarity post-guards
 8. **Discovery generation** — related opportunities + candidate pre-validation
 
-### Matrix
+### Matrix (evidence-mode aware)
 1. **Plan/input resolution** — resolve decision question and matrix subjects
-2. **Baseline matrix pass** — memory-only matrix draft
-3. **Web matrix pass** — live-search-assisted matrix draft
-4. **Reconcile** — merge baseline + web drafts, with reconcile quality guard retry/fail-fast
+2. **Phase 1 evidence collection**
+   - Native: baseline matrix pass + web matrix pass + reconcile
+   - Deep Assist: multi-provider matrix collection + merge + provider agreement synthesis
 5. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
 6. **Critic matrix audit** — flag weak/contradictory cells
 7. **Analyst response** — defend or concede each contested cell
-8. **Summary** — finalize matrix outputs (+ optional discovery suggestions)
+8. **Summary** — finalize matrix outputs (executive synthesis + optional discovery suggestions)
 
 ### Source verification
 After source-producing passes, cited URLs are checked via `fetchSource`. Sources are tagged `verified_in_page`, `not_found_in_page`, or `fetch_failed`. Confidence can be downgraded when verification coverage is weak.
 
 ### Run diagnostics surface
-Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
+Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, stale-evidence ratio, provider contribution, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
+
+### Degraded-complete semantics
+Quality gates no longer hard-abort the entire run for recoverable failures. Pipelines can complete with:
+- `analysisMeta.qualityGrade = "standard"` — quality thresholds met
+- `analysisMeta.qualityGrade = "degraded"` — partial output is returned with explicit `degradedReasons[]`
+
+This keeps output inspectable while preserving honest quality signaling.
 
 ## Follow-Up Pipeline
 
@@ -191,6 +198,15 @@ Supports both:
   models: {
     analyst: { provider, model, webSearchModel?, baseUrl? },
     critic:  { provider, model, webSearchModel?, baseUrl? }
+  },
+
+  deepAssist: {
+    defaults: { providers, minProviders, maxWaitMs, maxRetries },
+    providers: {
+      [providerId]: {
+        analyst: { provider, model, webSearchModel?, baseUrl? }
+      }
+    }
   },
 
   limits: {

@@ -11,6 +11,104 @@ import {
 import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/defaults.js";
 
 let ACTIVE_RUNTIME = null;
+const DEFAULT_DEEP_ASSIST_PROVIDERS = ["chatgpt", "claude", "gemini"];
+
+function cleanString(value) {
+  return String(value || "").trim();
+}
+
+function normalizeEvidenceMode(value) {
+  return cleanString(value).toLowerCase() === "deep-assist" ? "deep-assist" : "native";
+}
+
+function normalizeResearchSetupContext(raw = {}) {
+  const setup = raw && typeof raw === "object" ? raw : {};
+  return {
+    decisionContext: cleanString(setup.decisionContext),
+    userRoleContext: cleanString(setup.userRoleContext),
+  };
+}
+
+function buildResearchSetupContextBlock(researchSetup = {}) {
+  const context = normalizeResearchSetupContext(researchSetup);
+  const lines = [
+    context.decisionContext
+      ? `Decision context: ${context.decisionContext}`
+      : "Decision context: not provided.",
+    context.userRoleContext
+      ? `User role/context: ${context.userRoleContext}`
+      : "User role/context: not provided.",
+  ];
+  return lines.join("\n");
+}
+
+function ensureDegradedMeta(analysisMeta = {}) {
+  if (!analysisMeta || typeof analysisMeta !== "object") return;
+  if (!analysisMeta.qualityGrade) analysisMeta.qualityGrade = "standard";
+  if (!Array.isArray(analysisMeta.degradedReasons)) analysisMeta.degradedReasons = [];
+}
+
+function markDegraded(analysisMeta = {}, reasonCode = "quality_guard", detail = "") {
+  ensureDegradedMeta(analysisMeta);
+  analysisMeta.qualityGrade = "degraded";
+  const entry = {
+    code: cleanString(reasonCode) || "quality_guard",
+    detail: cleanString(detail),
+  };
+  const already = analysisMeta.degradedReasons.some((item) => item?.code === entry.code && item?.detail === entry.detail);
+  if (!already) analysisMeta.degradedReasons.push(entry);
+}
+
+function normalizeDeepAssistOptions(raw = {}) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const providers = Array.isArray(input.providers)
+    ? input.providers.map((value) => cleanString(value).toLowerCase()).filter(Boolean)
+    : [];
+  const selected = providers.length ? [...new Set(providers)] : DEFAULT_DEEP_ASSIST_PROVIDERS;
+  const minProviders = Math.max(1, Math.min(selected.length, Number(input.minProviders) || 2));
+  const maxWaitMs = Math.max(20000, Number(input.maxWaitMs) || 300000);
+  const maxRetries = Math.max(0, Math.min(3, Number(input.maxRetries) || 1));
+  return {
+    providers: selected,
+    minProviders,
+    maxWaitMs,
+    maxRetries,
+  };
+}
+
+function deepAssistProviderLabel(providerId) {
+  const key = cleanString(providerId).toLowerCase();
+  if (key === "chatgpt") return "ChatGPT";
+  if (key === "claude") return "Claude";
+  if (key === "gemini") return "Gemini";
+  return key || "Provider";
+}
+
+function resolveDeepAssistProviderRequestOptions(providerId, role = "analyst", deepAssistOptions = null) {
+  const runtime = getRuntime();
+  const providerKey = cleanString(providerId).toLowerCase();
+  const roleDefaults = runtime?.models?.[role] || {};
+  const providerDefaults = runtime?.deepAssist?.providers?.[providerKey] || {};
+  const providerRoleCfg = providerDefaults?.[role] && typeof providerDefaults?.[role] === "object"
+    ? providerDefaults[role]
+    : providerDefaults;
+
+  const maxWaitMs = Math.max(20000, Number(deepAssistOptions?.maxWaitMs) || 300000);
+  const maxRetries = Math.max(0, Math.min(3, Number(deepAssistOptions?.maxRetries) || 1));
+  return {
+    provider: cleanString(providerRoleCfg?.provider || roleDefaults?.provider || "openai"),
+    model: cleanString(providerRoleCfg?.model || roleDefaults?.model),
+    webSearchModel: cleanString(
+      providerRoleCfg?.webSearchModel
+      || providerRoleCfg?.model
+      || roleDefaults?.webSearchModel
+      || roleDefaults?.model
+    ),
+    baseUrl: cleanString(providerRoleCfg?.baseUrl || roleDefaults?.baseUrl),
+    timeoutMs: maxWaitMs,
+    retry: { maxRetries },
+  };
+}
 
 function getRuntime() {
   if (!ACTIVE_RUNTIME) throw new Error("Analysis runtime is not initialized.");
@@ -34,6 +132,30 @@ function withRoleModelOptions(role, options = {}) {
     merged.baseUrl = modelCfg.baseUrl.trim();
   }
   return merged;
+}
+
+function withCapabilityModelOptions(capability, fallbackRole = "analyst", options = {}) {
+  const runtime = getRuntime();
+  const capabilityKey = cleanString(capability);
+  const capabilityCfg = capabilityKey ? runtime?.models?.[capabilityKey] : null;
+  const merged = { ...(options || {}) };
+  const hasCapabilityConfig = !!(capabilityCfg && typeof capabilityCfg === "object" && (
+    cleanString(capabilityCfg.provider)
+    || cleanString(capabilityCfg.model)
+    || cleanString(capabilityCfg.webSearchModel)
+    || cleanString(capabilityCfg.baseUrl)
+  ));
+  if (hasCapabilityConfig) {
+    if (!merged.provider && cleanString(capabilityCfg.provider)) merged.provider = cleanString(capabilityCfg.provider);
+    if (!merged.model && cleanString(capabilityCfg.model)) merged.model = cleanString(capabilityCfg.model);
+    if (!merged.webSearchModel && cleanString(capabilityCfg.webSearchModel)) merged.webSearchModel = cleanString(capabilityCfg.webSearchModel);
+    if (!merged.baseUrl && cleanString(capabilityCfg.baseUrl)) merged.baseUrl = cleanString(capabilityCfg.baseUrl);
+    return withRoleModelOptions(fallbackRole, merged);
+  }
+  if (capabilityKey === "retrieval") {
+    return merged;
+  }
+  return withRoleModelOptions(fallbackRole, merged);
 }
 
 async function callAnalystAPI(messages, systemPrompt, maxTokens = 5000, options = {}) {
@@ -253,8 +375,10 @@ function buildPhase1EvidencePrompt(desc, dims, {
   condensed = false,
   inputSpec = {},
   framingFields = [],
+  researchSetup = {},
 } = {}) {
   const mandatorySearchPlan = buildDynamicSearchPlan(dims, 3);
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   const liveSearchBlock = liveSearch
     ? `\nLIVE SEARCH MODE:
@@ -274,6 +398,9 @@ ${mandatorySearchPlan}
 Analyze this strategic research input:
 
 "${desc}"
+
+RUN CONTEXT:
+${setupContext}
 
 SCORING DIMENSIONS (for relevance only in this step - DO NOT SCORE YET):
 ${buildDimRubrics(dims)}${liveSearchBlock}
@@ -307,13 +434,18 @@ function buildPhase1ScoringPrompt(desc, dims, evidencePayload, {
   condensed = false,
   passLabel = "initial analyst pass",
   framingFields = [],
+  researchSetup = {},
 } = {}) {
   const dimTemplate = buildDimJsonTemplate(dims, condensed);
   const attrsTemplate = buildAttributesTemplate({ condensed, framingFields });
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `Step 2 of 2 - RUBRIC SCORING FROM ENUMERATED EVIDENCE.
 Use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Pass context:
 ${passLabel}
@@ -434,24 +566,59 @@ function normalizeHttpUrl(value) {
   }
 }
 
+function tokenizeMatchText(value = "") {
+  return normalizeMatchText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function fuzzyQuoteCoverage(quote = "", pageText = "") {
+  const quoteTokens = tokenizeMatchText(quote);
+  if (quoteTokens.length < 5) return 0;
+  const pageTokenSet = new Set(tokenizeMatchText(pageText));
+  if (!pageTokenSet.size) return 0;
+  let hits = 0;
+  quoteTokens.forEach((token) => {
+    if (pageTokenSet.has(token)) hits += 1;
+  });
+  return hits / quoteTokens.length;
+}
+
 function quotedClaimFoundInPage(source = {}, snapshot = null) {
   const pageText = normalizeMatchText(`${snapshot?.title || ""} ${snapshot?.text || ""}`);
-  if (!pageText) return false;
+  if (!pageText) {
+    return { verified: false, matchType: "none", quoteCoverage: 0 };
+  }
 
   const normalizedQuote = normalizeMatchText(source.quote);
+  const normalizedName = normalizeMatchText(source.name);
+  let matchType = "none";
+  let quoteCoverage = 0;
+
   if (normalizedQuote.length >= 12) {
-    if (pageText.includes(normalizedQuote)) return true;
+    if (pageText.includes(normalizedQuote)) {
+      return { verified: true, matchType: "exact_quote", quoteCoverage: 1 };
+    }
     const quoteParts = normalizedQuote.split(" ").filter(Boolean);
     if (quoteParts.length >= 6) {
       const head = quoteParts.slice(0, 6).join(" ");
       const tail = quoteParts.slice(-6).join(" ");
-      if (pageText.includes(head) && pageText.includes(tail)) return true;
+      if (pageText.includes(head) && pageText.includes(tail)) {
+        return { verified: true, matchType: "span_quote", quoteCoverage: 0.8 };
+      }
     }
+    quoteCoverage = fuzzyQuoteCoverage(normalizedQuote, pageText);
+    if (quoteCoverage >= 0.72) {
+      return { verified: true, matchType: "fuzzy_quote", quoteCoverage };
+    }
+    if (quoteCoverage > 0) matchType = "partial_quote";
   }
 
-  const normalizedName = normalizeMatchText(source.name);
-  if (normalizedName.length >= 4 && pageText.includes(normalizedName)) return true;
-  return false;
+  if (normalizedName.length >= 4 && pageText.includes(normalizedName)) {
+    return { verified: false, matchType: matchType === "partial_quote" ? "partial_quote_name" : "name_only", quoteCoverage };
+  }
+  return { verified: false, matchType, quoteCoverage };
 }
 
 async function fetchSourceWithCache(url, sourceFetchCache = new Map()) {
@@ -503,16 +670,20 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
     verified: 0,
     notFound: 0,
     fetchFailed: 0,
+    invalidUrl: 0,
+    partial: 0,
+    nameOnly: 0,
   };
 
   const out = [];
   for (const source of normalizedSources) {
     const normalizedUrl = normalizeHttpUrl(source.url);
     if (!normalizedUrl) {
+      counters.invalidUrl += 1;
       out.push({
         ...source,
-        verificationStatus: source.verificationStatus || "",
-        verificationNote: source.verificationNote || "",
+        verificationStatus: "invalid_url",
+        verificationNote: "Source URL is missing or invalid; evidence cannot be quote-verified.",
       });
       continue;
     }
@@ -530,22 +701,29 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
       continue;
     }
 
-    const found = quotedClaimFoundInPage(source, fetched.snapshot);
-    if (found) {
+    const match = quotedClaimFoundInPage(source, fetched.snapshot);
+    if (match.verified) {
       counters.verified += 1;
       out.push({
         ...source,
         url: normalizedUrl,
         verificationStatus: "verified_in_page",
-        verificationNote: "Quoted claim text appears in fetched source content.",
+        verificationNote: `Quoted claim matched in fetched page (${match.matchType}).`,
       });
     } else {
+      if (match.matchType === "name_only" || match.matchType === "partial_quote_name") {
+        counters.nameOnly += 1;
+      } else if (String(match.matchType || "").startsWith("partial_quote")) {
+        counters.partial += 1;
+      }
       counters.notFound += 1;
       out.push({
         ...source,
         url: normalizedUrl,
-        verificationStatus: "not_found_in_page",
-        verificationNote: "Quoted claim text was not found in fetched source content.",
+        verificationStatus: match.matchType === "name_only" ? "name_only_in_page" : "not_found_in_page",
+        verificationNote: match.matchType === "name_only"
+          ? "Source name appears in fetched page, but quoted claim text was not verified."
+          : "Quoted claim text was not found in fetched source content.",
       });
     }
   }
@@ -554,6 +732,9 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
   analysisMeta.sourceVerificationVerified += counters.verified;
   analysisMeta.sourceVerificationNotFound += counters.notFound;
   analysisMeta.sourceVerificationFetchFailed += counters.fetchFailed;
+  analysisMeta.sourceVerificationInvalidUrl = Number(analysisMeta.sourceVerificationInvalidUrl || 0) + counters.invalidUrl;
+  analysisMeta.sourceVerificationPartialMatch = Number(analysisMeta.sourceVerificationPartialMatch || 0) + counters.partial;
+  analysisMeta.sourceVerificationNameOnly = Number(analysisMeta.sourceVerificationNameOnly || 0) + counters.nameOnly;
 
   return { sources: out, counters };
 }
@@ -581,6 +762,117 @@ function applySourceVerificationPenalty(dim = {}, counters = {}, analysisMeta = 
     return { penalized: true, from: current, to: downgraded };
   }
   return { penalized: false };
+}
+
+function extractEvidenceYearFromSource(source = {}) {
+  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
+  const matches = String(text).match(/\b(20\d{2})\b/g);
+  if (!matches || !matches.length) return null;
+  const years = matches.map((value) => Number(value)).filter((year) => year >= 2000 && year <= 2099);
+  if (!years.length) return null;
+  return Math.max(...years);
+}
+
+function downgradeConfidenceOneStep(level) {
+  return confidenceFromRank(confidenceRank(level) - 1, level);
+}
+
+function applyEvidenceQualityCaps(dim = {}, analysisMeta = {}) {
+  const sources = normalizeSourceList(dim?.sources, 20);
+  const currentConfidence = normalizeConfidenceLevel(dim?.confidence) || "medium";
+  let nextConfidence = currentConfidence;
+
+  const vendorSources = sources.filter((source) => source.sourceType === "vendor").length;
+  const independentSources = sources.filter((source) => source.sourceType === "independent").length;
+  const sourceCount = sources.length;
+  const sourcesWithUrl = sources.filter((source) => normalizeHttpUrl(source.url)).length;
+
+  if (sourceCount > 0) {
+    analysisMeta.sourceDiversityTotalDimensions = Number(analysisMeta.sourceDiversityTotalDimensions || 0) + 1;
+  }
+
+  if (sourceCount > 0 && independentSources < 1 && confidenceRank(nextConfidence) > confidenceRank("medium")) {
+    nextConfidence = "medium";
+    analysisMeta.sourceDiversityConfidenceCaps = Number(analysisMeta.sourceDiversityConfidenceCaps || 0) + 1;
+    const existing = cleanString(dim.confidenceReason);
+    dim.confidenceReason = [existing, "Confidence capped: no independent corroborating source was cited."]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  const years = sources
+    .map((source) => extractEvidenceYearFromSource(source))
+    .filter((year) => Number.isFinite(year));
+  const currentYear = new Date().getFullYear();
+  const staleCutoff = currentYear - 2;
+  const staleCount = years.filter((year) => year < staleCutoff).length;
+  const staleRatio = years.length ? (staleCount / years.length) : 0;
+  dim.staleEvidenceRatio = staleRatio;
+
+  if (Number.isFinite(staleRatio)) {
+    analysisMeta.staleEvidenceObservedDimensions = Number(analysisMeta.staleEvidenceObservedDimensions || 0) + 1;
+    analysisMeta.staleEvidenceRatioSum = Number(analysisMeta.staleEvidenceRatioSum || 0) + staleRatio;
+  }
+
+  if (staleRatio >= 0.6 && confidenceRank(nextConfidence) > confidenceRank("low")) {
+    const prev = nextConfidence;
+    nextConfidence = downgradeConfidenceOneStep(nextConfidence);
+    if (nextConfidence !== prev) {
+      analysisMeta.staleEvidenceConfidenceCaps = Number(analysisMeta.staleEvidenceConfidenceCaps || 0) + 1;
+      const existing = cleanString(dim.confidenceReason);
+      dim.confidenceReason = [existing, `Confidence reduced: evidence appears mostly stale (pre-${staleCutoff + 1}).`]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+    }
+  }
+
+  if (sourceCount > 0 && confidenceRank(nextConfidence) > confidenceRank("medium")) {
+    const verifiedInPage = sources.filter((source) => source.verificationStatus === "verified_in_page").length;
+    const verificationRatio = sourceCount ? (verifiedInPage / sourceCount) : 0;
+    if (verificationRatio < 0.3) {
+      nextConfidence = "medium";
+      analysisMeta.verificationConfidenceCaps = Number(analysisMeta.verificationConfidenceCaps || 0) + 1;
+      const existing = cleanString(dim.confidenceReason);
+      dim.confidenceReason = [existing, "Confidence capped: quote verification coverage is limited."]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+    }
+  }
+
+  if (sourceCount > 0 && confidenceRank(nextConfidence) > confidenceRank("medium")) {
+    const urlCoverage = sourceCount ? (sourcesWithUrl / sourceCount) : 0;
+    if (urlCoverage < 0.6) {
+      nextConfidence = "medium";
+      analysisMeta.urlCoverageConfidenceCaps = Number(analysisMeta.urlCoverageConfidenceCaps || 0) + 1;
+      const existing = cleanString(dim.confidenceReason);
+      dim.confidenceReason = [existing, "Confidence capped: too few cited sources include verifiable URLs."]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+    }
+  }
+
+  if (!sourceCount && confidenceRank(nextConfidence) > confidenceRank("low")) {
+    nextConfidence = "low";
+    analysisMeta.zeroSourceConfidenceCaps = Number(analysisMeta.zeroSourceConfidenceCaps || 0) + 1;
+    const existing = cleanString(dim.confidenceReason);
+    dim.confidenceReason = [existing, "Confidence reduced: no cited sources were returned for this dimension."]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  dim.sourceMix = {
+    total: sourceCount,
+    withUrl: sourcesWithUrl,
+    independent: independentSources,
+    vendor: vendorSources,
+    press: sources.filter((source) => source.sourceType === "press").length,
+  };
+  dim.confidence = nextConfidence;
 }
 
 async function verifyScorecardSources({
@@ -620,6 +912,7 @@ async function verifyScorecardSources({
           },
         });
       }
+      applyEvidenceQualityCaps(dimState, analysisMeta);
     }
   }
 
@@ -757,7 +1050,86 @@ function hasSpecificMissingEvidenceGap(text) {
   return hasHint || hasYear || hasEntityLikeToken;
 }
 
-function selectTargetedCycleDimensions(phase1Payload, dims) {
+function buildNicheQueryStrategistPrompt(desc, dims, attributes = {}, researchSetup = {}) {
+  const title = String(attributes?.title || "").trim();
+  const vertical = String(attributes?.vertical || "").trim();
+  const solution = String(attributes?.aiSolutionType || "").trim();
+  const buyer = String(attributes?.buyerPersona || "").trim();
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const profile = [
+    title ? `Title: ${title}` : "",
+    vertical ? `Vertical: ${vertical}` : "",
+    solution ? `Solution: ${solution}` : "",
+    buyer ? `Buyer: ${buyer}` : "",
+  ].filter(Boolean).join("\n");
+
+  return `You are a retrieval strategist preparing targeted evidence search guidance.
+
+Research input:
+"${desc}"
+
+Run context:
+${setupContext}
+
+Context profile:
+${profile || "None provided."}
+
+Dimensions under review:
+${dims.map((d) => `- ${d.id}: ${d.label}${d?.researchHints?.queryTemplates?.length ? ` | query templates: ${d.researchHints.queryTemplates.join(" ; ")}` : ""}`).join("\n")}
+
+Task:
+- Infer the likely niche/domain from the input.
+- Produce targeted alias/acquisition/rebrand hints (company aliases, product renames, merged entities) to improve retrieval recall.
+- For each dimension, provide 2-4 query seeds and source targets.
+- Keep outputs factual and concise.
+
+Return JSON only:
+{
+  "niche": "<short niche label>",
+  "aliases": ["<alias or rebrand hint>"],
+  "dimensionHints": {
+    ${dims.map((d) => `"${d.id}": {"querySeeds":["<query seed>"], "sourceTargets":["<target source type>"]}`).join(",\n    ")}
+  }
+}`;
+}
+
+function normalizeStrategistHints(payload = {}, dims = []) {
+  const dimensionHintsRaw = payload?.dimensionHints && typeof payload.dimensionHints === "object"
+    ? payload.dimensionHints
+    : {};
+  const byDim = {};
+  dims.forEach((dim) => {
+    const raw = dimensionHintsRaw?.[dim.id] || {};
+    byDim[dim.id] = {
+      querySeeds: normalizeStringList(raw?.querySeeds, 4, 170),
+      sourceTargets: normalizeStringList(raw?.sourceTargets, 4, 170),
+    };
+  });
+  return {
+    niche: cleanString(payload?.niche),
+    aliases: normalizeStringList(payload?.aliases, 8, 120),
+    dimensionHints: byDim,
+  };
+}
+
+function dimensionPressureScore(dimState = {}, dimId = "", lowSet = new Set(), mediumGapSet = new Set()) {
+  const confidence = normalizeConfidenceLevel(dimState?.confidence) || "low";
+  const sourceCount = Array.isArray(dimState?.sources)
+    ? dimState.sources.filter((item) => item && (item.url || item.name || item.quote)).length
+    : 0;
+  const queryGap = String(dimState?.missingEvidence || "").trim();
+  let score = 0;
+  if (lowSet.has(dimId) || confidence === "low") score += 4;
+  else if (mediumGapSet.has(dimId) || confidence === "medium") score += 2;
+  if (sourceCount === 0) score += 3;
+  else if (sourceCount < 2) score += 2;
+  else if (sourceCount < 4) score += 1;
+  if (hasSpecificMissingEvidenceGap(queryGap)) score += 2;
+  if (String(dimState?.confidenceReason || "").toLowerCase().includes("uncertain")) score += 1;
+  return score;
+}
+
+function selectTargetedCycleDimensions(phase1Payload, dims, limits = {}) {
   const low = [];
   const mediumWithSpecificGap = [];
 
@@ -774,8 +1146,60 @@ function selectTargetedCycleDimensions(phase1Payload, dims) {
     }
   }
 
-  const candidateIds = [...new Set([...low, ...mediumWithSpecificGap])];
-  return { candidateIds, lowIds: low, mediumGapIds: mediumWithSpecificGap };
+  const lowSet = new Set(low);
+  const mediumGapSet = new Set(mediumWithSpecificGap);
+  const candidates = [...new Set([...low, ...mediumWithSpecificGap])].map((dimId) => {
+    const state = phase1Payload?.dimensions?.[dimId] || {};
+    const pressure = dimensionPressureScore(state, dimId, lowSet, mediumGapSet);
+    const sourceCount = Array.isArray(state?.sources)
+      ? state.sources.filter((src) => src && (src.url || src.name || src.quote)).length
+      : 0;
+    return {
+      dimId,
+      bucket: lowSet.has(dimId) ? "low" : "medium_gap",
+      pressure,
+      sourceCount,
+    };
+  });
+
+  const maxBudget = Number(limits?.targetedBudgetUnits);
+  const budgetUnits = Number.isFinite(maxBudget)
+    ? Math.max(1, Math.min(candidates.length || 1, Math.round(maxBudget)))
+    : Math.min(candidates.length || 0, Math.max(4, Math.min(8, low.length + mediumWithSpecificGap.length)));
+
+  const buckets = {
+    low: candidates
+      .filter((item) => item.bucket === "low")
+      .sort((a, b) => b.pressure - a.pressure || a.sourceCount - b.sourceCount),
+    medium_gap: candidates
+      .filter((item) => item.bucket === "medium_gap")
+      .sort((a, b) => b.pressure - a.pressure || a.sourceCount - b.sourceCount),
+  };
+
+  const runOrder = [];
+  let cursor = 0;
+  const bucketOrder = ["low", "medium_gap"];
+  while (runOrder.length < budgetUnits) {
+    let picked = false;
+    for (let i = 0; i < bucketOrder.length; i += 1) {
+      const key = bucketOrder[(cursor + i) % bucketOrder.length];
+      const next = buckets[key].shift();
+      if (!next) continue;
+      runOrder.push(next.dimId);
+      cursor = (cursor + i + 1) % bucketOrder.length;
+      picked = true;
+      break;
+    }
+    if (!picked) break;
+  }
+
+  return {
+    candidateIds: runOrder,
+    allCandidateIds: candidates.map((item) => item.dimId),
+    lowIds: low,
+    mediumGapIds: mediumWithSpecificGap,
+    budgetUnits,
+  };
 }
 
 function parseWithDiagnostics(rawText, context, debugSession) {
@@ -814,6 +1238,7 @@ function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
   condensed = false,
   framingFields = [],
   qualityGuard = null,
+  researchSetup = {},
 } = {}) {
   const comparison = dims.map((d) => {
     const b = baseline?.dimensions?.[d.id] || {};
@@ -846,6 +1271,7 @@ function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
   const guardNotes = Array.isArray(guard?.notes)
     ? guard.notes.map((note) => String(note || "").trim()).filter(Boolean)
     : [];
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   const qualityGuardBlock = guard
     ? `\nRECONCILE QUALITY GUARD:
 - This reconcile pass was retried because the previous merge looked implausibly unchanged.
@@ -858,6 +1284,9 @@ ${guardNotes.length ? guardNotes.map((note) => `  - ${note}`).join("\n") : "  - 
   return `Step 1 of 2 - EVIDENCE ENUMERATION ONLY (HYBRID RECONCILE).
 You are a reliability reviewer combining two analyst drafts for the same use case.
 Use case: "${desc}"
+
+Run context:
+${setupContext}
 
 DRAFT A (BASELINE): no live web search.
 Attributes A:
@@ -891,7 +1320,7 @@ Return ONLY this JSON:
 }`;
 }
 
-function buildCriticPrompt(desc, dims, p1, { liveSearch = false } = {}) {
+function buildCriticPrompt(desc, dims, p1, { liveSearch = false, researchSetup = {} } = {}) {
   const evidenceSnapshots = dims.map((d) => {
     const dim = p1?.dimensions?.[d.id] || {};
     return [
@@ -916,10 +1345,15 @@ function buildCriticPrompt(desc, dims, p1, { liveSearch = false } = {}) {
 - Challenge with realistic incumbent/SaaS pressure where relevant, and state uncertainty when verification is limited.
 - Do not re-research from scratch; focus on adversarial review of analyst evidence.`;
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Audit this analyst assessment: "${p1?.attributes?.title || desc}"
 
 Use case description:
 "${desc}"
+
+Run context:
+${setupContext}
 
 ${mandateBlock}
 
@@ -948,7 +1382,7 @@ Return ONLY this JSON:
 }`;
 }
 
-function buildLowConfidenceQueryPlanPrompt(desc, dim, currentDim = {}, attributes = {}) {
+function buildLowConfidenceQueryPlanPrompt(desc, dim, currentDim = {}, attributes = {}, strategistHint = {}, researchSetup = {}) {
   const dimLabel = dim?.label || dim?.id || "Dimension";
   const gapHint = clip(
     currentDim?.missingEvidence
@@ -957,11 +1391,21 @@ function buildLowConfidenceQueryPlanPrompt(desc, dim, currentDim = {}, attribute
     || "Evidence is sparse for this dimension.",
     220
   );
+  const researchHints = dim?.researchHints && typeof dim.researchHints === "object" ? dim.researchHints : {};
+  const templateHints = normalizeStringList(researchHints?.queryTemplates, 4, 170);
+  const whereHints = normalizeStringList(researchHints?.whereToLook, 4, 170);
+  const strategistSeeds = normalizeStringList(strategistHint?.querySeeds, 4, 170);
+  const strategistTargets = normalizeStringList(strategistHint?.sourceTargets, 4, 170);
+  const aliasHints = normalizeStringList(strategistHint?.aliases, 8, 120);
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `You are generating targeted search queries for one low-confidence scoring dimension.
 
 Use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Dimension:
 ${dimLabel} [${dim?.id}]
@@ -976,6 +1420,15 @@ Context:
 - Title: ${attributes?.title || ""}
 - Vertical: ${attributes?.vertical || ""}
 - AI solution: ${attributes?.aiSolutionType || ""}
+
+Dimension-specific hint templates:
+- Query templates: ${templateHints.length ? templateHints.join(" | ") : "none"}
+- Suggested evidence targets: ${whereHints.length ? whereHints.join(" | ") : "none"}
+
+Niche strategist hints:
+- Query seeds: ${strategistSeeds.length ? strategistSeeds.join(" | ") : "none"}
+- Source targets: ${strategistTargets.length ? strategistTargets.join(" | ") : "none"}
+- Alias/rebrand hints: ${aliasHints.length ? aliasHints.join(" | ") : "none"}
 
 Task:
 - Produce 3 to 4 highly specific search queries to close the evidence gap.
@@ -1006,11 +1459,15 @@ function normalizeLowConfidenceQueryPlan(payload, fallbackQueries = [], fallback
   };
 }
 
-function buildLowConfidenceSearchHarvestPrompt(desc, dim, queryPlan, currentDim = {}) {
+function buildLowConfidenceSearchHarvestPrompt(desc, dim, queryPlan, currentDim = {}, researchSetup = {}) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Run targeted live web research for this one low-confidence dimension and return raw findings only.
 
 Use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Dimension:
 ${dim?.label || dim?.id} [${dim?.id}]
@@ -1090,14 +1547,18 @@ function normalizeLowConfidenceSearchHarvest(payload, queryPlan) {
   };
 }
 
-function buildLowConfidenceRescorePrompt(desc, dim, currentDim, queryPlan, harvest) {
+function buildLowConfidenceRescorePrompt(desc, dim, currentDim, queryPlan, harvest, researchSetup = {}) {
   const dimRubric = buildDimRubrics([dim]);
   const findingsBlock = JSON.stringify(harvest || {}, null, 2);
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `Re-evaluate ONE low-confidence dimension using targeted live-search findings.
 
 Use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Dimension:
 ${dim?.label || dim?.id} [${dim?.id}]
@@ -1244,7 +1705,7 @@ function weakestDimensions(dims, finalScores, count = 4) {
     .slice(0, count);
 }
 
-function buildDiscoverPrompt(desc, dims, p1, finalScores) {
+function buildDiscoverPrompt(desc, dims, p1, finalScores, researchSetup = {}) {
   const weakest = weakestDimensions(dims, finalScores, 4);
   const weakestBlock = weakest.length
     ? weakest.map((item) => `- ${item.dim.label} [${item.dim.id}]: ${item.score}/5`).join("\n")
@@ -1272,10 +1733,15 @@ function buildDiscoverPrompt(desc, dims, p1, finalScores) {
     }).join("\n")
     : "- No limiting-factor details available";
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Generate related AI use case candidates for an outsourcing AI delivery company.
 
 Original use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Final analysis conclusion:
 ${finalScores?.conclusion || "No conclusion provided."}
@@ -1393,7 +1859,7 @@ function normalizeDiscoverCandidates(payload, dims, weakestFallbackIds = []) {
   return out;
 }
 
-function discoverValidationPrompt(desc, dims, finalScores, candidate, expectedIds) {
+function discoverValidationPrompt(desc, dims, finalScores, candidate, expectedIds, researchSetup = {}) {
   const labelById = new Map(dims.map((d) => [d.id, d.label]));
   const scoreLines = expectedIds
     .map((id) => {
@@ -1409,10 +1875,15 @@ function discoverValidationPrompt(desc, dims, finalScores, candidate, expectedId
     ))
     .join("\n");
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Validate whether this discovery candidate is likely to improve the claimed weak dimensions.
 
 Original use case:
 "${desc}"
+
+Run context:
+${setupContext}
 
 Candidate:
 - title: ${candidate?.title || ""}
@@ -1462,6 +1933,7 @@ async function validateDiscoverCandidates({
   analysisMeta,
   debugSession,
   analysisMode,
+  researchSetup = {},
   liveSearch = true,
 }) {
   const validated = [];
@@ -1477,7 +1949,7 @@ async function validateDiscoverCandidates({
       continue;
     }
 
-    const prompt = discoverValidationPrompt(desc, dims, finalScores, candidate, expectedIds);
+    const prompt = discoverValidationPrompt(desc, dims, finalScores, candidate, expectedIds, researchSetup);
     try {
       const res = await callAnalystAPI(
         [{ role: "user", content: prompt }],
@@ -1674,7 +2146,7 @@ function scoreReconcileCandidate(diag = {}) {
   return changedBlend - uncertaintyPenalty - suspiciousPenalty;
 }
 
-function buildConsistencyCheckPrompt(desc, dims, p1, p2, p3) {
+function buildConsistencyCheckPrompt(desc, dims, p1, p2, p3, researchSetup = {}) {
   const rubricBlock = buildRubricCalibrationBlock(dims, { wordCap: 12 });
   const snapshots = dims.map((d) => {
     const init = p1?.dimensions?.[d.id];
@@ -1691,8 +2163,13 @@ function buildConsistencyCheckPrompt(desc, dims, p1, p2, p3) {
     ].join("\n");
   }).join("\n\n");
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Audit final scores for rubric consistency for this use case:
 "${p1?.attributes?.title || desc}"
+
+Run context:
+${setupContext}
 
 Rubric calibration reminders (higher score is better):
 ${rubricBlock}
@@ -1748,6 +2225,101 @@ function applyConsistencyAdjustments(p3, audit, dims) {
   });
 
   return { adjusted: out, changed };
+}
+
+function buildCrossDimensionCoherencePrompt(desc, dims, finalPayload = {}, researchSetup = {}) {
+  const snapshots = dims.map((d) => {
+    const row = finalPayload?.dimensions?.[d.id] || {};
+    return {
+      id: d.id,
+      label: d.label,
+      polarityHint: d.polarityHint || "",
+      score: clampScore(row?.finalScore, null),
+      confidence: normalizeConfidenceLevel(row?.confidence) || "low",
+      brief: clip(row?.brief, 180),
+      response: clip(row?.response, 220),
+      risks: clip(row?.risks, 140),
+    };
+  });
+
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
+  return `Audit cross-dimension coherence for this completed research output.
+
+Research input:
+"${desc}"
+
+Run context:
+${setupContext}
+
+Dimensions snapshot:
+${JSON.stringify(snapshots, null, 2)}
+
+Task:
+- Flag contradictions across dimensions (for example, strong defensibility paired with strong commoditization pressure).
+- Prioritize only material conflicts that could mislead a decision.
+- Suggest conservative score caps when contradiction is significant.
+
+Return JSON only:
+{
+  "conflicts": [
+    {
+      "dimensionId": "<dimension id to adjust>",
+      "conflictsWith": "<other dimension id>",
+      "suggestedCap": <1-5>,
+      "note": "<short contradiction explanation>"
+    }
+  ]
+}`;
+}
+
+function normalizeCrossDimensionConflicts(payload = {}, dims = []) {
+  const validIds = new Set(dims.map((d) => d.id));
+  const raw = Array.isArray(payload?.conflicts) ? payload.conflicts : [];
+  return raw
+    .map((entry) => {
+      const dimensionId = cleanString(entry?.dimensionId);
+      if (!validIds.has(dimensionId)) return null;
+      const conflictsWith = cleanString(entry?.conflictsWith);
+      const suggestedCap = clampScore(entry?.suggestedCap, null);
+      const note = cleanString(entry?.note).slice(0, 260);
+      if (!Number.isFinite(suggestedCap)) return null;
+      return { dimensionId, conflictsWith, suggestedCap, note };
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function applyCrossDimensionCoherenceAdjustments(payload = {}, conflicts = []) {
+  const out = payload && typeof payload === "object"
+    ? JSON.parse(JSON.stringify(payload))
+    : {};
+  out.dimensions = out.dimensions && typeof out.dimensions === "object" ? out.dimensions : {};
+  const adjustments = [];
+
+  conflicts.forEach((conflict) => {
+    const target = out.dimensions?.[conflict.dimensionId];
+    if (!target) return;
+    const current = clampScore(target?.finalScore, null);
+    const cap = clampScore(conflict?.suggestedCap, null);
+    if (!Number.isFinite(current) || !Number.isFinite(cap)) return;
+    if (current <= cap) return;
+    target.finalScore = cap;
+    target.scoreChanged = true;
+    target.decision = "concede";
+    target.revisionBasis = "cross_dimension_coherence";
+    target.revisionJustification = conflict?.note
+      || `Adjusted for cross-dimension coherence with ${conflict?.conflictsWith || "another dimension"}.`;
+    adjustments.push({
+      dimensionId: conflict.dimensionId,
+      conflictsWith: conflict?.conflictsWith || "",
+      from: current,
+      to: cap,
+      note: conflict?.note || "",
+    });
+  });
+
+  return { adjusted: out, adjustments };
 }
 
 function ensureDimensionConfidence(payload, dims) {
@@ -2147,6 +2719,19 @@ function polaritySignalCounts(text = "") {
   };
 }
 
+function isInversePolarityHint(dim = {}) {
+  const hint = cleanString(dim?.polarityHint).toLowerCase();
+  if (!hint) return false;
+  return (
+    hint.includes("higher score = worse")
+    || hint.includes("higher score means worse")
+    || hint.includes("lower score = better")
+    || hint.includes("low score is better")
+    || hint.includes("inverse polarity")
+    || hint.includes("higher is worse")
+  );
+}
+
 function enforcePhase3PolarityRules(payload, phase1, dims) {
   const out = payload && typeof payload === "object"
     ? JSON.parse(JSON.stringify(payload))
@@ -2172,6 +2757,7 @@ function enforcePhase3PolarityRules(payload, phase1, dims) {
       finalDim?.confidenceGap,
     ].filter(Boolean).join(" ");
     const signals = polaritySignalCounts(textBundle);
+    const inversePolarity = isInversePolarityHint(d);
 
     if (basis === "evidence_gap" && Number.isFinite(initialScore) && Number.isFinite(finalScore) && finalScore > initialScore) {
       const from = finalScore;
@@ -2207,7 +2793,7 @@ function enforcePhase3PolarityRules(payload, phase1, dims) {
       });
     }
 
-    if (Number.isFinite(finalScore) && finalScore >= 4 && signals.negative >= 2 && signals.positive === 0) {
+    if (!inversePolarity && Number.isFinite(finalScore) && finalScore >= 4 && signals.negative >= 2 && signals.positive === 0) {
       const from = finalScore;
       finalScore = 3;
       finalDim.finalScore = finalScore;
@@ -2221,6 +2807,23 @@ function enforcePhase3PolarityRules(payload, phase1, dims) {
         from,
         to: finalScore,
         detail: "Narrative indicates weak evidence while score remained high.",
+      });
+    }
+
+    if (inversePolarity && Number.isFinite(finalScore) && finalScore <= 2 && signals.negative >= 2 && signals.positive === 0) {
+      const from = finalScore;
+      finalScore = 3;
+      finalDim.finalScore = finalScore;
+      finalDim.scoreChanged = Number.isFinite(initialScore) ? finalScore !== initialScore : true;
+      if (!String(finalDim?.revisionJustification || "").trim()) {
+        finalDim.revisionJustification = "Score adjusted because inverse-polarity dimension had negative evidence wording with overly optimistic rating.";
+      }
+      adjustments.push({
+        dimensionId: id,
+        type: "polarity_text_score_mismatch_inverse",
+        from,
+        to: finalScore,
+        detail: "Inverse-polarity dimension narrative indicates weak evidence while score remained too optimistic.",
       });
     }
   }
@@ -2331,7 +2934,12 @@ async function runAnalystPass({
   evidenceMaxTokens = 9000,
   scoringMaxTokens = 12000,
   passLabel = "analyst",
+  requestOptions = {},
 }) {
+  const resolvedEvidenceOptions = liveSearch
+    ? withCapabilityModelOptions("retrieval", "analyst", requestOptions || {})
+    : withRoleModelOptions("analyst", requestOptions || {});
+  const resolvedScoringOptions = withRoleModelOptions("analyst", requestOptions || {});
   let evidencePayload;
   try {
     const fullPrompt = evidencePromptBuilder(false);
@@ -2339,7 +2947,7 @@ async function runAnalystPass({
       [{ role: "user", content: fullPrompt }],
       analystPrompt(),
       evidenceMaxTokens,
-      { liveSearch, includeMeta: true }
+      { ...(resolvedEvidenceOptions || {}), liveSearch, includeMeta: true }
     );
     absorbAnalystMeta(analysisMeta, fullRes.meta);
     appendAnalysisDebugEvent(debugSession, {
@@ -2373,7 +2981,7 @@ async function runAnalystPass({
       [{ role: "user", content: condensedPrompt }],
       analystPrompt(),
       8000,
-      { liveSearch, includeMeta: true }
+      { ...(resolvedEvidenceOptions || {}), liveSearch, includeMeta: true }
     );
     absorbAnalystMeta(analysisMeta, condensedRes.meta);
     appendAnalysisDebugEvent(debugSession, {
@@ -2409,7 +3017,7 @@ async function runAnalystPass({
       [{ role: "user", content: fullPrompt }],
       analystPrompt(),
       scoringMaxTokens,
-      { liveSearch: false, includeMeta: true }
+      { ...(resolvedScoringOptions || {}), liveSearch: false, includeMeta: true }
     );
     absorbAnalystMeta(analysisMeta, fullRes.meta);
     appendAnalysisDebugEvent(debugSession, {
@@ -2454,7 +3062,7 @@ async function runAnalystPass({
       [{ role: "user", content: condensedPrompt }],
       analystPrompt(),
       8000,
-      { liveSearch: false, includeMeta: true }
+      { ...(resolvedScoringOptions || {}), liveSearch: false, includeMeta: true }
     );
     absorbAnalystMeta(analysisMeta, condensedRes.meta);
     appendAnalysisDebugEvent(debugSession, {
@@ -2497,6 +3105,8 @@ async function runHybridPhase1(
   {
     inputSpec = {},
     framingFields = [],
+    allowDegraded = false,
+    researchSetup = {},
   } = {}
 ) {
   const evidenceMaxTokens = Number(tokenLimits.phase1Evidence) || 10000;
@@ -2509,11 +3119,13 @@ async function runHybridPhase1(
       condensed,
       inputSpec,
       framingFields,
+      researchSetup,
     }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "baseline analyst pass (memory-only)",
       framingFields,
+      researchSetup,
     }),
     dims,
     analysisMeta,
@@ -2532,11 +3144,13 @@ async function runHybridPhase1(
       condensed,
       inputSpec,
       framingFields,
+      researchSetup,
     }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "web-assisted analyst pass",
       framingFields,
+      researchSetup,
     }),
     dims,
     analysisMeta,
@@ -2553,11 +3167,13 @@ async function runHybridPhase1(
     evidencePromptBuilder: (condensed) => buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
       condensed,
       framingFields,
+      researchSetup,
     }),
     scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
       condensed,
       passLabel: "hybrid reliability reconcile (score from merged evidence)",
       framingFields,
+      researchSetup,
     }),
     dims,
     analysisMeta,
@@ -2595,6 +3211,7 @@ async function runHybridPhase1(
       evidencePromptBuilder: (condensed) => buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
         condensed,
         framingFields,
+        researchSetup,
         qualityGuard: {
           notes: initialHealth.notes,
           focusDimensionIds,
@@ -2604,6 +3221,7 @@ async function runHybridPhase1(
         condensed,
         passLabel: "hybrid reliability reconcile retry (quality-guarded)",
         framingFields,
+        researchSetup,
       }),
       dims,
       analysisMeta,
@@ -2655,10 +3273,308 @@ async function runHybridPhase1(
       diagnostics: finalHealth,
       note,
     });
-    throw new Error(`Hybrid reconcile quality guard failed. ${note}`);
+    if (!allowDegraded) {
+      throw new Error(`Hybrid reconcile quality guard failed. ${note}`);
+    }
+    markDegraded(analysisMeta, "hybrid_reconcile_quality_guard", note);
   }
 
   return reconciledFinal;
+}
+
+function scorecardProviderAgreement(entries = []) {
+  if (!entries.length) return "none";
+  if (entries.length === 1) return "single";
+  const scores = entries.map((entry) => clampScore(entry?.score, null)).filter((value) => Number.isFinite(value));
+  const confRanks = entries.map((entry) => confidenceRank(entry?.confidence)).filter((value) => Number.isFinite(value));
+  const scoreSpread = scores.length ? (Math.max(...scores) - Math.min(...scores)) : 0;
+  const confSpread = confRanks.length ? (Math.max(...confRanks) - Math.min(...confRanks)) : 0;
+  if (scoreSpread <= 1 && confSpread <= 1) return "agree";
+  if (scoreSpread <= 2) return "partial";
+  return "contradict";
+}
+
+function pickBestDeepAssistDimension(entries = []) {
+  if (!entries.length) return null;
+  let best = entries[0];
+  let bestRank = confidenceRank(best?.confidence);
+  let bestSources = normalizeSourceList(best?.sources).length;
+  for (let i = 1; i < entries.length; i += 1) {
+    const candidate = entries[i];
+    const rank = confidenceRank(candidate?.confidence);
+    const sourceCount = normalizeSourceList(candidate?.sources).length;
+    if (rank > bestRank || (rank === bestRank && sourceCount > bestSources)) {
+      best = candidate;
+      bestRank = rank;
+      bestSources = sourceCount;
+    }
+  }
+  return best;
+}
+
+function mergeDeepAssistScorecardPayloads(desc, dims, providerRuns = []) {
+  const basePayload = providerRuns?.[0]?.payload && typeof providerRuns[0].payload === "object"
+    ? JSON.parse(JSON.stringify(providerRuns[0].payload))
+    : { attributes: {}, dimensions: {} };
+  basePayload.attributes = normalizeAttributesShape(basePayload.attributes, desc);
+  basePayload.dimensions = basePayload.dimensions && typeof basePayload.dimensions === "object"
+    ? { ...basePayload.dimensions }
+    : {};
+  basePayload.deepAssist = {
+    providers: providerRuns.map((run) => ({
+      id: run.providerId,
+      label: run.label,
+      status: run.status,
+      error: run.error || "",
+      durationMs: Number(run.durationMs || 0),
+    })),
+    providersSucceeded: providerRuns.filter((run) => run.status === "ok").length,
+  };
+
+  for (const dim of dims) {
+    const id = dim.id;
+    const entries = providerRuns
+      .filter((run) => run.status === "ok")
+      .map((run) => {
+        const dimState = run?.payload?.dimensions?.[id];
+        if (!dimState || typeof dimState !== "object") return null;
+        return {
+          providerId: run.providerId,
+          providerLabel: run.label,
+          score: clampScore(dimState?.score, null),
+          confidence: normalizeConfidenceLevel(dimState?.confidence) || "medium",
+          confidenceReason: String(dimState?.confidenceReason || "").trim(),
+          brief: String(dimState?.brief || "").trim(),
+          full: String(dimState?.full || "").trim(),
+          risks: String(dimState?.risks || "").trim(),
+          missingEvidence: String(dimState?.missingEvidence || "").trim(),
+          sources: normalizeSourceList(dimState?.sources),
+          arguments: ensureDimensionArgumentShape(dimState?.arguments),
+          researchBrief: dimState?.researchBrief || null,
+        };
+      })
+      .filter(Boolean);
+
+    if (!entries.length) {
+      basePayload.dimensions[id] = {
+        ...(basePayload.dimensions?.[id] || {}),
+        score: clampScore(basePayload.dimensions?.[id]?.score, 3),
+        confidence: normalizeConfidenceLevel(basePayload.dimensions?.[id]?.confidence) || "low",
+        confidenceReason: String(basePayload.dimensions?.[id]?.confidenceReason || "Deep Assist providers did not return this dimension.").trim(),
+        providerAgreement: "none",
+        providerSignals: [],
+      };
+      continue;
+    }
+
+    const agreement = scorecardProviderAgreement(entries);
+    const best = pickBestDeepAssistDimension(entries) || entries[0];
+    const validScores = entries.map((entry) => entry.score).filter((value) => Number.isFinite(value));
+    const averagedScore = validScores.length
+      ? Math.max(1, Math.min(5, Math.round(validScores.reduce((sum, value) => sum + value, 0) / validScores.length)))
+      : clampScore(best?.score, 3);
+    let mergedConfidence = normalizeConfidenceLevel(best?.confidence) || "medium";
+    if (agreement === "contradict" && confidenceRank(mergedConfidence) > confidenceRank("medium")) {
+      mergedConfidence = "medium";
+    }
+    const mergedSources = mergeSourceLists(...entries.map((entry) => entry.sources));
+    const gapNotes = [...new Set(entries.map((entry) => cleanString(entry.missingEvidence)).filter(Boolean))];
+    const disagreementGap = agreement === "contradict"
+      ? "Providers returned contradictory findings. Targeted recovery should validate this dimension with additional evidence."
+      : "";
+    const missingEvidence = [gapNotes.join(" "), disagreementGap].filter(Boolean).join(" ").trim();
+
+    basePayload.dimensions[id] = {
+      ...(basePayload.dimensions?.[id] || {}),
+      score: averagedScore,
+      confidence: mergedConfidence,
+      confidenceReason: [
+        cleanString(best?.confidenceReason),
+        agreement === "agree" ? "Multi-provider deep-assist signals align." : "",
+        agreement === "partial" ? "Provider findings partially align; keep confidence conservative." : "",
+        agreement === "contradict" ? "Provider findings conflict; confidence capped pending targeted validation." : "",
+      ].filter(Boolean).join(" ").trim(),
+      brief: cleanString(best?.brief || basePayload.dimensions?.[id]?.brief),
+      full: cleanString(best?.full || basePayload.dimensions?.[id]?.full),
+      risks: cleanString(best?.risks || basePayload.dimensions?.[id]?.risks),
+      missingEvidence,
+      sources: mergedSources,
+      arguments: ensureDimensionArgumentShape(best?.arguments || basePayload.dimensions?.[id]?.arguments),
+      researchBrief: best?.researchBrief || basePayload.dimensions?.[id]?.researchBrief || null,
+      providerAgreement: agreement,
+      providerSignals: entries.map((entry) => ({
+        provider: entry.providerId,
+        providerLabel: entry.providerLabel,
+        score: entry.score,
+        confidence: entry.confidence,
+        confidenceReason: entry.confidenceReason,
+        sourceCount: normalizeSourceList(entry.sources).length,
+        brief: cleanString(entry.brief),
+      })),
+    };
+  }
+
+  return basePayload;
+}
+
+async function runDeepAssistPhase1(
+  desc,
+  dims,
+  updateUC,
+  id,
+  analysisMeta,
+  debugSession,
+  tokenLimits = {},
+  {
+    inputSpec = {},
+    framingFields = [],
+    deepAssist = {},
+    researchSetup = {},
+  } = {}
+) {
+  const deepAssistOptions = normalizeDeepAssistOptions(deepAssist);
+  const evidenceMaxTokens = Number(tokenLimits.phase1Evidence) || 10000;
+  const scoringMaxTokens = Number(tokenLimits.phase1Scoring) || 12000;
+  const debugContext = { useCaseId: id, analysisMode: analysisMeta.analysisMode };
+  ensureDegradedMeta(analysisMeta);
+  analysisMeta.evidenceMode = "deep-assist";
+  analysisMeta.deepAssistProvidersRequested = deepAssistOptions.providers.length;
+  analysisMeta.deepAssistMinProviders = deepAssistOptions.minProviders;
+  analysisMeta.deepAssistProvidersSucceeded = 0;
+  analysisMeta.deepAssistProvidersFailed = 0;
+  analysisMeta.deepAssistProviderRuns = [];
+
+  updateUC(id, (u) => ({ ...u, phase: "deep_assist_collect" }));
+
+  const providerRuns = await Promise.all(
+    deepAssistOptions.providers.map(async (providerId) => {
+      const label = deepAssistProviderLabel(providerId);
+      const passLabel = `deep_assist_${providerId}`;
+      const requestOptions = resolveDeepAssistProviderRequestOptions(providerId, "analyst", deepAssistOptions);
+      const startedAt = Date.now();
+      const beforeCalls = Number(analysisMeta.webSearchCalls || 0);
+      try {
+        const payload = await runAnalystPass({
+          evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
+            liveSearch: true,
+            condensed,
+            inputSpec,
+            framingFields,
+            researchSetup,
+          }),
+          scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
+            condensed,
+            passLabel: `${label} deep assist pass`,
+            framingFields,
+            researchSetup,
+          }),
+          dims,
+          analysisMeta,
+          debugContext,
+          debugSession,
+          liveSearch: true,
+          evidenceMaxTokens,
+          scoringMaxTokens,
+          passLabel,
+          requestOptions,
+        });
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        const afterCalls = Number(analysisMeta.webSearchCalls || 0);
+        const webSearchCalls = Math.max(0, afterCalls - beforeCalls);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "deep_assist_provider_complete",
+          phase: "deep_assist_collect",
+          attempt: providerId,
+          durationMs,
+          webSearchCalls,
+        });
+        return {
+          providerId,
+          label,
+          status: "ok",
+          durationMs,
+          webSearchCalls,
+          payload,
+        };
+      } catch (err) {
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "deep_assist_provider_failed",
+          phase: "deep_assist_collect",
+          attempt: providerId,
+          durationMs,
+          error: err?.message || String(err),
+        });
+        return {
+          providerId,
+          label,
+          status: "failed",
+          durationMs,
+          webSearchCalls: 0,
+          error: err?.message || String(err),
+          payload: null,
+        };
+      }
+    })
+  );
+
+  analysisMeta.deepAssistProviderRuns = providerRuns.map((run) => ({
+    providerId: run.providerId,
+    label: run.label,
+    status: run.status,
+    durationMs: run.durationMs,
+    webSearchCalls: run.webSearchCalls,
+    error: run.error || "",
+  }));
+  analysisMeta.deepAssistProvidersSucceeded = providerRuns.filter((run) => run.status === "ok").length;
+  analysisMeta.deepAssistProvidersFailed = providerRuns.filter((run) => run.status !== "ok").length;
+  analysisMeta.providerContributions = analysisMeta.providerContributions || {};
+  analysisMeta.providerContributions.deepAssist = providerRuns.map((run) => ({
+    providerId: run.providerId,
+    label: run.label,
+    status: run.status,
+    webSearchCalls: run.webSearchCalls,
+  }));
+
+  const successfulRuns = providerRuns.filter((run) => run.status === "ok" && run.payload);
+  if (!successfulRuns.length) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_no_provider_success",
+      "All Deep Assist providers failed. Falling back to native hybrid evidence flow."
+    );
+    appendAnalysisDebugEvent(debugSession, {
+      type: "deep_assist_fallback_native",
+      phase: "deep_assist_collect",
+      attempt: "fallback",
+      note: "No provider succeeded. Falling back to native hybrid phase 1.",
+    });
+    return runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
+      inputSpec,
+      framingFields,
+      researchSetup,
+      allowDegraded: true,
+    });
+  }
+
+  if (successfulRuns.length < deepAssistOptions.minProviders) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_min_provider_not_met",
+      `Deep Assist succeeded with ${successfulRuns.length}/${deepAssistOptions.minProviders} required providers.`
+    );
+  }
+
+  updateUC(id, (u) => ({ ...u, phase: "deep_assist_merge" }));
+  const merged = mergeDeepAssistScorecardPayloads(desc, dims, providerRuns);
+  appendAnalysisDebugEvent(debugSession, {
+    type: "deep_assist_merge_complete",
+    phase: "deep_assist_merge",
+    attempt: "final",
+    providerCount: successfulRuns.length,
+    responseLength: JSON.stringify(merged || {}).length,
+  });
+  return merged;
 }
 
 async function runLowConfidenceExtraCycle({
@@ -2670,13 +3586,14 @@ async function runLowConfidenceExtraCycle({
   analysisMeta,
   debugSession,
   analysisMode,
+  researchSetup = {},
 }) {
   const current = JSON.parse(JSON.stringify(phase1Payload || {}));
   current.dimensions = current.dimensions || {};
-  const selection = selectTargetedCycleDimensions(current, dims);
+  const selection = selectTargetedCycleDimensions(current, dims, getRuntime()?.limits || {});
   const candidateIds = selection.candidateIds;
 
-  analysisMeta.lowConfidenceInitialCount = candidateIds.length;
+  analysisMeta.lowConfidenceInitialCount = selection.allCandidateIds.length;
   analysisMeta.lowConfidenceOnlyCount = selection.lowIds.length;
   analysisMeta.mediumGapTargetedCount = selection.mediumGapIds.length;
   analysisMeta.lowConfidenceUpgradedCount = 0;
@@ -2685,6 +3602,57 @@ async function runLowConfidenceExtraCycle({
   analysisMeta.lowConfidenceTargetedSearchUsed = false;
   analysisMeta.lowConfidenceTargetedWebSearchCalls = 0;
   analysisMeta.lowConfidenceTargetedFallbackReason = null;
+  analysisMeta.lowConfidenceRoundRobinApplied = true;
+  analysisMeta.lowConfidenceBudgetUnits = selection.budgetUnits;
+  analysisMeta.lowConfidenceBudgetUsed = 0;
+  analysisMeta.lowConfidenceDroppedByBudget = Math.max(0, selection.allCandidateIds.length - candidateIds.length);
+  analysisMeta.targetedDimensionDiagnostics = [];
+
+  let strategistHints = { niche: "", aliases: [], dimensionHints: {} };
+  try {
+    const strategistPrompt = buildNicheQueryStrategistPrompt(desc, dims, current.attributes || {}, researchSetup);
+    const strategistRes = await callAnalystAPI(
+      [{ role: "user", content: strategistPrompt }],
+      analystPrompt(),
+      1400,
+      {
+        ...withCapabilityModelOptions("retrieval", "analyst", { includeMeta: true }),
+        liveSearch: false,
+      }
+    );
+    absorbLowConfidenceMeta(analysisMeta, strategistRes.meta);
+    const parsedStrategist = parseWithDiagnostics(strategistRes.text, {
+      phase: "analyst_targeted_query_strategist",
+      attempt: "full",
+      useCaseId: id,
+      analysisMode,
+      prompt: strategistPrompt,
+    }, debugSession);
+    strategistHints = normalizeStrategistHints(parsedStrategist, dims);
+    analysisMeta.targetedRetrievalNiche = strategistHints.niche || "";
+    analysisMeta.targetedRetrievalAliases = strategistHints.aliases || [];
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_detail",
+      phase: "analyst_targeted_query_strategist",
+      attempt: "full",
+      responseLength: strategistRes.text?.length || 0,
+      meta: strategistRes.meta || null,
+      prompt: shortText(strategistPrompt, 30000),
+      responseExcerpt: shortText(strategistRes.text, 6000),
+      response: shortText(strategistRes.text, 100000),
+      extra: {
+        niche: strategistHints.niche,
+        aliasCount: strategistHints.aliases?.length || 0,
+      },
+    });
+  } catch (strategistErr) {
+    appendAnalysisDebugEvent(debugSession, {
+      type: "phase_detail_fallback",
+      phase: "analyst_targeted_query_strategist",
+      attempt: "fallback",
+      error: strategistErr?.message || String(strategistErr),
+    });
+  }
 
   if (!candidateIds.length) {
     appendAnalysisDebugEvent(debugSession, {
@@ -2709,19 +3677,52 @@ async function runLowConfidenceExtraCycle({
     const dimId = candidateIds[idx];
     const dim = dims.find((d) => d.id === dimId);
     if (!dim) continue;
+    analysisMeta.lowConfidenceBudgetUsed = Number(analysisMeta.lowConfidenceBudgetUsed || 0) + 1;
 
     const before = current.dimensions?.[dimId] || {};
     const fallbackGap = before?.missingEvidence || before?.confidenceReason || before?.risks || "";
-    const fallbackQueries = defaultTargetedQueries(desc, dim.label, fallbackGap, attributes);
+    const strategistForDim = strategistHints?.dimensionHints?.[dimId] || {};
+    const aliasHints = normalizeStringList(strategistHints?.aliases, 6, 110);
+    const aliasQueries = aliasHints.map((alias) => `${alias} ${dim.label} evidence`).slice(0, 2);
+    const fallbackQueries = [
+      ...normalizeStringList(strategistForDim?.querySeeds, 4, 170),
+      ...normalizeStringList(dim?.researchHints?.queryTemplates, 4, 170),
+      ...aliasQueries,
+      ...defaultTargetedQueries(desc, dim.label, fallbackGap, attributes),
+    ];
+    const fallbackQueryList = [...new Set(normalizeStringList(fallbackQueries, 6, 170))].slice(0, 4);
+    const dimDiag = {
+      dimensionId: dimId,
+      label: dim.label || dimId,
+      bucket: selection.lowIds.includes(dimId) ? "low" : "medium_gap",
+      confidenceBefore: normalizeConfidenceLevel(before?.confidence) || "low",
+      fallbackQueries: fallbackQueryList,
+      strategistSeeds: normalizeStringList(strategistForDim?.querySeeds, 4, 170),
+      sourceTargets: normalizeStringList([
+        ...(strategistForDim?.sourceTargets || []),
+        ...(dim?.researchHints?.whereToLook || []),
+      ], 6, 170),
+    };
+    const retrievalOptions = withCapabilityModelOptions("retrieval", "analyst", { includeMeta: true });
 
-    let queryPlan = { gap: fallbackGap || "Evidence gap remains unresolved.", queries: fallbackQueries };
+    let queryPlan = { gap: fallbackGap || "Evidence gap remains unresolved.", queries: fallbackQueryList };
     try {
-      const queryPrompt = buildLowConfidenceQueryPlanPrompt(desc, dim, before, attributes);
+      const queryPrompt = buildLowConfidenceQueryPlanPrompt(
+        desc,
+        dim,
+        before,
+        attributes,
+        {
+          ...strategistForDim,
+          aliases: strategistHints?.aliases || [],
+        },
+        researchSetup
+      );
       const queryRes = await callAnalystAPI(
         [{ role: "user", content: queryPrompt }],
         analystPrompt(),
         1200,
-        { liveSearch: false, includeMeta: true }
+        { ...retrievalOptions, liveSearch: false }
       );
       absorbLowConfidenceMeta(analysisMeta, queryRes.meta);
       appendAnalysisDebugEvent(debugSession, {
@@ -2744,26 +3745,33 @@ async function runLowConfidenceExtraCycle({
         prompt: queryPrompt,
         extra: { dimensionId: dimId },
       }, debugSession);
-      queryPlan = normalizeLowConfidenceQueryPlan(parsedPlan, fallbackQueries, fallbackGap);
+      queryPlan = normalizeLowConfidenceQueryPlan(parsedPlan, fallbackQueryList, fallbackGap);
+      queryPlan.queries = [...new Set([
+        ...normalizeStringList(strategistForDim?.querySeeds, 3, 170),
+        ...normalizeStringList(queryPlan.queries, 4, 170),
+      ])].slice(0, 4);
+      dimDiag.queryPlan = queryPlan;
     } catch (planErr) {
       appendAnalysisDebugEvent(debugSession, {
         type: "low_conf_query_plan_fallback",
         phase: "analyst_targeted_query_plan",
         attempt: `${dimId}_fallback`,
         error: planErr.message || String(planErr),
-        extra: { dimensionId: dimId, fallbackQueries },
+        extra: { dimensionId: dimId, fallbackQueries: fallbackQueryList },
       });
-      queryPlan = normalizeLowConfidenceQueryPlan({}, fallbackQueries, fallbackGap);
+      queryPlan = normalizeLowConfidenceQueryPlan({}, fallbackQueryList, fallbackGap);
+      dimDiag.queryPlan = queryPlan;
+      dimDiag.queryPlanError = planErr?.message || String(planErr);
     }
 
     let harvest = { findings: [], queryCoverage: queryPlan.queries.map((q) => ({ query: q, useful: false, note: "No useful fact captured." })) };
     try {
-      const searchPrompt = buildLowConfidenceSearchHarvestPrompt(desc, dim, queryPlan, before);
+      const searchPrompt = buildLowConfidenceSearchHarvestPrompt(desc, dim, queryPlan, before, researchSetup);
       const searchRes = await callAnalystAPI(
         [{ role: "user", content: searchPrompt }],
         analystPrompt(),
         2600,
-        { liveSearch: true, includeMeta: true }
+        { ...retrievalOptions, liveSearch: true }
       );
       absorbLowConfidenceMeta(analysisMeta, searchRes.meta);
       appendAnalysisDebugEvent(debugSession, {
@@ -2787,6 +3795,8 @@ async function runLowConfidenceExtraCycle({
         extra: { dimensionId: dimId },
       }, debugSession);
       harvest = normalizeLowConfidenceSearchHarvest(parsedHarvest, queryPlan);
+      dimDiag.queryCoverage = harvest?.queryCoverage || [];
+      dimDiag.findingsCount = (harvest?.findings || []).length;
     } catch (searchErr) {
       appendAnalysisDebugEvent(debugSession, {
         type: "low_conf_search_fallback",
@@ -2795,15 +3805,18 @@ async function runLowConfidenceExtraCycle({
         error: searchErr.message || String(searchErr),
         extra: { dimensionId: dimId },
       });
+      dimDiag.queryCoverage = harvest?.queryCoverage || [];
+      dimDiag.findingsCount = 0;
+      dimDiag.searchError = searchErr?.message || String(searchErr);
     }
 
     try {
-      const rescorePrompt = buildLowConfidenceRescorePrompt(desc, dim, before, queryPlan, harvest);
+      const rescorePrompt = buildLowConfidenceRescorePrompt(desc, dim, before, queryPlan, harvest, researchSetup);
       const rescoreRes = await callAnalystAPI(
         [{ role: "user", content: rescorePrompt }],
         analystPrompt(),
         2800,
-        { liveSearch: false, includeMeta: true }
+        { ...withRoleModelOptions("analyst", { includeMeta: true }), liveSearch: false }
       );
       absorbLowConfidenceMeta(analysisMeta, rescoreRes.meta);
       appendAnalysisDebugEvent(debugSession, {
@@ -2863,6 +3876,7 @@ async function runLowConfidenceExtraCycle({
           },
         };
         analysisMeta.lowConfidenceUpgradedCount += 1;
+        dimDiag.status = "upgraded";
       } else {
         const existingResearchBrief = normalized.researchBrief || {
           missingEvidence: normalized.missingEvidence || fallbackGap || "Evidence gap remains unresolved.",
@@ -2897,7 +3911,12 @@ async function runLowConfidenceExtraCycle({
           },
         };
         if (nextConfidence === "low") analysisMeta.lowConfidenceValidatedLowCount += 1;
+        dimDiag.status = nextConfidence === "low" ? "validated_low" : "updated";
       }
+      dimDiag.confidenceAfter = nextConfidence;
+      dimDiag.usefulQueryCount = usefulQueryCount;
+      dimDiag.unsuccessfulQueries = unsuccessfulQueries;
+      analysisMeta.targetedDimensionDiagnostics.push(dimDiag);
 
       updateUC(id, (u) => ({
         ...u,
@@ -2906,6 +3925,9 @@ async function runLowConfidenceExtraCycle({
       }));
     } catch (rescoreErr) {
       analysisMeta.lowConfidenceCycleFailures += 1;
+      dimDiag.status = "rescore_failed";
+      dimDiag.error = rescoreErr?.message || String(rescoreErr);
+      analysisMeta.targetedDimensionDiagnostics.push(dimDiag);
       appendAnalysisDebugEvent(debugSession, {
         type: "low_conf_rescore_failed",
         phase: "analyst_targeted_rescore",
@@ -2914,6 +3936,12 @@ async function runLowConfidenceExtraCycle({
         extra: { dimensionId: dimId },
       });
     }
+    appendAnalysisDebugEvent(debugSession, {
+      type: "targeted_dimension_diagnostics",
+      phase: "analyst_targeted",
+      attempt: dimId,
+      extra: dimDiag,
+    });
   }
 
   const normalizedFinal = ensureDimensionArguments(ensureDimensionConfidence(current, dims), dims);
@@ -2921,7 +3949,10 @@ async function runLowConfidenceExtraCycle({
     type: "phase_complete",
     phase: "analyst_targeted",
     attempt: "final",
-    candidateCount: candidateIds.length,
+    candidateCount: selection.allCandidateIds.length,
+    budgetUnits: selection.budgetUnits,
+    budgetUsed: analysisMeta.lowConfidenceBudgetUsed,
+    droppedByBudget: analysisMeta.lowConfidenceDroppedByBudget,
     lowCandidates: selection.lowIds.length,
     mediumGapCandidates: selection.mediumGapIds.length,
     upgradedCount: analysisMeta.lowConfidenceUpgradedCount,
@@ -2932,12 +3963,15 @@ async function runLowConfidenceExtraCycle({
 }
 
 async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
-  const analysisMode = "hybrid";
+  const evidenceMode = normalizeEvidenceMode(options?.evidenceMode);
+  const analysisMode = evidenceMode === "deep-assist" ? "deep-assist" : "hybrid";
   const criticLiveSearch = true;
   const downloadDebugLog = !!options.downloadDebugLog;
   const relatedDiscoveryEnabled = options.relatedDiscovery !== false;
   const inputSpec = options?.inputSpec || {};
   const framingFields = normalizePromptFramingFields(options?.framingFields || []);
+  const researchSetup = normalizeResearchSetupContext(options?.researchSetup || {});
+  const deepAssist = normalizeDeepAssistOptions(options?.deepAssist || {});
   const prompts = {
     analyst: options?.prompts?.analyst || SYS_ANALYST,
     critic: options?.prompts?.critic || SYS_CRITIC,
@@ -2968,6 +4002,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
   const debate = [];
   const analysisMeta = {
     analysisMode,
+    evidenceMode,
     liveSearchRequested: true,
     liveSearchUsed: false,
     webSearchCalls: 0,
@@ -2992,15 +4027,27 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     lowConfidenceTargetedSearchUsed: false,
     lowConfidenceTargetedWebSearchCalls: 0,
     lowConfidenceTargetedFallbackReason: null,
+    lowConfidenceRoundRobinApplied: false,
+    lowConfidenceBudgetUnits: 0,
+    lowConfidenceBudgetUsed: 0,
+    lowConfidenceDroppedByBudget: 0,
+    targetedRetrievalNiche: "",
+    targetedRetrievalAliases: [],
+    targetedDimensionDiagnostics: [],
     sourceVerificationChecked: 0,
     sourceVerificationVerified: 0,
     sourceVerificationNotFound: 0,
     sourceVerificationFetchFailed: 0,
+    sourceVerificationInvalidUrl: 0,
+    sourceVerificationPartialMatch: 0,
+    sourceVerificationNameOnly: 0,
     sourceVerificationPenalizedDimensions: 0,
     sourceVerificationSkippedReason: null,
     phase3DecisionGuardAdjustments: 0,
     phase3ConfidenceGuardAdjustments: 0,
     phase3PolarityGuardAdjustments: 0,
+    crossDimensionCoherenceFlags: 0,
+    crossDimensionCoherenceAdjustments: 0,
     hybridStats: null,
     hybridReconcileHealth: null,
     hybridReconcileRetryTriggered: false,
@@ -3008,17 +4055,43 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     hybridReconcileRetryUsed: false,
     hybridReconcileRetryReason: "",
     hybridReconcileRetryDiagnostics: null,
+    qualityGrade: "standard",
+    degradedReasons: [],
+    deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
+    deepAssistProvidersSucceeded: 0,
+    deepAssistProvidersFailed: 0,
+    deepAssistProviderRuns: [],
+    sourceDiversityTotalDimensions: 0,
+    sourceDiversityConfidenceCaps: 0,
+    staleEvidenceObservedDimensions: 0,
+    staleEvidenceRatioSum: 0,
+    staleEvidenceConfidenceCaps: 0,
+    verificationConfidenceCaps: 0,
+    urlCoverageConfidenceCaps: 0,
+    zeroSourceConfidenceCaps: 0,
+    providerContributions: {},
+    decisionContext: researchSetup.decisionContext,
+    userRoleContext: researchSetup.userRoleContext,
   };
 
   let runStatus = "failed";
   let runError = null;
   try {
     // Phase 1: Analyst
-    updateUC(id, (u) => ({ ...u, phase: "analyst_baseline" }));
-    const p1Base = await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
-      inputSpec,
-      framingFields,
-    });
+    updateUC(id, (u) => ({ ...u, phase: evidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline" }));
+    const p1Base = evidenceMode === "deep-assist"
+      ? await runDeepAssistPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
+          inputSpec,
+          framingFields,
+          deepAssist,
+          researchSetup,
+        })
+      : await runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
+          inputSpec,
+          framingFields,
+          researchSetup,
+          allowDegraded: true,
+        });
     p1Base.attributes = normalizeAttributesShape(p1Base?.attributes, desc, framingFields);
     let p1 = p1Base;
 
@@ -3032,6 +4105,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
         analysisMeta,
         debugSession,
         analysisMode,
+        researchSetup,
       });
     } catch (lowConfErr) {
       appendAnalysisDebugEvent(debugSession, {
@@ -3041,6 +4115,30 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
         error: lowConfErr.message || String(lowConfErr),
       });
       p1 = p1Base;
+    }
+    if (analysisMeta.lowConfidenceInitialCount > 0 && analysisMeta.lowConfidenceUpgradedCount === 0) {
+      try {
+        analysisMeta.lowConfidenceRefinementAttempted = true;
+        p1 = await runLowConfidenceExtraCycle({
+          desc,
+          dims,
+          phase1Payload: p1,
+          updateUC,
+          id,
+          analysisMeta,
+          debugSession,
+          analysisMode,
+          researchSetup,
+        });
+      } catch (lowConfRetryErr) {
+        analysisMeta.lowConfidenceRefinementFailed = true;
+        appendAnalysisDebugEvent(debugSession, {
+          type: "low_conf_refinement_failed",
+          phase: "analyst_targeted",
+          attempt: "refinement",
+          error: lowConfRetryErr.message || String(lowConfRetryErr),
+        });
+      }
     }
     p1.attributes = normalizeAttributesShape(p1?.attributes, desc, framingFields);
     try {
@@ -3080,7 +4178,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     }));
 
     // Phase 2: Critic
-    const phase2Prompt = buildCriticPrompt(desc, dims, p1, { liveSearch: criticLiveSearch });
+    const phase2Prompt = buildCriticPrompt(desc, dims, p1, { liveSearch: criticLiveSearch, researchSetup });
 
     const criticRes = await callCriticAPI(
       [{ role: "user", content: phase2Prompt }],
@@ -3149,6 +4247,84 @@ STRICT JSON RULES:
       }, debugSession);
     }
 
+    {
+      const hmDims = dims.filter((d) => {
+        const confidence = normalizeConfidenceLevel(p1?.dimensions?.[d.id]?.confidence) || "low";
+        return confidence === "high" || confidence === "medium";
+      });
+      const flaggedDims = hmDims.filter((d) => {
+        const entry = p2?.dimensions?.[d.id] || {};
+        const scoreJustified = entry?.scoreJustified;
+        const suggested = clampScore(entry?.suggestedScore, null);
+        const initialScore = clampScore(p1?.dimensions?.[d.id]?.score, null);
+        const critique = cleanString(entry?.critique);
+        if (scoreJustified === false) return true;
+        if (Number.isFinite(suggested) && Number.isFinite(initialScore) && suggested !== initialScore) return true;
+        if (critique.length > 8 && /weak|thin|uncertain|overconfident|unsupported|contradict|stale|outdated/i.test(critique)) {
+          return true;
+        }
+        return false;
+      });
+      const requiresStrictRetry = hmDims.length >= 4 && flaggedDims.length === 0;
+      if (requiresStrictRetry) {
+        const strictPrompt = `${phase2Prompt}
+
+STRICT AUDIT PROTOCOL:
+- Audit ALL high/medium-confidence dimensions independently.
+- For each dimension, explicitly state whether the analyst overreached.
+- Flag contradictions, stale evidence, and unsupported claims even if subtle.
+- If no reliable disconfirming evidence exists, still note what remains unverified.
+- Return actionable flags; avoid blanket "justified" outcomes.`;
+        try {
+          const strictRes = await callCriticAPI(
+            [{ role: "user", content: strictPrompt }],
+            prompts.critic,
+            Math.max(3000, Math.min(5200, tokenLimits.critic)),
+            { liveSearch: criticLiveSearch, includeMeta: true }
+          );
+          absorbCriticMeta(analysisMeta, strictRes.meta);
+          appendAnalysisDebugEvent(debugSession, {
+            type: "model_response",
+            phase: "critic",
+            attempt: "strict_retry",
+            responseLength: strictRes.text?.length || 0,
+            meta: strictRes.meta || null,
+            prompt: shortText(strictPrompt, 30000),
+            responseExcerpt: shortText(strictRes.text, 6000),
+            response: shortText(strictRes.text, 100000),
+          });
+          const strictParsed = parseWithDiagnostics(strictRes.text, {
+            phase: "critic",
+            attempt: "strict_retry",
+            useCaseId: id,
+            analysisMode,
+            prompt: strictPrompt,
+          }, debugSession);
+          const strictFlagged = hmDims.filter((d) => {
+            const entry = strictParsed?.dimensions?.[d.id] || {};
+            return entry?.scoreJustified === false;
+          });
+          if (strictFlagged.length >= flaggedDims.length) {
+            p2 = strictParsed;
+          }
+          appendAnalysisDebugEvent(debugSession, {
+            type: "critic_strict_retry_applied",
+            phase: "critic",
+            attempt: "strict_retry",
+            hmDimensions: hmDims.length,
+            strictFlagged: strictFlagged.length,
+          });
+        } catch (strictErr) {
+          appendAnalysisDebugEvent(debugSession, {
+            type: "critic_strict_retry_failed",
+            phase: "critic",
+            attempt: "strict_retry",
+            error: strictErr.message || String(strictErr),
+          });
+        }
+      }
+    }
+
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
       phase: "critic",
@@ -3185,6 +4361,9 @@ STRICT JSON RULES:
 
     // Phase 3: Analyst responds
     const phase3Prompt = `You are the analyst who assessed "${p1.attributes?.title || desc}".
+
+Run context:
+${buildResearchSetupContextBlock(researchSetup)}
 
 Your original scores and confidence:
 ${dims.map((d) => `- ${d.label}: ${p1.dimensions?.[d.id]?.score}/5 (${p1.dimensions?.[d.id]?.confidence || "n/a"} confidence)`).join("\n")}
@@ -3429,7 +4608,7 @@ STRICT JSON RULES:
 
     let finalResponse = p3;
     try {
-      const consistencyPrompt = buildConsistencyCheckPrompt(desc, dims, p1, p2, p3);
+      const consistencyPrompt = buildConsistencyCheckPrompt(desc, dims, p1, p2, p3, researchSetup);
       const consistencyRes = await callAnalystAPI(
         [{ role: "user", content: consistencyPrompt }],
         prompts.analystResponse,
@@ -3481,6 +4660,51 @@ STRICT JSON RULES:
         error: consistencyErr.message || String(consistencyErr),
       });
     }
+    try {
+      const coherencePrompt = buildCrossDimensionCoherencePrompt(desc, dims, finalResponse, researchSetup);
+      const coherenceRes = await callCriticAPI(
+        [{ role: "user", content: coherencePrompt }],
+        prompts.critic,
+        Math.max(2200, Math.min(4200, tokenLimits.critic)),
+        { liveSearch: true, includeMeta: true }
+      );
+      absorbCriticMeta(analysisMeta, coherenceRes.meta);
+      const coherenceParsed = parseWithDiagnostics(coherenceRes.text, {
+        phase: "finalizing_cross_dimension",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: coherencePrompt,
+      }, debugSession);
+      const conflicts = normalizeCrossDimensionConflicts(coherenceParsed, dims);
+      analysisMeta.crossDimensionCoherenceFlags = conflicts.length;
+      const coherenceApplied = applyCrossDimensionCoherenceAdjustments(finalResponse, conflicts);
+      analysisMeta.crossDimensionCoherenceAdjustments = coherenceApplied.adjustments.length;
+      if (coherenceApplied.adjustments.length) {
+        const decisionPass = enforcePhase3DecisionRules(coherenceApplied.adjusted, p1, p2, dims);
+        analysisMeta.phase3DecisionGuardAdjustments += decisionPass.adjustments.length;
+        const confidencePass = enforcePhase3ConfidenceRules(decisionPass.adjusted, p1, p2, dims);
+        analysisMeta.phase3ConfidenceGuardAdjustments += confidencePass.adjustments.length;
+        const polarityPass = enforcePhase3PolarityRules(confidencePass.adjusted, p1, dims);
+        analysisMeta.phase3PolarityGuardAdjustments += polarityPass.adjustments.length;
+        finalResponse = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(polarityPass.adjusted, dims), dims), dims);
+      }
+      appendAnalysisDebugEvent(debugSession, {
+        type: "cross_dimension_coherence_applied",
+        phase: "finalizing_cross_dimension",
+        attempt: "final",
+        flagCount: conflicts.length,
+        appliedCount: coherenceApplied.adjustments.length,
+        adjustments: coherenceApplied.adjustments,
+      });
+    } catch (coherenceErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "cross_dimension_coherence_failed",
+        phase: "finalizing_cross_dimension",
+        attempt: "final",
+        error: coherenceErr?.message || String(coherenceErr),
+      });
+    }
     finalResponse = finalResponse && typeof finalResponse === "object" ? finalResponse : {};
     finalResponse.attributes = normalizeAttributesShape(finalResponse?.attributes, desc, framingFields);
     try {
@@ -3529,7 +4753,7 @@ STRICT JSON RULES:
       validatedCandidatesCount: 0,
     };
     const weakestFallbackIds = weakestDimensions(dims, finalResponse, 3).map((item) => item.dim.id);
-    const discoverPrompt = buildDiscoverPrompt(desc, dims, p1, finalResponse);
+    const discoverPrompt = buildDiscoverPrompt(desc, dims, p1, finalResponse, researchSetup);
 
     if (relatedDiscoveryEnabled) {
       try {
@@ -3611,6 +4835,7 @@ STRICT JSON RULES:
         analysisMeta,
         debugSession,
         analysisMode,
+        researchSetup,
         liveSearch: discoveryLiveSearch,
       });
       discover = {
@@ -3653,6 +4878,20 @@ STRICT JSON RULES:
         rejectedCandidateCount: 0,
       });
     }
+
+    const staleObserved = Number(analysisMeta.staleEvidenceObservedDimensions || 0);
+    analysisMeta.staleEvidenceRatio = staleObserved
+      ? Number(analysisMeta.staleEvidenceRatioSum || 0) / staleObserved
+      : 0;
+    analysisMeta.providerContributions = {
+      ...(analysisMeta.providerContributions || {}),
+      native: [
+        { provider: "analyst", webSearchCalls: Number(analysisMeta.webSearchCalls || 0) },
+        { provider: "critic", webSearchCalls: Number(analysisMeta.criticWebSearchCalls || 0) },
+        { provider: "targeted", webSearchCalls: Number(analysisMeta.lowConfidenceTargetedWebSearchCalls || 0) },
+        { provider: "discovery", webSearchCalls: Number(analysisMeta.discoveryWebSearchCalls || 0) },
+      ],
+    };
 
     updateUC(id, (u) => ({
       ...u,
@@ -3705,12 +4944,15 @@ function createInitialUseCaseState(input) {
   if (!id || !desc) {
     throw new Error("runAnalysis requires input.id and input.description.");
   }
+  const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const deepAssist = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
+  const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
 
   return {
     id,
     rawInput: desc,
     status: "analyzing",
-    phase: "analyst_baseline",
+    phase: evidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline",
     attributes: null,
     dimScores: null,
     critique: null,
@@ -3720,9 +4962,11 @@ function createInitialUseCaseState(input) {
     errorMsg: null,
     discover: null,
     origin,
+    researchSetup,
     outputMode: "scorecard",
     analysisMeta: {
-      analysisMode: "hybrid",
+      analysisMode: evidenceMode === "deep-assist" ? "deep-assist" : "hybrid",
+      evidenceMode,
       liveSearchRequested: true,
       liveSearchUsed: false,
       webSearchCalls: 0,
@@ -3745,22 +4989,51 @@ function createInitialUseCaseState(input) {
       lowConfidenceTargetedSearchUsed: false,
       lowConfidenceTargetedWebSearchCalls: 0,
       lowConfidenceTargetedFallbackReason: null,
+      lowConfidenceRoundRobinApplied: false,
+      lowConfidenceBudgetUnits: 0,
+      lowConfidenceBudgetUsed: 0,
+      lowConfidenceDroppedByBudget: 0,
+      targetedRetrievalNiche: "",
+      targetedRetrievalAliases: [],
+      targetedDimensionDiagnostics: [],
       sourceVerificationChecked: 0,
       sourceVerificationVerified: 0,
       sourceVerificationNotFound: 0,
       sourceVerificationFetchFailed: 0,
+      sourceVerificationInvalidUrl: 0,
+      sourceVerificationPartialMatch: 0,
+      sourceVerificationNameOnly: 0,
       sourceVerificationPenalizedDimensions: 0,
       sourceVerificationSkippedReason: null,
       hybridStats: null,
       phase3DecisionGuardAdjustments: 0,
       phase3ConfidenceGuardAdjustments: 0,
       phase3PolarityGuardAdjustments: 0,
+      crossDimensionCoherenceFlags: 0,
+      crossDimensionCoherenceAdjustments: 0,
       hybridReconcileHealth: null,
       hybridReconcileRetryTriggered: false,
       hybridReconcileRetryAttempts: 0,
       hybridReconcileRetryUsed: false,
       hybridReconcileRetryReason: "",
       hybridReconcileRetryDiagnostics: null,
+      qualityGrade: "standard",
+      degradedReasons: [],
+      deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
+      deepAssistProvidersSucceeded: 0,
+      deepAssistProvidersFailed: 0,
+      deepAssistProviderRuns: [],
+      sourceDiversityTotalDimensions: 0,
+      sourceDiversityConfidenceCaps: 0,
+      staleEvidenceObservedDimensions: 0,
+      staleEvidenceRatioSum: 0,
+      staleEvidenceConfidenceCaps: 0,
+      verificationConfidenceCaps: 0,
+      urlCoverageConfidenceCaps: 0,
+      zeroSourceConfidenceCaps: 0,
+      providerContributions: {},
+      decisionContext: researchSetup.decisionContext,
+      userRoleContext: researchSetup.userRoleContext,
     },
   };
 }
@@ -3799,6 +5072,7 @@ export async function runAnalysis(input, config, callbacks = {}) {
     transport,
     prompts: config?.prompts || {},
     models: config?.models || {},
+    deepAssist: config?.deepAssist || {},
   };
   try {
     await runAnalysisLegacy(
@@ -3814,6 +5088,9 @@ export async function runAnalysis(input, config, callbacks = {}) {
         inputSpec: config?.inputSpec || {},
         framingFields: Array.isArray(config?.framingFields) ? config.framingFields : [],
         relatedDiscovery: config?.relatedDiscovery !== false,
+        researchSetup: input?.options?.researchSetup || {},
+        evidenceMode: input?.options?.evidenceMode,
+        deepAssist: input?.options?.deepAssist || {},
         onDebugSession: callbacks?.onDebugSession,
       }
     );

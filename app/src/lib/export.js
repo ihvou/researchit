@@ -687,16 +687,36 @@ function percentLabel(value, decimals = 0) {
 function runDiagnosticsEntries(uc, outputMode = "scorecard") {
   const meta = uc?.analysisMeta || {};
   const entries = [];
+  if (meta?.qualityGrade === "degraded") {
+    const reasons = Array.isArray(meta?.degradedReasons) ? meta.degradedReasons : [];
+    entries.push({
+      label: "Quality grade",
+      value: "Degraded",
+      detail: reasons.length
+        ? reasons.map((entry) => entry?.detail || entry?.code).filter(Boolean).join(" | ")
+        : "Quality guard triggered one or more degraded-complete reasons.",
+    });
+  } else {
+    entries.push({
+      label: "Quality grade",
+      value: "Standard",
+      detail: "Run completed without degraded-quality guard triggers.",
+    });
+  }
+
   const checked = Number(meta.sourceVerificationChecked || 0);
   const verified = Number(meta.sourceVerificationVerified || 0);
   const notFound = Number(meta.sourceVerificationNotFound || 0);
   const fetchFailed = Number(meta.sourceVerificationFetchFailed || 0);
+  const invalidUrl = Number(meta.sourceVerificationInvalidUrl || 0);
+  const partial = Number(meta.sourceVerificationPartialMatch || 0);
+  const nameOnly = Number(meta.sourceVerificationNameOnly || 0);
 
   if (checked > 0) {
     entries.push({
       label: "Source verification",
       value: `${verified}/${checked} verified (${percentLabel(checked ? verified / checked : 0)})`,
-      detail: `${notFound} not found in page; ${fetchFailed} fetch failures`,
+      detail: `${notFound} not found in page; ${fetchFailed} fetch failures; ${invalidUrl} invalid URL; ${partial + nameOnly} partial/name-only matches`,
     });
   } else if (meta.sourceVerificationSkippedReason) {
     entries.push({
@@ -715,6 +735,57 @@ function runDiagnosticsEntries(uc, outputMode = "scorecard") {
     value: `${analystCalls + criticCalls + targetedCalls + discoveryCalls}`,
     detail: `Analyst ${analystCalls}, Critic ${criticCalls}, Targeted ${targetedCalls}, Discovery ${discoveryCalls}`,
   });
+
+  const staleRatio = Number(meta.staleEvidenceRatio);
+  if (Number.isFinite(staleRatio)) {
+    entries.push({
+      label: "Stale evidence ratio",
+      value: percentLabel(staleRatio, 1),
+      detail: outputMode === "matrix"
+        ? `${Number(meta.staleEvidenceObservedCells || 0)} cells assessed for freshness`
+        : `${Number(meta.staleEvidenceObservedDimensions || 0)} dimensions assessed for freshness`,
+    });
+  }
+
+  const providerRows = [];
+  const pushProviderRows = (items = []) => {
+    (Array.isArray(items) ? items : []).forEach((entry) => {
+      const label = String(entry?.label || entry?.provider || entry?.providerId || "").trim();
+      if (!label) return;
+      const status = String(entry?.status || "").trim();
+      const calls = Number(entry?.webSearchCalls || 0);
+      providerRows.push(`${label}${status ? ` (${status})` : ""}: ${calls}`);
+    });
+  };
+  pushProviderRows(meta?.providerContributions?.deepAssist);
+  pushProviderRows(meta?.providerContributions?.native);
+  if (providerRows.length) {
+    entries.push({
+      label: "Provider contribution",
+      value: `${providerRows.length} channels`,
+      detail: providerRows.join(" | "),
+    });
+  }
+
+  const budgetUnits = Number(meta.lowConfidenceBudgetUnits || meta.lowConfidenceBudgetCells || 0);
+  const budgetUsed = Number(meta.lowConfidenceBudgetUsed || 0);
+  if (budgetUnits > 0) {
+    entries.push({
+      label: "Targeted budget",
+      value: `${budgetUsed}/${budgetUnits}`,
+      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
+    });
+  }
+
+  if (meta.targetedRetrievalNiche || (Array.isArray(meta.targetedRetrievalAliases) && meta.targetedRetrievalAliases.length)) {
+    entries.push({
+      label: "Niche strategist",
+      value: String(meta.targetedRetrievalNiche || "detected"),
+      detail: Array.isArray(meta.targetedRetrievalAliases) && meta.targetedRetrievalAliases.length
+        ? `Aliases: ${meta.targetedRetrievalAliases.join(", ")}`
+        : "No alias expansions returned",
+    });
+  }
 
   if (outputMode === "matrix") {
     const coverage = uc?.matrix?.coverage || {};
@@ -873,6 +944,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
   const discover = uc?.discover || {};
   const suggestedSubjects = Array.isArray(discover?.suggestedSubjects) ? discover.suggestedSubjects : [];
   const suggestedAttributes = Array.isArray(discover?.suggestedAttributes) ? discover.suggestedAttributes : [];
+  const executiveSummary = matrix?.executiveSummary || {};
 
   const summaryMeta = `
     <div class="matrix-meta-grid">
@@ -902,6 +974,28 @@ function renderMatrixSummaryPage(uc, options = {}) {
     `
     : "<div class=\"muted\">No additional discovery suggestions.</div>";
   const diagnosticsBlock = diagnosticsHtml(uc, "matrix");
+  const executiveRows = [
+    ["Decision answer", executiveSummary?.decisionAnswer],
+    ["Closest threats", executiveSummary?.closestThreats],
+    ["Whitespace", executiveSummary?.whitespace],
+    ["Strategic classification", executiveSummary?.strategicClassification],
+    ["Key risks", executiveSummary?.keyRisks],
+    ["Decision implications", executiveSummary?.decisionImplications],
+    ["Uncertainty notes", executiveSummary?.uncertaintyNotes],
+    ["Provider agreement", executiveSummary?.providerAgreementHighlights],
+  ].filter((entry) => String(entry?.[1] || "").trim());
+  const executiveBody = executiveRows.length
+    ? `
+      <div class="grid-auto">
+        ${executiveRows.map((entry) => `
+          <div>
+            <div class="small-muted"><strong>${escapeHtml(entry[0])}</strong></div>
+            <div class="small-text pre-wrap">${escapeHtml(entry[1])}</div>
+          </div>
+        `).join("")}
+      </div>
+    `
+    : "<div class=\"muted\">Executive synthesis not available.</div>";
 
   return `
     <article class="page matrix-summary-page">
@@ -910,6 +1004,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
       <div class="summary-desc">${escapeHtml(uc?.rawInput || "")}</div>
       ${summaryMeta}
       ${section("Decision Question", `<div class="small-text pre-wrap">${escapeHtml(decisionQuestion)}</div>`)}
+      ${section("Executive Summary", executiveBody, "compact")}
       ${section("Run Diagnostics", diagnosticsBlock, "compact")}
       ${section("Matrix Overview", matrixCompactTableHtml(matrix), "compact")}
       ${section("Discovery Suggestions", discoveryBody, "compact")}
@@ -926,17 +1021,40 @@ function renderMatrixSubjectPage(uc, subject, attributes = [], cellByKey = new M
     const key = `${String(subject?.id || "")}::${String(attr?.id || "")}`;
     const cell = cellByKey.get(key) || {};
     const confidence = normalizeConfidence(cell?.confidence) || "low";
-    const confidenceReason = cell?.confidenceReason ? ` - ${escapeHtml(cell.confidenceReason)}` : "";
+    const confidenceReason = cell?.confidenceReason ? escapeHtml(cell.confidenceReason) : "";
     const value = escapeHtml(cell?.value || "No reliable evidence found.");
+    const full = String(cell?.full || "").trim() ? `<div class="small-text pre-wrap" style="margin-top:6px;">${escapeHtml(cell.full)}</div>` : "";
+    const risks = String(cell?.risks || "").trim()
+      ? `<div class="small-text" style="margin-top:6px;"><strong>Risks:</strong> ${escapeHtml(cell.risks)}</div>`
+      : "";
+    const supporting = Array.isArray(cell?.arguments?.supporting) ? cell.arguments.supporting : [];
+    const limiting = Array.isArray(cell?.arguments?.limiting) ? cell.arguments.limiting : [];
+    const supportingHtml = supporting.length
+      ? `<div class="small-text" style="margin-top:6px;"><strong>Supporting:</strong><ul class="brief-list">${supporting.slice(0, 4).map((item) => `<li>${escapeHtml(item?.claim || "Claim")}${item?.detail ? ` - ${escapeHtml(item.detail)}` : ""}</li>`).join("")}</ul></div>`
+      : "";
+    const limitingHtml = limiting.length
+      ? `<div class="small-text" style="margin-top:6px;"><strong>Limiting:</strong><ul class="brief-list">${limiting.slice(0, 4).map((item) => `<li>${escapeHtml(item?.claim || "Claim")}${item?.detail ? ` - ${escapeHtml(item.detail)}` : ""}</li>`).join("")}</ul></div>`
+      : "";
+    const providerAgreement = String(cell?.providerAgreement || "").trim()
+      ? `<div class="small-text" style="margin-top:6px;"><strong>Provider agreement:</strong> ${escapeHtml(cell.providerAgreement)}</div>`
+      : "";
     const sourcesHtml = sourceChipArrayHtml(cell?.sources || [], { maxItems: 6 });
     const criticNote = cell?.criticNote ? `<div class="small-text"><strong>Critic:</strong> ${escapeHtml(cell.criticNote)}</div>` : "";
     const analystNote = cell?.analystNote ? `<div class="small-text"><strong>Analyst:</strong> ${escapeHtml(cell.analystNote)}</div>` : "";
     return `
       <tr>
         <td>${escapeHtml(attr?.label || attr?.id || "Attribute")}</td>
-        <td><span class="matrix-mini-conf matrix-mini-conf-${confidence}">${confidence.toUpperCase()}</span><div class="small-text">${confidenceReason || ""}</div></td>
+        <td>
+          <span class="matrix-mini-conf matrix-mini-conf-${confidence}">${confidence.toUpperCase()}</span>
+          ${confidenceReason ? `<div class="small-text">${confidenceReason}</div>` : ""}
+        </td>
         <td>
           <div class="small-text pre-wrap">${value}</div>
+          ${full}
+          ${risks}
+          ${supportingHtml}
+          ${limitingHtml}
+          ${providerAgreement}
           ${criticNote}
           ${analystNote}
         </td>
@@ -2102,11 +2220,37 @@ function buildMatrixMarkdown(uc) {
       lines.push("");
       lines.push(`- Confidence: ${markdownEscapeInline(cell?.confidence || "unknown")}${cell?.confidenceReason ? ` (${markdownEscapeInline(cell.confidenceReason)})` : ""}`);
       lines.push(`- Critic flagged: ${cell?.contested ? "yes" : "no"}`);
+      if (cell?.providerAgreement) lines.push(`- Provider agreement: ${markdownEscapeInline(cell.providerAgreement)}`);
       if (cell?.analystDecision) lines.push(`- Analyst decision: ${markdownEscapeInline(cell.analystDecision)}`);
       if (cell?.analystNote) lines.push(`- Analyst note: ${markdownEscapeInline(cell.analystNote)}`);
       lines.push("");
       lines.push(markdownTextBlock(cell?.value || "No value."));
       lines.push("");
+      if (markdownTextBlock(cell?.full || "")) {
+        lines.push("Detail:");
+        lines.push(markdownTextBlock(cell?.full || ""));
+        lines.push("");
+      }
+      const supportingArgs = Array.isArray(cell?.arguments?.supporting) ? cell.arguments.supporting : [];
+      const limitingArgs = Array.isArray(cell?.arguments?.limiting) ? cell.arguments.limiting : [];
+      if (supportingArgs.length) {
+        lines.push("Supporting arguments:");
+        supportingArgs.forEach((entry) => {
+          lines.push(`- ${markdownEscapeInline(entry?.claim || "Claim")}: ${markdownEscapeInline(entry?.detail || "")}`);
+        });
+        lines.push("");
+      }
+      if (limitingArgs.length) {
+        lines.push("Limiting arguments:");
+        limitingArgs.forEach((entry) => {
+          lines.push(`- ${markdownEscapeInline(entry?.claim || "Claim")}: ${markdownEscapeInline(entry?.detail || "")}`);
+        });
+        lines.push("");
+      }
+      if (markdownTextBlock(cell?.risks || "")) {
+        lines.push(`Risks: ${markdownEscapeInline(markdownTextBlock(cell?.risks || ""))}`);
+        lines.push("");
+      }
       lines.push("Sources:");
       lines.push(markdownSourcesSection(cell?.sources || []));
       lines.push("");
@@ -2136,6 +2280,28 @@ function buildMatrixMarkdown(uc) {
     lines.push("");
     lines.push(crossMatrixSummary);
     lines.push("");
+  }
+
+  const executiveSummary = matrix?.executiveSummary || {};
+  const summaryFields = [
+    ["Decision Answer", executiveSummary?.decisionAnswer],
+    ["Closest Threats", executiveSummary?.closestThreats],
+    ["Whitespace", executiveSummary?.whitespace],
+    ["Strategic Classification", executiveSummary?.strategicClassification],
+    ["Key Risks", executiveSummary?.keyRisks],
+    ["Decision Implications", executiveSummary?.decisionImplications],
+    ["Uncertainty Notes", executiveSummary?.uncertaintyNotes],
+    ["Provider Agreement Highlights", executiveSummary?.providerAgreementHighlights],
+  ].filter((entry) => markdownTextBlock(entry[1]));
+  if (summaryFields.length) {
+    lines.push("## Executive Summary");
+    lines.push("");
+    summaryFields.forEach(([label, value]) => {
+      lines.push(`### ${markdownEscapeInline(label)}`);
+      lines.push("");
+      lines.push(markdownTextBlock(value || ""));
+      lines.push("");
+    });
   }
 
   const discover = uc?.discover || {};

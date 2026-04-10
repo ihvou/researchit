@@ -29,6 +29,11 @@ function matrixCell(cell) {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <ConfidenceBadge level={cell.confidence} reason={cell.confidenceReason} compact={true} />
+        {cell.providerAgreement ? (
+          <span style={{ fontSize: 10, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            {cell.providerAgreement}
+          </span>
+        ) : null}
         {cell.sources?.length ? (
           <span style={{ fontSize: 10, color: "var(--ck-muted)" }}>
             {cell.sources.length} source{cell.sources.length === 1 ? "" : "s"}

@@ -6,6 +6,8 @@ import DiscoverTab from "./DiscoverTab";
 import ProgressTab from "./ProgressTab";
 import MatrixTab from "./MatrixTab";
 import MatrixDebateTab from "./MatrixDebateTab";
+import MatrixSummaryTab from "./MatrixSummaryTab";
+import RunDiagnosticsPanel from "./RunDiagnosticsPanel";
 
 const PHASE_LABELS = {
   analyst: "Analyst researching...",
@@ -21,11 +23,17 @@ const PHASE_LABELS = {
   matrix_web: "Running web-assisted matrix pass...",
   matrix_reconcile: "Reconciling baseline and web drafts...",
   matrix_targeted: "Running targeted low-confidence recovery...",
+  matrix_deep_assist: "Merging Deep Assist provider evidence...",
   matrix_evidence: "Collecting matrix evidence...",
   matrix_critic: "Critic auditing matrix...",
   matrix_response: "Analyst responding to critic flags...",
+  matrix_consistency: "Cross-subject consistency audit...",
+  matrix_derived: "Generating derived attributes...",
+  matrix_synthesis: "Building executive synthesis...",
   matrix_summary: "Finalizing matrix...",
   matrix_discover: "Discovering missing subjects/attributes...",
+  deep_assist_collect: "Collecting Deep Assist evidence...",
+  deep_assist_merge: "Merging Deep Assist provider outputs...",
 };
 
 export default function ExpandedRow({
@@ -43,7 +51,8 @@ export default function ExpandedRow({
   outputMode = "scorecard",
 }) {
   const isMatrixMode = outputMode === "matrix";
-  const defaultTab = isMatrixMode ? "matrix" : "dimensions";
+  const isDeepAssist = uc?.analysisMeta?.evidenceMode === "deep-assist";
+  const defaultTab = isMatrixMode ? "summary" : "dimensions";
   const [tab, setTab] = useState(defaultTab);
 
   useEffect(() => {
@@ -58,6 +67,7 @@ export default function ExpandedRow({
 
   const tabs = isMatrixMode
     ? [
+      { id: "summary", label: "Summary" },
       { id: "matrix", label: "Matrix" },
       { id: "debate", label: "Debate & Challenges" },
       { id: "progress", label: "Progress" },
@@ -98,8 +108,12 @@ export default function ExpandedRow({
         <div style={{ padding: "7px 16px", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", minWidth: 0 }}>
           <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
             {isMatrixMode
-              ? "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence"
-              : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence"}
+              ? (isDeepAssist
+                ? "Matrix pipeline + Deep Assist enrichment | Per-cell provider agreement and confidence calibration"
+                : "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence")
+              : (isDeepAssist
+                ? "Deep Assist scorecard flow | Multi-provider evidence merge before critic and finalization"
+                : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence")}
             {!isMatrixMode && uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Low-confidence cycle: {uc.analysisMeta.lowConfidenceInitialCount} scanned, {uc.analysisMeta.lowConfidenceUpgradedCount || 0} upgraded, {uc.analysisMeta.lowConfidenceValidatedLowCount || 0} validated low
@@ -134,6 +148,24 @@ export default function ExpandedRow({
           <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px", color: "var(--ck-text)", fontSize: 13, marginBottom: 14 }}>
             Warning: {uc.errorMsg}
           </div>
+        )}
+        {uc.analysisMeta?.qualityGrade === "degraded" && (
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px", color: "var(--ck-text)", fontSize: 12, marginBottom: 14, lineHeight: 1.55 }}>
+            This research completed in degraded quality mode.
+            {Array.isArray(uc.analysisMeta?.degradedReasons) && uc.analysisMeta.degradedReasons.length ? (
+              <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
+                {uc.analysisMeta.degradedReasons.map((reason, idx) => (
+                  <li key={`degraded-${idx}`}>{reason?.detail || reason?.code || "Unknown quality guard trigger."}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        )}
+        {(uc.status === "complete" || uc.status === "error") && (
+          <RunDiagnosticsPanel uc={uc} outputMode={outputMode} />
+        )}
+        {tab === "summary" && isMatrixMode && (
+          <MatrixSummaryTab uc={uc} />
         )}
         {tab === "matrix" && (
           <MatrixTab uc={uc} />

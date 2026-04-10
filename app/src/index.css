@@ -130,6 +130,33 @@ a:hover {
   flex: 1 0 auto;
 }
 
+.setup-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.26);
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.setup-modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--ck-surface);
+  border: 1px solid var(--ck-line-strong);
+  border-radius: 2px;
+  padding: 14px;
+}
+
+.setup-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .app-header {
   background: var(--ck-surface);
   border-bottom: 1px solid var(--ck-line);
@@ -721,6 +748,13 @@ a:hover {
 }
 
 @media (max-width: 900px) {
+  .setup-modal-backdrop {
+    padding: 10px;
+  }
+  .setup-modal {
+    max-height: calc(100vh - 20px);
+    padding: 12px;
+  }
   .app-header {
     padding: 10px 12px;
   }

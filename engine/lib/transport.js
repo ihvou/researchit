@@ -4,7 +4,7 @@ function ensureFunction(callFn) {
   }
 }
 
-const DEFAULT_RETRYABLE_STATUS = [408, 409, 425, 429, 500, 502, 503, 504];
+export const DEFAULT_RETRYABLE_STATUS = [408, 409, 425, 429, 500, 502, 503, 504];
 const DEFAULT_POLICY_BY_ROLE = {
   analyst: {
     timeoutMs: 55000,

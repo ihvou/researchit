@@ -44,12 +44,79 @@ Rules:
 - Return ONLY valid JSON using the exact schema.
 `;
 
+const DEFAULT_DEEP_ASSIST_PROVIDERS = ["chatgpt", "claude", "gemini"];
+
+function normalizeEvidenceMode(value) {
+  return cleanText(value).toLowerCase() === "deep-assist" ? "deep-assist" : "native";
+}
+
+function normalizeResearchSetupContext(raw = {}) {
+  const setup = raw && typeof raw === "object" ? raw : {};
+  return {
+    decisionContext: cleanText(setup.decisionContext),
+    userRoleContext: cleanText(setup.userRoleContext),
+  };
+}
+
+function buildResearchSetupContextBlock(setup = {}) {
+  const context = normalizeResearchSetupContext(setup);
+  return [
+    context.decisionContext ? `Decision context: ${context.decisionContext}` : "Decision context: not provided.",
+    context.userRoleContext ? `User role/context: ${context.userRoleContext}` : "User role/context: not provided.",
+  ].join("\n");
+}
+
+function normalizeDeepAssistOptions(raw = {}) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const providers = Array.isArray(input.providers)
+    ? input.providers.map((value) => cleanText(value).toLowerCase()).filter(Boolean)
+    : [];
+  const selected = providers.length ? [...new Set(providers)] : DEFAULT_DEEP_ASSIST_PROVIDERS;
+  return {
+    providers: selected,
+    minProviders: Math.max(1, Math.min(selected.length, Number(input.minProviders) || 2)),
+    maxWaitMs: Math.max(20000, Number(input.maxWaitMs) || 300000),
+    maxRetries: Math.max(0, Math.min(3, Number(input.maxRetries) || 1)),
+  };
+}
+
+function deepAssistProviderLabel(providerId) {
+  const key = cleanText(providerId).toLowerCase();
+  if (key === "chatgpt") return "ChatGPT";
+  if (key === "claude") return "Claude";
+  if (key === "gemini") return "Gemini";
+  return key || "Provider";
+}
+
+function ensureDegradedMeta(analysisMeta = {}) {
+  if (!analysisMeta || typeof analysisMeta !== "object") return;
+  if (!analysisMeta.qualityGrade) analysisMeta.qualityGrade = "standard";
+  if (!Array.isArray(analysisMeta.degradedReasons)) analysisMeta.degradedReasons = [];
+}
+
+function markDegraded(analysisMeta = {}, reasonCode = "quality_guard", detail = "") {
+  ensureDegradedMeta(analysisMeta);
+  analysisMeta.qualityGrade = "degraded";
+  const entry = { code: cleanText(reasonCode) || "quality_guard", detail: cleanText(detail) };
+  const exists = analysisMeta.degradedReasons.some((item) => item?.code === entry.code && item?.detail === entry.detail);
+  if (!exists) analysisMeta.degradedReasons.push(entry);
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
 function cleanText(value) {
   return String(value || "").trim();
+}
+
+function normalizeStringList(values, maxItems = 6, maxLen = 180) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((item) => cleanText(item))
+    .filter(Boolean)
+    .slice(0, maxItems)
+    .map((item) => item.slice(0, maxLen));
 }
 
 function clip(value, max = 260) {
@@ -123,24 +190,50 @@ function normalizeMatchText(value) {
     .trim();
 }
 
+function tokenizeMatchText(value = "") {
+  return normalizeMatchText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function fuzzyQuoteCoverage(quote = "", pageText = "") {
+  const quoteTokens = tokenizeMatchText(quote);
+  if (quoteTokens.length < 5) return 0;
+  const pageTokenSet = new Set(tokenizeMatchText(pageText));
+  if (!pageTokenSet.size) return 0;
+  let hits = 0;
+  quoteTokens.forEach((token) => {
+    if (pageTokenSet.has(token)) hits += 1;
+  });
+  return hits / quoteTokens.length;
+}
+
 function quotedClaimFoundInPage(source = {}, snapshot = null) {
   const pageText = normalizeMatchText(`${snapshot?.title || ""} ${snapshot?.text || ""}`);
-  if (!pageText) return false;
+  if (!pageText) return { verified: false, matchType: "none", quoteCoverage: 0 };
 
   const quote = normalizeMatchText(source.quote);
+  const name = normalizeMatchText(source.name);
+  let matchType = "none";
+  let quoteCoverage = 0;
   if (quote.length >= 12) {
-    if (pageText.includes(quote)) return true;
+    if (pageText.includes(quote)) return { verified: true, matchType: "exact_quote", quoteCoverage: 1 };
     const parts = quote.split(" ").filter(Boolean);
     if (parts.length >= 6) {
       const head = parts.slice(0, 6).join(" ");
       const tail = parts.slice(-6).join(" ");
-      if (pageText.includes(head) && pageText.includes(tail)) return true;
+      if (pageText.includes(head) && pageText.includes(tail)) return { verified: true, matchType: "span_quote", quoteCoverage: 0.8 };
     }
+    quoteCoverage = fuzzyQuoteCoverage(quote, pageText);
+    if (quoteCoverage >= 0.72) return { verified: true, matchType: "fuzzy_quote", quoteCoverage };
+    if (quoteCoverage > 0) matchType = "partial_quote";
   }
 
-  const name = normalizeMatchText(source.name);
-  if (name.length >= 4 && pageText.includes(name)) return true;
-  return false;
+  if (name.length >= 4 && pageText.includes(name)) {
+    return { verified: false, matchType: matchType === "partial_quote" ? "partial_quote_name" : "name_only", quoteCoverage };
+  }
+  return { verified: false, matchType, quoteCoverage };
 }
 
 function normalizeSubjectCandidates(raw) {
@@ -269,14 +362,50 @@ function buildCellKey(subjectId, attributeId) {
   return `${subjectId}::${attributeId}`;
 }
 
+function tokenSet(text = "") {
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]+/g, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+  );
+}
+
+function tokenOverlapScore(a = "", b = "") {
+  const setA = tokenSet(a);
+  const setB = tokenSet(b);
+  if (!setA.size || !setB.size) return 0;
+  let intersection = 0;
+  setA.forEach((token) => {
+    if (setB.has(token)) intersection += 1;
+  });
+  const union = new Set([...setA, ...setB]).size || 1;
+  return intersection / union;
+}
+
+function fuzzyLookupId(raw, labelMap = new Map()) {
+  const source = cleanText(raw).toLowerCase();
+  if (!source || !labelMap?.size) return "";
+  let best = { id: "", score: 0 };
+  for (const [label, id] of labelMap.entries()) {
+    const score = tokenOverlapScore(source, label);
+    if (score > best.score) {
+      best = { id, score };
+    }
+  }
+  return best.score >= 0.45 ? best.id : "";
+}
+
 function matchSubjectId(raw, subjectsByLabel) {
   const key = cleanText(raw).toLowerCase();
-  return subjectsByLabel.get(key) || "";
+  return subjectsByLabel.get(key) || fuzzyLookupId(key, subjectsByLabel) || "";
 }
 
 function matchAttributeId(raw, attributesByLabel) {
   const key = cleanText(raw).toLowerCase();
-  return attributesByLabel.get(key) || "";
+  return attributesByLabel.get(key) || fuzzyLookupId(key, attributesByLabel) || "";
 }
 
 function roleOptions(config, role) {
@@ -287,6 +416,25 @@ function roleOptions(config, role) {
   if (cleanText(model.webSearchModel)) options.webSearchModel = cleanText(model.webSearchModel);
   if (cleanText(model.baseUrl)) options.baseUrl = cleanText(model.baseUrl);
   return options;
+}
+
+function capabilityOptions(config, capability, fallbackRole = "analyst") {
+  const capCfg = config?.models?.[capability] || {};
+  const hasCapabilityConfig = !!(
+    cleanText(capCfg.provider)
+    || cleanText(capCfg.model)
+    || cleanText(capCfg.webSearchModel)
+    || cleanText(capCfg.baseUrl)
+  );
+  if (!hasCapabilityConfig && cleanText(capability).toLowerCase() === "retrieval") {
+    return {};
+  }
+  const base = roleOptions(config, fallbackRole);
+  if (!base.provider && cleanText(capCfg.provider)) base.provider = cleanText(capCfg.provider);
+  if (!base.model && cleanText(capCfg.model)) base.model = cleanText(capCfg.model);
+  if (!base.webSearchModel && cleanText(capCfg.webSearchModel)) base.webSearchModel = cleanText(capCfg.webSearchModel);
+  if (!base.baseUrl && cleanText(capCfg.baseUrl)) base.baseUrl = cleanText(capCfg.baseUrl);
+  return base;
 }
 
 function extractJson(text, fallback = {}) {
@@ -347,6 +495,9 @@ function createInitialState(input) {
   if (!id || !desc) {
     throw new Error("runAnalysis requires input.id and input.description.");
   }
+  const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const deepAssist = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
+  const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
   return {
     id,
     rawInput: desc,
@@ -361,10 +512,12 @@ function createInitialState(input) {
     errorMsg: null,
     discover: null,
     origin: input?.origin || null,
+    researchSetup,
     outputMode: "matrix",
     matrix: null,
     analysisMeta: {
-      analysisMode: "matrix",
+      analysisMode: evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix",
+      evidenceMode,
       liveSearchRequested: true,
       liveSearchUsed: false,
       webSearchCalls: 0,
@@ -388,6 +541,13 @@ function createInitialState(input) {
       lowConfidenceTargetedSearchUsed: false,
       lowConfidenceTargetedWebSearchCalls: 0,
       lowConfidenceTargetedFallbackReason: null,
+      lowConfidenceRoundRobinApplied: false,
+      lowConfidenceBudgetCells: 0,
+      lowConfidenceBudgetUsed: 0,
+      lowConfidenceDroppedByBudget: 0,
+      targetedRetrievalNiche: "",
+      targetedRetrievalAliases: [],
+      targetedCellDiagnostics: [],
       subjectDiscoveryRequested: false,
       subjectDiscoveryUsed: false,
       subjectDiscoveryWebSearchCalls: 0,
@@ -397,6 +557,9 @@ function createInitialState(input) {
       sourceVerificationVerified: 0,
       sourceVerificationNotFound: 0,
       sourceVerificationFetchFailed: 0,
+      sourceVerificationInvalidUrl: 0,
+      sourceVerificationPartialMatch: 0,
+      sourceVerificationNameOnly: 0,
       sourceVerificationPenalizedCells: 0,
       sourceVerificationSkippedReason: null,
       matrixHybridStats: null,
@@ -417,7 +580,42 @@ function createInitialState(input) {
       matrixCoverageSLAPassed: false,
       matrixCoverageSLAFailureReason: "",
       matrixCoverageSLA: null,
+      qualityGrade: "standard",
+      degradedReasons: [],
+      deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
+      deepAssistProvidersSucceeded: 0,
+      deepAssistProvidersFailed: 0,
+      deepAssistProviderRuns: [],
+      sourceDiversityConfidenceCaps: 0,
+      staleEvidenceObservedCells: 0,
+      staleEvidenceRatioSum: 0,
+      staleEvidenceConfidenceCaps: 0,
+      verificationConfidenceCaps: 0,
+      urlCoverageConfidenceCaps: 0,
+      zeroSourceConfidenceCaps: 0,
+      providerContributions: {},
+      decisionContext: researchSetup.decisionContext,
+      userRoleContext: researchSetup.userRoleContext,
     },
+  };
+}
+
+function normalizeMatrixCellArguments(raw = {}) {
+  const normalizeGroup = (items = [], prefix = "arg") => {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((entry, idx) => ({
+        id: cleanText(entry?.id || `${prefix}-${idx + 1}`) || `${prefix}-${idx + 1}`,
+        claim: cleanText(entry?.claim),
+        detail: cleanText(entry?.detail),
+        sources: normalizeSourceList(entry?.sources),
+      }))
+      .filter((entry) => entry.claim || entry.detail)
+      .slice(0, 6);
+  };
+  return {
+    supporting: normalizeGroup(raw?.supporting, "sup"),
+    limiting: normalizeGroup(raw?.limiting, "lim"),
   };
 }
 
@@ -442,6 +640,9 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
       subjectId,
       attributeId,
       value: cleanText(cell?.value || cell?.summary || "No reliable evidence found."),
+      full: cleanText(cell?.full || cell?.detail || cell?.value || cell?.summary || ""),
+      risks: cleanText(cell?.risks || ""),
+      arguments: normalizeMatrixCellArguments(cell?.arguments || {}),
       confidence: normalizeConfidence(cell?.confidence),
       confidenceReason: cleanText(cell?.confidenceReason || ""),
       sources: normalizeSourceList(cell?.sources),
@@ -449,6 +650,19 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
       criticNote: "",
       analystDecision: "",
       analystNote: "",
+      providerAgreement: cleanText(cell?.providerAgreement).toLowerCase(),
+      providerSignals: Array.isArray(cell?.providerSignals)
+        ? cell.providerSignals
+          .map((entry) => ({
+            provider: cleanText(entry?.provider || entry?.providerId),
+            providerLabel: cleanText(entry?.providerLabel || entry?.provider),
+            confidence: normalizeConfidence(entry?.confidence),
+            confidenceReason: cleanText(entry?.confidenceReason),
+            sourceCount: Number(entry?.sourceCount) || 0,
+            brief: cleanText(entry?.brief),
+          }))
+          .filter((entry) => entry.provider || entry.providerLabel)
+        : [],
     });
   }
 
@@ -464,6 +678,9 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
           subjectId: subject.id,
           attributeId: attribute.id,
           value: "No reliable evidence found for this cell.",
+          full: "",
+          risks: "",
+          arguments: { supporting: [], limiting: [] },
           confidence: "low",
           confidenceReason: "Insufficient evidence returned.",
           sources: [],
@@ -471,6 +688,8 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
           criticNote: "",
           analystDecision: "",
           analystNote: "",
+          providerAgreement: "none",
+          providerSignals: [],
         });
       }
     }
@@ -491,6 +710,18 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
     cells,
     subjectSummaries,
     crossMatrixSummary: cleanText(raw?.crossMatrixSummary || raw?.summary || ""),
+    executiveSummary: raw?.executiveSummary && typeof raw.executiveSummary === "object"
+      ? {
+          decisionAnswer: cleanText(raw.executiveSummary.decisionAnswer),
+          closestThreats: cleanText(raw.executiveSummary.closestThreats),
+          whitespace: cleanText(raw.executiveSummary.whitespace),
+          strategicClassification: cleanText(raw.executiveSummary.strategicClassification),
+          keyRisks: cleanText(raw.executiveSummary.keyRisks),
+          decisionImplications: cleanText(raw.executiveSummary.decisionImplications),
+          uncertaintyNotes: cleanText(raw.executiveSummary.uncertaintyNotes),
+          providerAgreementHighlights: cleanText(raw.executiveSummary.providerAgreementHighlights),
+        }
+      : null,
   };
 }
 
@@ -516,6 +747,9 @@ function normalizeAnalystResponses(raw = {}, subjects = [], attributes = []) {
       attributeId,
       decision,
       value: cleanText(entry?.value || entry?.updatedValue || ""),
+      full: cleanText(entry?.full || entry?.detail || ""),
+      risks: cleanText(entry?.risks || ""),
+      arguments: normalizeMatrixCellArguments(entry?.arguments || {}),
       confidence: normalizeConfidence(entry?.confidence),
       confidenceReason: cleanText(entry?.confidenceReason || ""),
       sources: normalizeSourceList(entry?.sources),
@@ -848,6 +1082,9 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
         verified: 0,
         notFound: 0,
         fetchFailed: 0,
+        invalidUrl: 0,
+        partial: 0,
+        nameOnly: 0,
       },
     };
   }
@@ -857,13 +1094,21 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
     verified: 0,
     notFound: 0,
     fetchFailed: 0,
+    invalidUrl: 0,
+    partial: 0,
+    nameOnly: 0,
   };
 
   const out = [];
   for (const source of normalizedSources) {
     const normalizedUrl = normalizeHttpUrl(source.url);
     if (!normalizedUrl) {
-      out.push(source);
+      counters.invalidUrl += 1;
+      out.push({
+        ...source,
+        verificationStatus: "invalid_url",
+        verificationNote: "Source URL is missing or invalid; evidence cannot be quote-verified.",
+      });
       continue;
     }
 
@@ -880,22 +1125,29 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
       continue;
     }
 
-    const found = quotedClaimFoundInPage(source, fetched.snapshot);
-    if (found) {
+    const match = quotedClaimFoundInPage(source, fetched.snapshot);
+    if (match.verified) {
       counters.verified += 1;
       out.push({
         ...source,
         url: normalizedUrl,
         verificationStatus: "verified_in_page",
-        verificationNote: "Quoted claim text appears in fetched source content.",
+        verificationNote: `Quoted claim matched in fetched page (${match.matchType}).`,
       });
     } else {
+      if (match.matchType === "name_only" || match.matchType === "partial_quote_name") {
+        counters.nameOnly += 1;
+      } else if (String(match.matchType || "").startsWith("partial_quote")) {
+        counters.partial += 1;
+      }
       counters.notFound += 1;
       out.push({
         ...source,
         url: normalizedUrl,
-        verificationStatus: "not_found_in_page",
-        verificationNote: "Quoted claim text was not found in fetched source content.",
+        verificationStatus: match.matchType === "name_only" ? "name_only_in_page" : "not_found_in_page",
+        verificationNote: match.matchType === "name_only"
+          ? "Source name appears in fetched page, but quoted claim text was not verified."
+          : "Quoted claim text was not found in fetched source content.",
       });
     }
   }
@@ -904,6 +1156,9 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
   analysisMeta.sourceVerificationVerified += counters.verified;
   analysisMeta.sourceVerificationNotFound += counters.notFound;
   analysisMeta.sourceVerificationFetchFailed += counters.fetchFailed;
+  analysisMeta.sourceVerificationInvalidUrl = Number(analysisMeta.sourceVerificationInvalidUrl || 0) + counters.invalidUrl;
+  analysisMeta.sourceVerificationPartialMatch = Number(analysisMeta.sourceVerificationPartialMatch || 0) + counters.partial;
+  analysisMeta.sourceVerificationNameOnly = Number(analysisMeta.sourceVerificationNameOnly || 0) + counters.nameOnly;
 
   return { sources: out, counters };
 }
@@ -926,6 +1181,88 @@ function applyCellVerificationPenalty(cell, counters, analysisMeta) {
   cell.confidenceReason = [previous, note].filter(Boolean).join(" ");
 }
 
+function extractEvidenceYearFromSource(source = {}) {
+  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
+  const matches = String(text).match(/\b(20\d{2})\b/g);
+  if (!matches || !matches.length) return null;
+  const years = matches.map((value) => Number(value)).filter((year) => year >= 2000 && year <= 2099);
+  if (!years.length) return null;
+  return Math.max(...years);
+}
+
+function applyCellQualityCaps(cell = {}, analysisMeta = {}) {
+  const sources = normalizeSourceList(cell.sources);
+  const sourceCount = sources.length;
+  const withUrl = sources.filter((source) => normalizeHttpUrl(source.url)).length;
+  const independent = sources.filter((source) => source.sourceType === "independent").length;
+  let confidence = normalizeConfidence(cell.confidence);
+
+  if (sourceCount > 0 && independent < 1 && confidenceRank(confidence) > confidenceRank("medium")) {
+    confidence = "medium";
+    analysisMeta.sourceDiversityConfidenceCaps = Number(analysisMeta.sourceDiversityConfidenceCaps || 0) + 1;
+    const note = "Confidence capped: no independent corroborating source was cited.";
+    cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+  }
+
+  const years = sources
+    .map((source) => extractEvidenceYearFromSource(source))
+    .filter((year) => Number.isFinite(year));
+  const currentYear = new Date().getFullYear();
+  const staleCutoff = currentYear - 2;
+  const staleCount = years.filter((year) => year < staleCutoff).length;
+  const staleRatio = years.length ? staleCount / years.length : 0;
+  cell.staleEvidenceRatio = staleRatio;
+  analysisMeta.staleEvidenceObservedCells = Number(analysisMeta.staleEvidenceObservedCells || 0) + 1;
+  analysisMeta.staleEvidenceRatioSum = Number(analysisMeta.staleEvidenceRatioSum || 0) + staleRatio;
+
+  if (staleRatio >= 0.6 && confidenceRank(confidence) > confidenceRank("low")) {
+    const previous = confidence;
+    confidence = confidenceFromRank(confidenceRank(confidence) - 1, confidence);
+    if (confidence !== previous) {
+      analysisMeta.staleEvidenceConfidenceCaps = Number(analysisMeta.staleEvidenceConfidenceCaps || 0) + 1;
+      const note = `Confidence reduced: evidence appears mostly stale (pre-${staleCutoff + 1}).`;
+      cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+    }
+  }
+
+  if (!sourceCount && confidenceRank(confidence) > confidenceRank("low")) {
+    confidence = "low";
+    analysisMeta.zeroSourceConfidenceCaps = Number(analysisMeta.zeroSourceConfidenceCaps || 0) + 1;
+    const note = "Confidence reduced: no cited sources were returned for this cell.";
+    cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+  }
+
+  if (sourceCount > 0 && confidenceRank(confidence) > confidenceRank("medium")) {
+    const verifiedInPage = sources.filter((source) => source.verificationStatus === "verified_in_page").length;
+    const verificationRatio = sourceCount ? (verifiedInPage / sourceCount) : 0;
+    if (verificationRatio < 0.3) {
+      confidence = "medium";
+      analysisMeta.verificationConfidenceCaps = Number(analysisMeta.verificationConfidenceCaps || 0) + 1;
+      const note = "Confidence capped: quote verification coverage is limited.";
+      cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+    }
+  }
+
+  if (sourceCount > 0 && confidenceRank(confidence) > confidenceRank("medium")) {
+    const urlCoverage = sourceCount ? (withUrl / sourceCount) : 0;
+    if (urlCoverage < 0.6) {
+      confidence = "medium";
+      analysisMeta.urlCoverageConfidenceCaps = Number(analysisMeta.urlCoverageConfidenceCaps || 0) + 1;
+      const note = "Confidence capped: too few cited sources include verifiable URLs.";
+      cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+    }
+  }
+
+  cell.sourceMix = {
+    total: sourceCount,
+    withUrl,
+    independent,
+    vendor: sources.filter((source) => source.sourceType === "vendor").length,
+    press: sources.filter((source) => source.sourceType === "press").length,
+  };
+  cell.confidence = confidence;
+}
+
 async function verifyMatrixCellSources(matrix, analysisMeta, sourceFetchCache, options = {}) {
   const penalizeConfidence = options?.penalizeConfidence !== false;
   const transport = options?.transport || null;
@@ -936,6 +1273,7 @@ async function verifyMatrixCellSources(matrix, analysisMeta, sourceFetchCache, o
     cell.sources = checked.sources;
     if (penalizeConfidence) {
       applyCellVerificationPenalty(cell, checked.counters, analysisMeta);
+      applyCellQualityCaps(cell, analysisMeta);
     }
   }
 
@@ -949,16 +1287,21 @@ function buildMatrixEvidencePrompt({
   attributes,
   passLabel,
   liveSearch,
+  researchSetup = {},
 }) {
   const liveSearchBlock = liveSearch
     ? "Use live web search to ground evidence in current external sources and include real URLs when possible."
     : "Live web search is disabled for this pass. Use only internal model memory and explicitly mark uncertainty.";
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `Research brief:
 ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Pass:
 ${passLabel}
@@ -978,6 +1321,12 @@ Return JSON only:
       "subjectId": "<subject id from list>",
       "attributeId": "<attribute id from list>",
       "value": "<2-4 sentence evidence-based finding>",
+      "full": "<1-2 short paragraphs with concrete detail>",
+      "risks": "<1-2 sentences on key caveats or failure modes>",
+      "arguments": {
+        "supporting": [{"id":"sup-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}],
+        "limiting": [{"id":"lim-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}]
+      },
       "confidence": "<high|medium|low>",
       "confidenceReason": "<short reason>",
       "sources": [{"name":"...","quote":"<max 20 words>","url":"...","sourceType":"<vendor|press|independent>"}]
@@ -998,6 +1347,7 @@ function buildMatrixReconcilePrompt({
   baseline,
   web,
   qualityGuard = null,
+  researchSetup = {},
 }) {
   const guard = qualityGuard && typeof qualityGuard === "object" ? qualityGuard : null;
   const guardNotes = Array.isArray(guard?.notes)
@@ -1015,6 +1365,7 @@ function buildMatrixReconcilePrompt({
 - Guard notes:
 ${guardNotes.length ? guardNotes.map((note) => `  - ${note}`).join("\n") : "  - Previous merge underused available draft disagreement signals."}\n`
     : "";
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `Merge two matrix drafts for the same research question.
 
@@ -1023,6 +1374,9 @@ ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Subjects:
 ${subjects.map((subject, idx) => `${idx + 1}. ${subject.label}`).join("\n")}
@@ -1047,7 +1401,8 @@ ${qualityGuardBlock}
 Return JSON only with the same schema as analyst pass.`;
 }
 
-function buildLowConfidenceQueryPrompt({ rawInput, decisionQuestion, subject, attribute, cell }) {
+function buildLowConfidenceQueryPrompt({ rawInput, decisionQuestion, subject, attribute, cell, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Generate targeted search queries for one low-confidence matrix cell.
 
 Research brief:
@@ -1055,6 +1410,9 @@ ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Cell under review:
 - Subject: ${subject.label}
@@ -1074,7 +1432,8 @@ Return JSON only:
 }`;
 }
 
-function buildLowConfidenceSearchPrompt({ rawInput, decisionQuestion, subject, attribute, queryPlan, cell }) {
+function buildLowConfidenceSearchPrompt({ rawInput, decisionQuestion, subject, attribute, queryPlan, cell, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Run focused live web research for one low-confidence matrix cell.
 
 Research brief:
@@ -1082,6 +1441,9 @@ ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Cell:
 - Subject: ${subject.label}
@@ -1111,7 +1473,8 @@ Return JSON only:
 }`;
 }
 
-function buildLowConfidenceRescorePrompt({ rawInput, decisionQuestion, subject, attribute, cell, queryPlan, harvest }) {
+function buildLowConfidenceRescorePrompt({ rawInput, decisionQuestion, subject, attribute, cell, queryPlan, harvest, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Re-evaluate one matrix cell using targeted findings.
 
 Research brief:
@@ -1119,6 +1482,9 @@ ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Cell:
 - Subject: ${subject.label}
@@ -1140,18 +1506,157 @@ Rules:
 Return JSON only:
 {
   "value": "<updated finding>",
+  "full": "<updated deep detail>",
+  "risks": "<updated caveats>",
+  "arguments": {
+    "supporting": [{"id":"sup-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}],
+    "limiting": [{"id":"lim-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}]
+  },
   "confidence": "<high|medium|low>",
   "confidenceReason": "<1 sentence>",
   "sources": [{"name":"...","quote":"<max 20 words>","url":"...","sourceType":"<vendor|press|independent>"}]
 }`;
 }
 
-function buildMatrixCriticPrompt({ rawInput, decisionQuestion, subjects, attributes, matrix }) {
+function buildMatrixQueryStrategistPrompt({ rawInput, decisionQuestion, subjects, attributes, candidateCells = [], researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  return `You are a retrieval strategist for a matrix research workflow.
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Subjects:
+${subjects.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
+
+Attributes:
+${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${attribute.brief ? ` (${attribute.brief})` : ""}`).join("\n")}
+
+Low-confidence candidate cells:
+${candidateCells.map((cell) => `- ${cell.subjectId} x ${cell.attributeId} (${normalizeConfidence(cell.confidence)})`).join("\n") || "- none"}
+
+Task:
+- Infer niche/domain and alias/rebrand/acquisition hints that improve retrieval recall.
+- Provide query seeds and source targets for the low-confidence cells.
+- Keep outputs concise and factual.
+
+Return JSON only:
+{
+  "niche": "<short niche label>",
+  "aliases": ["<alias or rebrand hint>"],
+  "cellHints": [
+    {
+      "subjectId": "<subject id>",
+      "attributeId": "<attribute id>",
+      "querySeeds": ["<query seed>"],
+      "sourceTargets": ["<source target>"]
+    }
+  ]
+}`;
+}
+
+function normalizeMatrixStrategistHints(payload = {}, subjects = [], attributes = []) {
+  const validSubjects = new Set(subjects.map((subject) => subject.id));
+  const validAttributes = new Set(attributes.map((attribute) => attribute.id));
+  const out = {};
+  const rawHints = Array.isArray(payload?.cellHints) ? payload.cellHints : [];
+  rawHints.forEach((entry) => {
+    const subjectId = cleanText(entry?.subjectId);
+    const attributeId = cleanText(entry?.attributeId);
+    if (!validSubjects.has(subjectId) || !validAttributes.has(attributeId)) return;
+    const key = buildCellKey(subjectId, attributeId);
+    out[key] = {
+      querySeeds: normalizeStringList(entry?.querySeeds, 4, 170),
+      sourceTargets: normalizeStringList(entry?.sourceTargets, 4, 170),
+    };
+  });
+  return {
+    niche: cleanText(payload?.niche),
+    aliases: normalizeStringList(payload?.aliases, 8, 120),
+    cellHints: out,
+  };
+}
+
+function matrixCellPressure(cell = {}) {
+  const confidence = normalizeConfidence(cell.confidence);
+  const sourceCount = normalizeSourceList(cell.sources).length;
+  let score = 0;
+  if (confidence === "low") score += 4;
+  else if (confidence === "medium") score += 2;
+  if (sourceCount === 0) score += 3;
+  else if (sourceCount < 2) score += 2;
+  else if (sourceCount < 4) score += 1;
+  if (cleanText(cell?.confidenceReason).toLowerCase().includes("uncertain")) score += 1;
+  return score;
+}
+
+function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds = new Set()) {
+  const candidates = cells
+    .map((cell) => ({ ...cell, _pressure: matrixCellPressure(cell) }))
+    .filter((cell) => {
+      if (derivedAttributeIds?.has?.(cell.attributeId)) return false;
+      const confidence = normalizeConfidence(cell.confidence);
+      const sourceCount = normalizeSourceList(cell.sources).length;
+      if (confidence === "low") return true;
+      if (confidence === "medium" && sourceCount < 2) return true;
+      return false;
+    });
+
+  const maxBudget = Number(limits?.matrixTargetedBudgetCells);
+  const budgetCells = Number.isFinite(maxBudget)
+    ? Math.max(1, Math.min(candidates.length || 1, Math.round(maxBudget)))
+    : Math.min(candidates.length || 0, Math.max(6, Math.min(10, candidates.length)));
+
+  const buckets = new Map();
+  candidates
+    .sort((a, b) => b._pressure - a._pressure || normalizeSourceList(a.sources).length - normalizeSourceList(b.sources).length)
+    .forEach((cell) => {
+      const key = cleanText(cell.subjectId) || "__none__";
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(cell);
+    });
+
+  const bucketKeys = [...buckets.keys()];
+  const selected = [];
+  let cursor = 0;
+  while (selected.length < budgetCells && bucketKeys.length) {
+    let picked = false;
+    for (let i = 0; i < bucketKeys.length; i += 1) {
+      const key = bucketKeys[(cursor + i) % bucketKeys.length];
+      const queue = buckets.get(key) || [];
+      const next = queue.shift();
+      if (!next) continue;
+      selected.push(next);
+      cursor = (cursor + i + 1) % bucketKeys.length;
+      picked = true;
+      break;
+    }
+    if (!picked) break;
+  }
+
+  return {
+    selected,
+    allCount: candidates.length,
+    budgetCells,
+    droppedByBudget: Math.max(0, candidates.length - selected.length),
+  };
+}
+
+function buildMatrixCriticPrompt({ rawInput, decisionQuestion, subjects, attributes, matrix, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Research brief:
 ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Subjects:
 ${subjects.map((subject) => `- ${subject.label}`).join("\n")}
@@ -1176,7 +1681,7 @@ Audit this matrix and return JSON only:
 }`;
 }
 
-function buildMatrixAnalystResponsePrompt({ rawInput, decisionQuestion, subjects, attributes, cells, flags }) {
+function buildMatrixAnalystResponsePrompt({ rawInput, decisionQuestion, subjects, attributes, cells, flags, researchSetup = {} }) {
   const subjectLabel = new Map(subjects.map((s) => [s.id, s.label]));
   const attrLabel = new Map(attributes.map((a) => [a.id, a.label]));
 
@@ -1198,11 +1703,16 @@ function buildMatrixAnalystResponsePrompt({ rawInput, decisionQuestion, subjects
     };
   });
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Research brief:
 ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Contested matrix cells:
 ${JSON.stringify(contested, null, 2)}
@@ -1221,6 +1731,12 @@ Return JSON only:
       "attributeId": "<attribute id>",
       "decision": "<defend|concede>",
       "value": "<updated or defended wording>",
+      "full": "<updated deep detail>",
+      "risks": "<updated caveats>",
+      "arguments": {
+        "supporting": [{"id":"sup-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}],
+        "limiting": [{"id":"lim-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}]
+      },
       "confidence": "<high|medium|low>",
       "confidenceReason": "<1 sentence>",
       "analystNote": "<why this decision was made>",
@@ -1230,12 +1746,113 @@ Return JSON only:
 }`;
 }
 
-function buildMatrixDiscoveryPrompt({ rawInput, decisionQuestion, subjects, attributes }) {
+function buildMatrixDerivedAttributesPrompt({
+  rawInput,
+  decisionQuestion,
+  subjects,
+  baseAttributes,
+  derivedAttributes,
+  matrix,
+  researchSetup = {},
+}) {
+  const compactCells = Array.isArray(matrix?.cells)
+    ? matrix.cells
+      .filter((cell) => baseAttributes.some((attribute) => attribute.id === cell.attributeId))
+      .map((cell) => ({
+        subjectId: cleanText(cell.subjectId),
+        attributeId: cleanText(cell.attributeId),
+        value: clip(cell.value, 220),
+        confidence: normalizeConfidence(cell.confidence),
+        confidenceReason: clip(cell.confidenceReason, 160),
+        sources: normalizeSourceList(cell.sources).slice(0, 4),
+      }))
+    : [];
+
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
+  return `Generate derived matrix attributes only after evidence and critic phases.
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Subjects:
+${subjects.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
+
+Base attributes already analyzed:
+${baseAttributes.map((attribute) => `- ${attribute.id}: ${attribute.label}`).join("\n")}
+
+Derived attributes to compute:
+${derivedAttributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${attribute.brief ? ` (${attribute.brief})` : ""}`).join("\n")}
+
+Available base evidence snapshot:
+${JSON.stringify(compactCells, null, 2)}
+
+Rules:
+- Use only existing base evidence plus explicit uncertainty.
+- Do not invent sources.
+- Keep derived findings concise and decision-oriented.
+
+Return JSON only:
+{
+  "cells": [
+    {
+      "subjectId": "<subject id>",
+      "attributeId": "<derived attribute id>",
+      "value": "<2-4 sentence derived finding>",
+      "full": "<1-2 short paragraphs>",
+      "risks": "<1-2 sentence caveats>",
+      "arguments": {
+        "supporting": [{"id":"sup-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}],
+        "limiting": [{"id":"lim-1","claim":"<short claim>","detail":"<short detail>","sources":[{"name":"...","quote":"...","url":"..."}]}]
+      },
+      "confidence": "<high|medium|low>",
+      "confidenceReason": "<short reason>",
+      "sources": [{"name":"...","quote":"<max 20 words>","url":"...","sourceType":"<vendor|press|independent>"}]
+    }
+  ]
+}`;
+}
+
+function normalizeDerivedCells(payload = {}, subjects = [], derivedAttributes = []) {
+  const subjectMap = new Set(subjects.map((subject) => subject.id));
+  const attrMap = new Set(derivedAttributes.map((attribute) => attribute.id));
+  const rows = Array.isArray(payload?.cells) ? payload.cells : [];
+  return rows
+    .map((entry) => {
+      const subjectId = cleanText(entry?.subjectId);
+      const attributeId = cleanText(entry?.attributeId);
+      if (!subjectMap.has(subjectId) || !attrMap.has(attributeId)) return null;
+      return {
+        subjectId,
+        attributeId,
+        value: cleanText(entry?.value),
+        full: cleanText(entry?.full || entry?.value),
+        risks: cleanText(entry?.risks),
+        arguments: normalizeMatrixCellArguments(entry?.arguments || {}),
+        confidence: normalizeConfidence(entry?.confidence),
+        confidenceReason: cleanText(entry?.confidenceReason),
+        sources: normalizeSourceList(entry?.sources),
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildMatrixDiscoveryPrompt({ rawInput, decisionQuestion, subjects, attributes, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Research brief:
 ${rawInput}
 
 Decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 Subjects analyzed:
 ${subjects.map((s) => `- ${s.label}`).join("\n")}
@@ -1251,7 +1868,357 @@ Return JSON only:
 }`;
 }
 
-function buildSubjectDiscoveryPrompt({ rawInput, decisionQuestion, subjectsSpec }) {
+function resolveDeepAssistProviderRequestOptions(config = {}, providerId = "", role = "analyst", deepAssistOptions = {}) {
+  const key = cleanText(providerId).toLowerCase();
+  const roleCfg = config?.models?.[role] || {};
+  const providerCfgRoot = config?.deepAssist?.providers?.[key] || {};
+  const providerCfg = providerCfgRoot?.[role] && typeof providerCfgRoot?.[role] === "object"
+    ? providerCfgRoot[role]
+    : providerCfgRoot;
+
+  return {
+    provider: cleanText(providerCfg?.provider || roleCfg?.provider || "openai"),
+    model: cleanText(providerCfg?.model || roleCfg?.model),
+    webSearchModel: cleanText(providerCfg?.webSearchModel || providerCfg?.model || roleCfg?.webSearchModel || roleCfg?.model),
+    baseUrl: cleanText(providerCfg?.baseUrl || roleCfg?.baseUrl),
+    timeoutMs: Math.max(20000, Number(deepAssistOptions?.maxWaitMs) || 300000),
+    retry: {
+      maxRetries: Math.max(0, Math.min(3, Number(deepAssistOptions?.maxRetries) || 1)),
+    },
+  };
+}
+
+function matrixProviderAgreement(entries = []) {
+  if (!entries.length) return "none";
+  if (entries.length === 1) return "single";
+  const confidences = entries.map((entry) => normalizeConfidence(entry?.confidence));
+  const ranks = confidences.map((value) => confidenceRank(value));
+  const confSpread = Math.max(...ranks) - Math.min(...ranks);
+  const values = entries.map((entry) => cleanText(entry?.value)).filter(Boolean);
+  let overlapScore = 1;
+  if (values.length >= 2) {
+    let maxPair = 0;
+    let minPair = 1;
+    for (let i = 0; i < values.length; i += 1) {
+      for (let j = i + 1; j < values.length; j += 1) {
+        const score = tokenOverlapScore(values[i], values[j]);
+        maxPair = Math.max(maxPair, score);
+        minPair = Math.min(minPair, score);
+      }
+    }
+    overlapScore = values.length > 1 ? ((maxPair + minPair) / 2) : 1;
+  }
+
+  if (confSpread <= 1 && overlapScore >= 0.42) return "agree";
+  if (overlapScore >= 0.22) return "partial";
+  return "contradict";
+}
+
+function pickBestMatrixProviderCell(entries = []) {
+  if (!entries.length) return null;
+  let best = entries[0];
+  let bestRank = confidenceRank(best?.confidence);
+  let bestSources = normalizeSourceList(best?.sources).length;
+  for (let i = 1; i < entries.length; i += 1) {
+    const candidate = entries[i];
+    const rank = confidenceRank(candidate?.confidence);
+    const sourceCount = normalizeSourceList(candidate?.sources).length;
+    if (rank > bestRank || (rank === bestRank && sourceCount > bestSources)) {
+      best = candidate;
+      bestRank = rank;
+      bestSources = sourceCount;
+    }
+  }
+  return best;
+}
+
+function mergeDeepAssistMatrix(baseMatrix = {}, providerMatrices = []) {
+  const merged = {
+    ...baseMatrix,
+    cells: Array.isArray(baseMatrix?.cells) ? [...baseMatrix.cells] : [],
+  };
+
+  merged.cells = merged.cells.map((cell) => {
+    const entries = providerMatrices
+      .filter((run) => run.status === "ok")
+      .map((run) => {
+        const found = (run.matrix?.cells || []).find((item) => (
+          buildCellKey(item.subjectId, item.attributeId) === buildCellKey(cell.subjectId, cell.attributeId)
+        ));
+        if (!found) return null;
+        return {
+          providerId: run.providerId,
+          providerLabel: run.label,
+          ...found,
+        };
+      })
+      .filter(Boolean);
+
+    if (!entries.length) return cell;
+    const agreement = matrixProviderAgreement(entries);
+    const best = pickBestMatrixProviderCell(entries) || entries[0];
+    const mergedSources = mergeSources(cell.sources, ...entries.map((entry) => entry.sources));
+    let confidence = normalizeConfidence(best.confidence || cell.confidence);
+    if (agreement === "contradict" && confidenceRank(confidence) > confidenceRank("medium")) {
+      confidence = "medium";
+    }
+
+    return {
+      ...cell,
+      value: cleanText(best.value || cell.value),
+      full: cleanText(best.full || best.value || cell.full || cell.value),
+      risks: cleanText(best.risks || cell.risks),
+      arguments: normalizeMatrixCellArguments(best.arguments || cell.arguments || {}),
+      confidence,
+      confidenceReason: [
+        cleanText(best.confidenceReason || cell.confidenceReason),
+        agreement === "agree" ? "Deep Assist providers aligned on this cell." : "",
+        agreement === "partial" ? "Deep Assist providers partially aligned; confidence kept conservative." : "",
+        agreement === "contradict" ? "Deep Assist providers contradicted each other; confidence capped pending targeted validation." : "",
+      ].filter(Boolean).join(" ").trim(),
+      sources: mergedSources,
+      providerAgreement: agreement,
+      providerSignals: entries.map((entry) => ({
+        provider: entry.providerId,
+        providerLabel: entry.providerLabel,
+        confidence: normalizeConfidence(entry.confidence),
+        confidenceReason: cleanText(entry.confidenceReason),
+        sourceCount: normalizeSourceList(entry.sources).length,
+        brief: cleanText(entry.value),
+      })),
+    };
+  });
+
+  return merged;
+}
+
+async function runMatrixDeepAssistEnrichment({
+  state,
+  config,
+  transport,
+  debugSession,
+  analysisMeta,
+  rawInput,
+  decisionQuestion,
+  subjects,
+  attributes,
+  baseMatrix,
+  analystPrompt,
+  tokenLimits,
+  researchSetup = {},
+}) {
+  const deepAssist = normalizeDeepAssistOptions(state?.options?.deepAssist || {});
+  const providerRuns = await Promise.all(
+    deepAssist.providers.map(async (providerId) => {
+      const label = deepAssistProviderLabel(providerId);
+      const startedAt = Date.now();
+      const beforeCalls = Number(analysisMeta.webSearchCalls || 0);
+      try {
+        const prompt = buildMatrixEvidencePrompt({
+          rawInput,
+          decisionQuestion,
+          subjects,
+          attributes,
+          passLabel: `${label} deep assist matrix pass`,
+          liveSearch: true,
+          researchSetup,
+        });
+        const response = await transport.callAnalyst(
+          [{ role: "user", content: prompt }],
+          analystPrompt,
+          Number(tokenLimits?.phase1Evidence) || 10000,
+          {
+            ...resolveDeepAssistProviderRequestOptions(config, providerId, "analyst", deepAssist),
+            liveSearch: true,
+            includeMeta: true,
+          }
+        );
+        Object.assign(analysisMeta, mergeMeta(analysisMeta, response?.meta, "analyst"));
+        const parsed = extractJson(response?.text || response, {});
+        const matrix = normalizeAnalystMatrix(parsed, subjects, attributes);
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        const afterCalls = Number(analysisMeta.webSearchCalls || 0);
+        const webSearchCalls = Math.max(0, afterCalls - beforeCalls);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "deep_assist_provider_complete",
+          phase: "matrix_deep_assist",
+          attempt: providerId,
+          durationMs,
+          webSearchCalls,
+        });
+        return {
+          providerId,
+          label,
+          status: "ok",
+          durationMs,
+          webSearchCalls,
+          matrix,
+          meta: response?.meta || null,
+        };
+      } catch (err) {
+        appendAnalysisDebugEvent(debugSession, {
+          type: "deep_assist_provider_failed",
+          phase: "matrix_deep_assist",
+          attempt: providerId,
+          error: err?.message || String(err),
+        });
+        return {
+          providerId,
+          label,
+          status: "failed",
+          durationMs: Math.max(0, Date.now() - startedAt),
+          webSearchCalls: 0,
+          error: err?.message || String(err),
+          matrix: null,
+          meta: null,
+        };
+      }
+    })
+  );
+
+  analysisMeta.deepAssistProviderRuns = providerRuns.map((run) => ({
+    providerId: run.providerId,
+    label: run.label,
+    status: run.status,
+    durationMs: run.durationMs,
+    webSearchCalls: run.webSearchCalls,
+    error: run.error || "",
+  }));
+  analysisMeta.deepAssistProvidersRequested = deepAssist.providers.length;
+  analysisMeta.deepAssistProvidersSucceeded = providerRuns.filter((run) => run.status === "ok").length;
+  analysisMeta.deepAssistProvidersFailed = providerRuns.filter((run) => run.status !== "ok").length;
+  analysisMeta.providerContributions = analysisMeta.providerContributions || {};
+  analysisMeta.providerContributions.deepAssist = providerRuns.map((run) => ({
+    providerId: run.providerId,
+    label: run.label,
+    status: run.status,
+    webSearchCalls: run.webSearchCalls,
+  }));
+
+  const successful = providerRuns.filter((run) => run.status === "ok" && run.matrix);
+  if (!successful.length) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_no_provider_success",
+      "All Deep Assist providers failed in matrix enrichment; continuing with native matrix evidence."
+    );
+    return baseMatrix;
+  }
+  if (successful.length < deepAssist.minProviders) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_min_provider_not_met",
+      `Matrix deep assist succeeded with ${successful.length}/${deepAssist.minProviders} required providers.`
+    );
+  }
+
+  const merged = mergeDeepAssistMatrix(baseMatrix, providerRuns);
+  return merged;
+}
+
+function buildMatrixConsistencyPrompt({ decisionQuestion, subjects, attributes, matrix }) {
+  return `You are auditing cross-subject consistency for a completed research matrix.
+
+Decision question:
+${decisionQuestion}
+
+Subjects:
+${subjects.map((subject) => `- ${subject.label}`).join("\n")}
+
+Attributes:
+${attributes.map((attribute) => `- ${attribute.label}`).join("\n")}
+
+Matrix:
+${JSON.stringify(matrix, null, 2)}
+
+Task:
+- Compare subjects within each attribute and detect contradictions.
+- Flag cells that appear internally inconsistent with stronger evidence elsewhere in the same attribute.
+- Suggest confidence downgrades where contradiction risk exists.
+
+Return JSON only:
+{
+  "flags": [
+    {
+      "subjectId":"<subject id>",
+      "attributeId":"<attribute id>",
+      "note":"<contradiction explanation>",
+      "suggestedConfidence":"<high|medium|low>"
+    }
+  ],
+  "summary":"<short contradiction summary>"
+}`;
+}
+
+function normalizeConsistencyFlags(raw = {}, subjects = [], attributes = []) {
+  const subjectMap = new Map(subjects.map((subject) => [subject.id, subject]));
+  const attributeMap = new Map(attributes.map((attribute) => [attribute.id, attribute]));
+  const flags = Array.isArray(raw?.flags) ? raw.flags : [];
+  return flags
+    .map((entry) => ({
+      subjectId: cleanText(entry?.subjectId),
+      attributeId: cleanText(entry?.attributeId),
+      note: cleanText(entry?.note),
+      suggestedConfidence: normalizeConfidence(entry?.suggestedConfidence || entry?.confidence),
+    }))
+    .filter((entry) => subjectMap.has(entry.subjectId) && attributeMap.has(entry.attributeId));
+}
+
+function applyConsistencyFlags(cells = [], flags = []) {
+  const byKey = new Map(flags.map((flag) => [buildCellKey(flag.subjectId, flag.attributeId), flag]));
+  return (cells || []).map((cell) => {
+    const flag = byKey.get(buildCellKey(cell.subjectId, cell.attributeId));
+    if (!flag) return cell;
+    const suggested = normalizeConfidence(flag.suggestedConfidence || cell.confidence);
+    const downgraded = confidenceFromRank(
+      Math.min(confidenceRank(cell.confidence), confidenceRank(suggested)),
+      cell.confidence
+    );
+    return {
+      ...cell,
+      confidence: downgraded,
+      confidenceReason: [cleanText(cell.confidenceReason), `Consistency audit: ${cleanText(flag.note)}`]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+      analystNote: [cleanText(cell.analystNote), `Consistency: ${cleanText(flag.note)}`]
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+    };
+  });
+}
+
+function buildMatrixExecutiveSynthesisPrompt({ rawInput, decisionQuestion, matrix, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  return `You are writing an executive synthesis for a completed evidence-first comparison matrix.
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Matrix:
+${JSON.stringify(matrix, null, 2)}
+
+Return JSON only:
+{
+  "decisionAnswer":"<direct answer to the decision question>",
+  "closestThreats":"<closest threats and why>",
+  "whitespace":"<main whitespace/opportunity>",
+  "strategicClassification":"<classification of this concept>",
+  "keyRisks":"<top viability risks>",
+  "decisionImplications":"<what to do next>",
+  "uncertaintyNotes":"<major evidence gaps/uncertainties>",
+  "providerAgreementHighlights":"<where providers agreed/disagreed if available>"
+}`;
+}
+
+function buildSubjectDiscoveryPrompt({ rawInput, decisionQuestion, subjectsSpec, researchSetup = {} }) {
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
   const maxCount = Math.max(minCount, Number(subjectsSpec?.maxCount) || 8);
   const examples = Array.isArray(subjectsSpec?.examples) ? subjectsSpec.examples : [];
@@ -1259,11 +2226,16 @@ function buildSubjectDiscoveryPrompt({ rawInput, decisionQuestion, subjectsSpec 
     ? `Examples:\n${examples.map((item, idx) => `${idx + 1}. ${item}`).join("\n")}`
     : "";
 
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+
   return `Research brief:
 ${rawInput}
 
 Initial decision question:
 ${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
 
 The user did not provide enough concrete subjects for matrix comparison.
 Generate an evidence-backed shortlist.
@@ -1339,6 +2311,7 @@ function mergeSubjectEntries(primary = [], secondary = [], subjectsSpec = {}) {
 export async function resolveMatrixResearchInput(input, config, callbacks = {}, options = {}) {
   const desc = cleanText(input?.description || input?.rawInput);
   if (!desc) throw new Error("Matrix input description is required.");
+  const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
 
   const subjectsSpec = config?.subjects || {};
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
@@ -1366,7 +2339,7 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     throw new Error(`Please provide at least ${minCount} subjects or enable analyst transport for subject discovery.`);
   }
 
-  const prompt = buildSubjectDiscoveryPrompt({ rawInput: desc, decisionQuestion, subjectsSpec });
+  const prompt = buildSubjectDiscoveryPrompt({ rawInput: desc, decisionQuestion, subjectsSpec, researchSetup });
   const modelCfg = config?.models?.analyst || {};
   const modelOptions = {
     liveSearch: true,
@@ -1529,14 +2502,32 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
   if (!transport?.callAnalyst || !transport?.callCritic) {
     throw new Error("runAnalysis requires callbacks.transport with callAnalyst and callCritic.");
   }
+  const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const deepAssistOptions = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
+  const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
 
   const onProgress = typeof callbacks?.onProgress === "function" ? callbacks.onProgress : () => {};
   const onDebugSession = typeof callbacks?.onDebugSession === "function" ? callbacks.onDebugSession : null;
   let state = input?.initialState ? clone(input.initialState) : createInitialState(input);
+  state.options = {
+    evidenceMode,
+    deepAssist: deepAssistOptions,
+    researchSetup,
+  };
+  state.analysisMeta = {
+    ...(state.analysisMeta || {}),
+    analysisMode: evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix",
+    evidenceMode,
+    decisionContext: researchSetup.decisionContext,
+    userRoleContext: researchSetup.userRoleContext,
+    qualityGrade: state.analysisMeta?.qualityGrade || "standard",
+    degradedReasons: Array.isArray(state.analysisMeta?.degradedReasons) ? state.analysisMeta.degradedReasons : [],
+    deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssistOptions.providers.length : Number(state.analysisMeta?.deepAssistProvidersRequested || 0),
+  };
   const sourceFetchCache = new Map();
   const debugSession = createAnalysisDebugSession({
     useCaseId: state.id,
-    analysisMode: "matrix",
+    analysisMode: evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix",
     rawInput: state.rawInput,
     dims: normalizeAttributeList(config?.attributes || []),
   });
@@ -1575,8 +2566,14 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
 
     const subjects = resolvedInput.subjects;
     const attributes = normalizeAttributeList(config?.attributes || []);
+    const derivedAttributes = attributes.filter((attribute) => attribute.derived);
+    const baseAttributes = attributes.filter((attribute) => !attribute.derived);
+    const derivedAttributeIds = new Set(derivedAttributes.map((attribute) => attribute.id));
     const layout = normalizeLayoutHint(config?.matrixLayout);
-    const decisionQuestion = resolvedInput?.decisionQuestion || extractDecisionQuestion(state.rawInput) || state.rawInput;
+    const decisionQuestion = cleanText(researchSetup.decisionContext)
+      || resolvedInput?.decisionQuestion
+      || extractDecisionQuestion(state.rawInput)
+      || state.rawInput;
     const relatedDiscovery = config?.relatedDiscovery !== false;
 
     update("matrix_plan", {
@@ -1589,6 +2586,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         cells: [],
         subjectSummaries: [],
         crossMatrixSummary: "",
+        executiveSummary: null,
         coverage: { totalCells: subjects.length * attributes.length, lowConfidenceCells: 0, contestedCells: 0 },
         discovery: null,
         subjectResolution: {
@@ -1608,6 +2606,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       attributes,
       passLabel: "baseline memory-only pass",
       liveSearch: false,
+      researchSetup,
     });
     const baselineRes = await transport.callAnalyst(
       [{ role: "user", content: baselinePrompt }],
@@ -1643,6 +2642,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       attributes,
       passLabel: "web-assisted pass",
       liveSearch: true,
+      researchSetup,
     });
     const webRes = await transport.callAnalyst(
       [{ role: "user", content: webPrompt }],
@@ -1680,6 +2680,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         baseline: baselineMatrix,
         web: webMatrix,
         qualityGuard,
+        researchSetup,
       });
       const reconcileRes = await transport.callAnalyst(
         [{ role: "user", content: reconcilePrompt }],
@@ -1774,7 +2775,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         diagnostics: finalReconcileHealth,
         note,
       });
-      throw new Error(`Matrix reconcile quality guard failed. ${note}`);
+      markDegraded(state.analysisMeta, "matrix_reconcile_quality_guard", note);
     }
 
     update("matrix_targeted", {
@@ -1786,31 +2787,79 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       analysisMeta: state.analysisMeta,
     });
 
-    const lowCells = reconciledMatrix.cells
-      .filter((cell) => normalizeConfidence(cell.confidence) === "low")
-      .slice(0, 8);
+    const targetedPlan = selectMatrixTargetedCells(reconciledMatrix.cells, config?.limits || {}, derivedAttributeIds);
+    const lowCells = targetedPlan.selected;
 
-    state.analysisMeta.lowConfidenceInitialCount = lowCells.length;
+    state.analysisMeta.lowConfidenceInitialCount = targetedPlan.allCount;
     state.analysisMeta.lowConfidenceUpgradedCount = 0;
     state.analysisMeta.lowConfidenceValidatedLowCount = 0;
     state.analysisMeta.lowConfidenceCycleFailures = 0;
     state.analysisMeta.lowConfidenceTargetedSearchUsed = false;
     state.analysisMeta.lowConfidenceTargetedWebSearchCalls = 0;
     state.analysisMeta.lowConfidenceTargetedFallbackReason = null;
+    state.analysisMeta.lowConfidenceRoundRobinApplied = true;
+    state.analysisMeta.lowConfidenceBudgetCells = targetedPlan.budgetCells;
+    state.analysisMeta.lowConfidenceBudgetUsed = 0;
+    state.analysisMeta.lowConfidenceDroppedByBudget = targetedPlan.droppedByBudget;
+    state.analysisMeta.targetedCellDiagnostics = [];
+
+    let strategistHints = { niche: "", aliases: [], cellHints: {} };
+    try {
+      const strategistPrompt = buildMatrixQueryStrategistPrompt({
+        rawInput: state.rawInput,
+        decisionQuestion,
+        subjects,
+        attributes,
+        candidateCells: lowCells,
+        researchSetup,
+      });
+      const strategistRes = await transport.callAnalyst(
+        [{ role: "user", content: strategistPrompt }],
+        analystPrompt,
+        1400,
+        {
+          ...capabilityOptions(config, "retrieval", "analyst"),
+          liveSearch: false,
+          includeMeta: true,
+        }
+      );
+      state.analysisMeta = mergeTargetedMeta(state.analysisMeta, strategistRes?.meta);
+      strategistHints = normalizeMatrixStrategistHints(extractJson(strategistRes?.text || strategistRes, {}), subjects, attributes);
+      state.analysisMeta.targetedRetrievalNiche = strategistHints.niche || "";
+      state.analysisMeta.targetedRetrievalAliases = strategistHints.aliases || [];
+    } catch (_) {
+      strategistHints = { niche: "", aliases: [], cellHints: {} };
+    }
 
     for (const cell of lowCells) {
+      state.analysisMeta.lowConfidenceBudgetUsed = Number(state.analysisMeta.lowConfidenceBudgetUsed || 0) + 1;
       const subject = subjects.find((item) => item.id === cell.subjectId);
       const attribute = attributes.find((item) => item.id === cell.attributeId);
       if (!subject || !attribute) continue;
 
+      const diag = {
+        cellKey: buildCellKey(cell.subjectId, cell.attributeId),
+        subjectId: cell.subjectId,
+        attributeId: cell.attributeId,
+        subject: subject.label,
+        attribute: attribute.label,
+        confidenceBefore: normalizeConfidence(cell.confidence),
+      };
+      const strategistForCell = strategistHints?.cellHints?.[buildCellKey(cell.subjectId, cell.attributeId)] || {};
+      const aliasHints = normalizeStringList(strategistHints?.aliases, 6, 110);
+
       const fallbackPlan = {
         gap: `Evidence is weak for ${subject.label} x ${attribute.label}.`,
-        queries: [
+        queries: [...new Set([
+          ...normalizeStringList(strategistForCell?.querySeeds, 4, 170),
+          ...normalizeStringList(aliasHints.map((alias) => `${alias} ${attribute.label} evidence`), 2, 170),
           `${subject.label} ${attribute.label} case study metrics`,
           `${subject.label} ${attribute.label} benchmark evidence`,
           `${subject.label} ${attribute.label} customer outcome`,
-        ],
+        ])].slice(0, 4),
       };
+      diag.fallbackQueries = fallbackPlan.queries;
+      diag.sourceTargets = normalizeStringList(strategistForCell?.sourceTargets, 4, 170);
 
       let queryPlan = fallbackPlan;
       try {
@@ -1820,21 +2869,29 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           subject,
           attribute,
           cell,
+          researchSetup,
         });
         const queryRes = await transport.callAnalyst(
           [{ role: "user", content: queryPrompt }],
           analystPrompt,
           1400,
           {
-            ...roleOptions(config, "analyst"),
+            ...capabilityOptions(config, "retrieval", "analyst"),
             liveSearch: false,
             includeMeta: true,
           }
         );
         state.analysisMeta = mergeTargetedMeta(state.analysisMeta, queryRes?.meta);
         queryPlan = normalizeQueryPlan(extractJson(queryRes?.text || queryRes, {}), fallbackPlan);
-      } catch (_) {
+        queryPlan.queries = [...new Set([
+          ...normalizeStringList(strategistForCell?.querySeeds, 3, 170),
+          ...normalizeStringList(queryPlan.queries, 4, 170),
+        ])].slice(0, 4);
+        diag.queryPlan = queryPlan;
+      } catch (queryErr) {
         queryPlan = fallbackPlan;
+        diag.queryPlan = queryPlan;
+        diag.queryPlanError = cleanText(queryErr?.message || "query_plan_failed");
       }
 
       let harvest = {
@@ -1849,24 +2906,30 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           attribute,
           queryPlan,
           cell,
+          researchSetup,
         });
         const searchRes = await transport.callAnalyst(
           [{ role: "user", content: searchPrompt }],
           analystPrompt,
           2600,
           {
-            ...roleOptions(config, "analyst"),
+            ...capabilityOptions(config, "retrieval", "analyst"),
             liveSearch: true,
             includeMeta: true,
           }
         );
         state.analysisMeta = mergeTargetedMeta(state.analysisMeta, searchRes?.meta);
         harvest = normalizeSearchHarvest(extractJson(searchRes?.text || searchRes, {}), queryPlan);
-      } catch (_) {
+        diag.queryCoverage = harvest?.queryCoverage || [];
+        diag.findingsCount = (harvest?.findings || []).length;
+      } catch (searchErr) {
         harvest = {
           findings: [],
           queryCoverage: queryPlan.queries.map((query) => ({ query, useful: false, note: "No useful findings captured." })),
         };
+        diag.queryCoverage = harvest?.queryCoverage || [];
+        diag.findingsCount = 0;
+        diag.searchError = cleanText(searchErr?.message || "search_failed");
       }
 
       try {
@@ -1878,6 +2941,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           cell,
           queryPlan,
           harvest,
+          researchSetup,
         });
         const rescoreRes = await transport.callAnalyst(
           [{ role: "user", content: rescorePrompt }],
@@ -1898,6 +2962,9 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         const updatedCell = {
           ...cell,
           value: cleanText(parsed?.value || cell.value),
+          full: cleanText(parsed?.full || cell.full || parsed?.value || cell.value),
+          risks: cleanText(parsed?.risks || cell.risks),
+          arguments: normalizeMatrixCellArguments(parsed?.arguments || cell.arguments || {}),
           confidence: nextConfidence,
           confidenceReason: cleanText(parsed?.confidenceReason || cell.confidenceReason),
           sources: mergeSources(cell.sources, parsed?.sources, (harvest.findings || []).map((entry) => entry.source)),
@@ -1906,18 +2973,75 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         reconciledMatrix = upsertCell(reconciledMatrix, updatedCell);
         if (upgraded) {
           state.analysisMeta.lowConfidenceUpgradedCount += 1;
+          diag.status = "upgraded";
         } else if (nextConfidence === "low") {
           state.analysisMeta.lowConfidenceValidatedLowCount += 1;
+          diag.status = "validated_low";
+        } else {
+          diag.status = "updated";
         }
-      } catch (_) {
+        diag.confidenceAfter = nextConfidence;
+        diag.usefulQueryCount = (harvest?.queryCoverage || []).filter((entry) => entry?.useful).length;
+        state.analysisMeta.targetedCellDiagnostics.push(diag);
+      } catch (rescoreErr) {
         state.analysisMeta.lowConfidenceCycleFailures += 1;
+        diag.status = "rescore_failed";
+        diag.rescoreError = cleanText(rescoreErr?.message || "rescore_failed");
+        state.analysisMeta.targetedCellDiagnostics.push(diag);
       }
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_targeted_cell_diagnostics",
+        phase: "matrix_targeted",
+        attempt: diag.cellKey,
+        extra: diag,
+      });
     }
 
     await verifyMatrixCellSources(reconciledMatrix, state.analysisMeta, sourceFetchCache, {
       penalizeConfidence: true,
       transport,
     });
+
+    if (evidenceMode === "deep-assist") {
+      update("matrix_deep_assist", {
+        matrix: {
+          ...state.matrix,
+          ...reconciledMatrix,
+          coverage: summarizeCoverage(reconciledMatrix.cells),
+        },
+        analysisMeta: state.analysisMeta,
+      });
+      try {
+        reconciledMatrix = await runMatrixDeepAssistEnrichment({
+          state,
+          config,
+          transport,
+          debugSession,
+          analysisMeta: state.analysisMeta,
+          rawInput: state.rawInput,
+          decisionQuestion,
+          subjects,
+          attributes,
+          baseMatrix: reconciledMatrix,
+          analystPrompt,
+          tokenLimits: config?.limits?.tokenLimits || {},
+          researchSetup,
+        });
+        await verifyMatrixCellSources(reconciledMatrix, state.analysisMeta, sourceFetchCache, {
+          penalizeConfidence: true,
+          transport,
+        });
+      } catch (deepAssistErr) {
+        const note = deepAssistErr?.message || "Matrix deep assist enrichment failed.";
+        markDegraded(state.analysisMeta, "matrix_deep_assist_enrichment_failed", note);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "matrix_deep_assist_failed",
+          phase: "matrix_deep_assist",
+          attempt: "final",
+          error: note,
+        });
+      }
+    }
 
     update("matrix_critic", {
       matrix: {
@@ -1934,6 +3058,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       subjects,
       attributes,
       matrix: reconciledMatrix,
+      researchSetup,
     });
 
     const criticRes = await transport.callCritic(
@@ -1989,6 +3114,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         attributes,
         cells: critiquedCells,
         flags: criticFlags,
+        researchSetup,
       });
 
       const responseRes = await transport.callAnalyst(
@@ -2039,6 +3165,9 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           value: decision === "concede"
             ? cleanText(response.value || cell.value)
             : cleanText(response.value || cell.value),
+          full: cleanText(response.full || cell.full || response.value || cell.value),
+          risks: cleanText(response.risks || cell.risks),
+          arguments: normalizeMatrixCellArguments(response.arguments || cell.arguments || {}),
           confidence: guardedConfidence,
           confidenceReason: cleanText(response.confidenceReason || cell.confidenceReason),
           sources: nextSources,
@@ -2058,6 +3187,180 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       penalizeConfidence: true,
       transport,
     });
+
+    update("matrix_consistency", {
+      matrix: {
+        ...state.matrix,
+        ...resolvedMatrix,
+        coverage: summarizeCoverage(resolvedMatrix.cells),
+      },
+      analysisMeta: state.analysisMeta,
+    });
+
+    try {
+      const consistencyPrompt = buildMatrixConsistencyPrompt({
+        decisionQuestion,
+        subjects,
+        attributes,
+        matrix: resolvedMatrix,
+      });
+      const consistencyRes = await transport.callCritic(
+        [{ role: "user", content: consistencyPrompt }],
+        criticPrompt,
+        Math.max(2600, Math.min(4200, criticTokens)),
+        {
+          ...roleOptions(config, "critic"),
+          liveSearch: true,
+          includeMeta: true,
+        }
+      );
+      state.analysisMeta = mergeMeta(state.analysisMeta, consistencyRes?.meta, "critic");
+      const consistencyParsed = extractJson(consistencyRes?.text || consistencyRes, {});
+      const consistencyFlags = normalizeConsistencyFlags(consistencyParsed, subjects, attributes);
+      state.analysisMeta.matrixConsistencyFlags = consistencyFlags.length;
+      if (consistencyFlags.length) {
+        resolvedMatrix.cells = applyConsistencyFlags(resolvedMatrix.cells, consistencyFlags);
+        resolvedMatrix.coverage = summarizeCoverage(resolvedMatrix.cells);
+      }
+      if (cleanText(consistencyParsed?.summary)) {
+        resolvedMatrix.crossMatrixSummary = [
+          cleanText(resolvedMatrix.crossMatrixSummary),
+          `Consistency audit: ${cleanText(consistencyParsed.summary)}`,
+        ].filter(Boolean).join(" ");
+      }
+    } catch (consistencyErr) {
+      const note = consistencyErr?.message || "Matrix consistency audit failed.";
+      markDegraded(state.analysisMeta, "matrix_consistency_audit_failed", note);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_consistency_failed",
+        phase: "matrix_consistency",
+        attempt: "final",
+        error: note,
+      });
+    }
+
+    if (derivedAttributes.length) {
+      update("matrix_derived", {
+        matrix: {
+          ...state.matrix,
+          ...resolvedMatrix,
+          coverage: summarizeCoverage(resolvedMatrix.cells),
+        },
+        analysisMeta: state.analysisMeta,
+      });
+      try {
+        const derivedPrompt = buildMatrixDerivedAttributesPrompt({
+          rawInput: state.rawInput,
+          decisionQuestion,
+          subjects,
+          baseAttributes,
+          derivedAttributes,
+          matrix: resolvedMatrix,
+          researchSetup,
+        });
+        const derivedRes = await transport.callAnalyst(
+          [{ role: "user", content: derivedPrompt }],
+          analystPrompt,
+          Math.max(2200, Math.min(4200, responseTokens)),
+          {
+            ...roleOptions(config, "analyst"),
+            liveSearch: false,
+            includeMeta: true,
+          }
+        );
+        state.analysisMeta = mergeMeta(state.analysisMeta, derivedRes?.meta, "analyst");
+        const derivedCells = normalizeDerivedCells(extractJson(derivedRes?.text || derivedRes, {}), subjects, derivedAttributes);
+        state.analysisMeta.matrixDerivedAttributeCount = derivedAttributes.length;
+        state.analysisMeta.matrixDerivedGeneratedCount = derivedCells.length;
+        if (derivedCells.length) {
+          const merged = resolvedMatrix.cells.map((cell) => {
+            const replacement = derivedCells.find((entry) => (
+              entry.subjectId === cell.subjectId && entry.attributeId === cell.attributeId
+            ));
+            return replacement ? { ...cell, ...replacement } : cell;
+          });
+          const existingKeys = new Set(merged.map((cell) => buildCellKey(cell.subjectId, cell.attributeId)));
+          derivedCells.forEach((entry) => {
+            const key = buildCellKey(entry.subjectId, entry.attributeId);
+            if (!existingKeys.has(key)) merged.push(entry);
+          });
+          resolvedMatrix.cells = merged;
+          resolvedMatrix.coverage = summarizeCoverage(resolvedMatrix.cells);
+          await verifyMatrixCellSources(resolvedMatrix, state.analysisMeta, sourceFetchCache, {
+            penalizeConfidence: true,
+            transport,
+          });
+        }
+      } catch (derivedErr) {
+        const note = derivedErr?.message || "Derived attribute generation failed.";
+        markDegraded(state.analysisMeta, "matrix_derived_failed", note);
+        appendAnalysisDebugEvent(debugSession, {
+          type: "matrix_derived_failed",
+          phase: "matrix_derived",
+          attempt: "final",
+          error: note,
+        });
+      }
+    }
+
+    update("matrix_synthesis", {
+      matrix: {
+        ...state.matrix,
+        ...resolvedMatrix,
+        coverage: summarizeCoverage(resolvedMatrix.cells),
+      },
+      analysisMeta: state.analysisMeta,
+    });
+
+    try {
+      const synthesisPrompt = buildMatrixExecutiveSynthesisPrompt({
+        rawInput: state.rawInput,
+        decisionQuestion,
+        matrix: resolvedMatrix,
+        researchSetup,
+      });
+      const synthesisRes = await transport.callAnalyst(
+        [{ role: "user", content: synthesisPrompt }],
+        cleanText(config?.prompts?.analystResponse) || MATRIX_ANALYST_PROMPT,
+        Math.max(2800, Math.min(4600, responseTokens)),
+        {
+          ...roleOptions(config, "analyst"),
+          liveSearch: true,
+          includeMeta: true,
+        }
+      );
+      state.analysisMeta = mergeMeta(state.analysisMeta, synthesisRes?.meta, "analyst");
+      const parsedSynthesis = extractJson(synthesisRes?.text || synthesisRes, {});
+      resolvedMatrix.executiveSummary = {
+        decisionAnswer: cleanText(parsedSynthesis?.decisionAnswer),
+        closestThreats: cleanText(parsedSynthesis?.closestThreats),
+        whitespace: cleanText(parsedSynthesis?.whitespace),
+        strategicClassification: cleanText(parsedSynthesis?.strategicClassification),
+        keyRisks: cleanText(parsedSynthesis?.keyRisks),
+        decisionImplications: cleanText(parsedSynthesis?.decisionImplications),
+        uncertaintyNotes: cleanText(parsedSynthesis?.uncertaintyNotes),
+        providerAgreementHighlights: cleanText(parsedSynthesis?.providerAgreementHighlights),
+      };
+    } catch (synthesisErr) {
+      const note = synthesisErr?.message || "Matrix executive synthesis failed.";
+      markDegraded(state.analysisMeta, "matrix_executive_synthesis_failed", note);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_synthesis_failed",
+        phase: "matrix_synthesis",
+        attempt: "final",
+        error: note,
+      });
+      resolvedMatrix.executiveSummary = resolvedMatrix.executiveSummary || {
+        decisionAnswer: "",
+        closestThreats: "",
+        whitespace: "",
+        strategicClassification: "",
+        keyRisks: "",
+        decisionImplications: "",
+        uncertaintyNotes: "",
+        providerAgreementHighlights: "",
+      };
+    }
 
     update("matrix_summary", {
       matrix: {
@@ -2079,8 +3382,26 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         diagnostics: coverageSlaResult.diagnostics,
         note: coverageSlaResult.failureReason,
       });
-      throw new Error(`Coverage SLA failed. ${coverageSlaResult.failureReason || "Matrix coverage requirements were not met."}`);
+      markDegraded(
+        state.analysisMeta,
+        "matrix_coverage_sla_failed",
+        coverageSlaResult.failureReason || "Matrix coverage requirements were not met."
+      );
     }
+
+    const staleObservedCells = Number(state.analysisMeta.staleEvidenceObservedCells || 0);
+    state.analysisMeta.staleEvidenceRatio = staleObservedCells
+      ? Number(state.analysisMeta.staleEvidenceRatioSum || 0) / staleObservedCells
+      : 0;
+    state.analysisMeta.providerContributions = {
+      ...(state.analysisMeta.providerContributions || {}),
+      native: [
+        { provider: "analyst", webSearchCalls: Number(state.analysisMeta.webSearchCalls || 0) },
+        { provider: "critic", webSearchCalls: Number(state.analysisMeta.criticWebSearchCalls || 0) },
+        { provider: "targeted", webSearchCalls: Number(state.analysisMeta.lowConfidenceTargetedWebSearchCalls || 0) },
+        { provider: "discovery", webSearchCalls: Number(state.analysisMeta.discoveryWebSearchCalls || 0) },
+      ],
+    };
 
     if (relatedDiscovery) {
       update("matrix_discover", {});
@@ -2095,6 +3416,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           decisionQuestion,
           subjects,
           attributes,
+          researchSetup,
         });
         const discoverRes = await transport.callAnalyst(
           [{ role: "user", content: discoveryPromptText }],

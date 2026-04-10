@@ -7,14 +7,45 @@ import {
 
 const SHARED_MODELS = {
   analyst: {
-    provider: "openai",
     model: "gpt-5.4-mini",
     webSearchModel: "gpt-5.4-mini",
   },
   critic: {
-    provider: "openai",
     model: "gpt-5.4",
     webSearchModel: "gpt-5.4",
+  },
+  retrieval: {},
+};
+
+const SHARED_DEEP_ASSIST = {
+  defaults: {
+    providers: ["chatgpt", "claude", "gemini"],
+    minProviders: 2,
+    maxWaitMs: 300000,
+    maxRetries: 1,
+  },
+  providers: {
+    chatgpt: {
+      analyst: {
+        provider: "openai",
+        model: "gpt-5.4",
+        webSearchModel: "gpt-5.4",
+      },
+    },
+    claude: {
+      analyst: {
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        webSearchModel: "gpt-5.4-mini",
+      },
+    },
+    gemini: {
+      analyst: {
+        provider: "openai",
+        model: "gpt-4.1",
+        webSearchModel: "gpt-4.1",
+      },
+    },
   },
 };
 
@@ -111,6 +142,64 @@ const INPUT_SPEC_BY_CONFIG = {
     placeholder: "E.g. Compare SEO, outbound, and community-led motions for early traction.",
     description: "Describe what channel prioritization decision this matrix should support.",
   },
+};
+
+const DECISION_HINTS_BY_CONFIG = {
+  "startup-product-idea-validation": [
+    "Go / no-go on this idea",
+    "Decide what to validate first",
+    "Identify highest-risk assumptions before build",
+  ],
+  "market-entry-analysis": [
+    "Decide whether to enter this market now",
+    "Choose entry wedge and sequencing",
+    "Prioritize GTM motion for first traction",
+  ],
+  "competitive-landscape": [
+    "Pick the strongest competitor to beat first",
+    "Define positioning gap to exploit",
+    "Prioritize differentiators for next 2 quarters",
+  ],
+  "build-vs-buy-technology-decision": [
+    "Choose build vs buy vs hybrid",
+    "Decide under timeline and budget constraints",
+    "Identify lock-in and delivery risk tradeoffs",
+  ],
+  "investment-m-and-a-screening": [
+    "Prioritize targets for deeper diligence",
+    "Filter out weak-fit opportunities early",
+    "Decide what evidence must be validated next",
+  ],
+  "product-expansion-new-feature-adjacent-segment-new-geography": [
+    "Choose expansion path with best risk/reward",
+    "Prioritize feature vs segment vs geography",
+    "Decide what to pilot first",
+  ],
+  "market-sizing-tam-sam-som": [
+    "Validate if opportunity is large enough now",
+    "Choose realistic near-term serviceable segment",
+    "Set evidence-backed growth expectations",
+  ],
+  "icp-customer-persona-matrix": [
+    "Prioritize which ICP to target first",
+    "Identify best-fit buyer profile for GTM",
+    "Decide where sales effort should concentrate",
+  ],
+  "competitors-comparison-matrix": [
+    "Choose the best competitor benchmark set",
+    "Identify strongest alternatives buyers compare against",
+    "Decide where current concept has clear gaps",
+  ],
+  "channel-gtm-analysis-scorecard": [
+    "Choose primary growth channel for next quarter",
+    "Prioritize channel mix under budget limits",
+    "Decide what to test first for CAC efficiency",
+  ],
+  "channel-gtm-analysis-matrix": [
+    "Compare channels to prioritize near-term execution",
+    "Select channel portfolio for current constraints",
+    "Decide where to allocate first GTM budget",
+  ],
 };
 
 const DEFAULT_FRAMING_FIELDS = [
@@ -222,6 +311,14 @@ function normalizeSubjectsSpec(subjects = null) {
   };
 }
 
+function normalizeDecisionHints(decisionHints = []) {
+  if (!Array.isArray(decisionHints)) return [];
+  return decisionHints
+    .map((hint) => String(hint || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 function normalizeAttributeList(attributes = []) {
   if (!Array.isArray(attributes)) return [];
   return attributes
@@ -283,6 +380,7 @@ function normalizeResearchConfigSpec(spec) {
     attributes,
     subjects,
     matrixLayout,
+    decisionHints: normalizeDecisionHints(spec?.decisionHints || DECISION_HINTS_BY_CONFIG[spec?.id] || []),
   };
 }
 
@@ -857,6 +955,7 @@ export const RESEARCH_CONFIGS = CONFIG_SPECS.map((spec) => ({
   shortDescription: deriveShortDescription(spec.shortDescription || spec.methodology || spec.name),
   prompts: BASE_PROMPTS,
   models: SHARED_MODELS,
+  deepAssist: SHARED_DEEP_ASSIST,
   limits: SHARED_LIMITS,
 }));
 

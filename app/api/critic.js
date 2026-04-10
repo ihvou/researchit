@@ -1,6 +1,6 @@
 import { callOpenAI } from "@researchit/engine";
 import {
-  resolveRoleProviderConfig,
+  resolveRoleProviderCandidates,
   missingApiKeyError,
 } from "./providerConfig.js";
 
@@ -25,32 +25,53 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing messages or systemPrompt" });
   }
 
-  const resolved = resolveRoleProviderConfig({
+  const candidates = resolveRoleProviderCandidates({
     role: "critic",
     requestedProvider: provider,
     requestedModel: model,
     requestedWebSearchModel: webSearchModel,
     requestedBaseUrl: baseUrl,
     defaultModel: CRITIC_DEFAULT_MODEL,
+    liveSearch,
   });
 
-  if (!resolved.apiKey) {
+  if (!candidates.length) {
     return res.status(500).json({ error: missingApiKeyError("critic") });
   }
 
-  try {
-    const result = await callOpenAI({
-      apiKey: resolved.apiKey,
-      model: resolved.model,
-      webSearchModel: resolved.webSearchModel,
-      messages,
-      systemPrompt,
-      maxTokens,
-      liveSearch,
-      baseUrl: resolved.baseUrl,
-    });
-    return res.status(200).json(result);
-  } catch (err) {
-    return res.status(500).json({ error: err?.message || "OpenAI-compatible request failed" });
+  const failures = [];
+  for (let idx = 0; idx < candidates.length; idx += 1) {
+    const resolved = candidates[idx];
+    try {
+      const result = await callOpenAI({
+        apiKey: resolved.apiKey,
+        model: resolved.model,
+        webSearchModel: resolved.webSearchModel,
+        messages,
+        systemPrompt,
+        maxTokens,
+        liveSearch,
+        baseUrl: resolved.baseUrl,
+      });
+      return res.status(200).json({
+        ...result,
+        meta: {
+          ...(result?.meta || {}),
+          providerId: resolved.providerId,
+          providerFallbackUsed: idx > 0,
+          providerAttemptCount: idx + 1,
+        },
+      });
+    } catch (err) {
+      failures.push({
+        providerId: resolved.providerId,
+        message: err?.message || "Unknown provider error",
+      });
+    }
   }
+
+  const detail = failures.map((entry) => `${entry.providerId}: ${entry.message}`).join(" | ");
+  return res.status(500).json({
+    error: detail ? `All critic provider routes failed. ${detail}` : "OpenAI-compatible request failed",
+  });
 }

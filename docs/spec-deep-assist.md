@@ -563,6 +563,24 @@ Decision context and user role captured via the research setup popup are injecte
 
 ## 11. Implementation Plan
 
+### 11.0 Current Status (as of April 11, 2026)
+
+Implemented:
+- Deep Assist runtime evidence mode (`input.options.evidenceMode = "deep-assist"`) for both scorecard and matrix.
+- Three-provider default (`chatgpt`, `claude`, `gemini`) with per-provider agreement/disagreement surfaced in UI, progress, diagnostics, and exports.
+- Shared downstream phases remain integrated (critic, verification, confidence/scoring, synthesis/discovery).
+- Matrix executive synthesis and matrix detail/debate depth alignment are active.
+- UX-01 setup flow is active: matrix launch requires setup popup (subjects + optional decision context + role), scorecard launch keeps zero-friction analyze with optional setup popup, and context is injected into Native + Deep Assist prompt paths.
+- Native-flow quality lifts that Deep Assist depends on for trust diagnostics are active (verification hardening, targeted budgeting, round-robin recovery, niche strategist, standalone diagnostics panel).
+
+Not implemented yet:
+- Durable async orchestration with persisted/recoverable Deep Assist runs (DA-05).
+- Deep Assist post-merge quality recovery loop for unresolved contradictions (DA-02).
+- No-cap safety guardrails for retry/timeout runaway prevention (DA-03).
+- Run manifest + evidence cache reuse (DA-06).
+- Provider data-governance/privacy controls (DA-07).
+- Pre-launch/ongoing cost transparency UI (FR-01).
+
 ### Phase 0: Runtime Foundation (Prerequisite)
 
 1. Implement durable async orchestration for deep runs (persisted step state, retries, cancellation, resume after reconnect/deploy).
