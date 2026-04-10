@@ -23,16 +23,26 @@ The fundamental limitation of Native mode is that `web_search` returns short sni
 The ResearchConfig defines **what** to research (subjects, attributes, dimensions, prompts, scoring criteria). The output mode defines **what shape** the result takes (matrix vs. scorecard). The evidence mode defines **how** the engine collects evidence — this is a **runtime user choice**, not a config property.
 
 ```js
-// Engine API — evidence mode is a runtime option, not config
-runAnalysis(input, config, callbacks, {
-  evidenceMode: "native",       // default: current pipeline
-  // OR
-  evidenceMode: "deep-assist",  // new: external deep research APIs
-})
+// Non-breaking API contract:
+// evidence mode is passed via input.options (existing pattern), not a new positional arg.
+runAnalysis(
+  {
+    id,
+    description,
+    options: {
+      evidenceMode: "native" | "deep-assist",
+      deepAssist: {
+        providers: ["chatgpt", "claude", "gemini"],
+        minProviders: 2,
+        maxWaitMs: 300000
+      }
+    }
+  },
+  config,
+  callbacks
+)
 
-runMatrixAnalysis(input, config, callbacks, {
-  evidenceMode: "native" | "deep-assist",
-})
+runMatrixAnalysis(input, config, callbacks) // same input.options contract
 ```
 
 The same competitor-analysis config works identically with either mode. The user picks based on their need at launch time.
@@ -249,13 +259,15 @@ Each deep research provider needs an adapter that conforms to:
 ### 5.3 Provider Selection and Fallback
 
 ```js
-// Runtime options
+// Runtime options location: input.options
 {
-  evidenceMode: "deep-assist",
-  deepAssist: {
-    providers: ["claude", "chatgpt", "gemini"],  // default: all three
-    minProviders: 2,      // minimum providers that must succeed before marked degraded
-    maxWaitMs: 300000,    // 5 minute timeout per provider
+  options: {
+    evidenceMode: "deep-assist",
+    deepAssist: {
+      providers: ["claude", "chatgpt", "gemini"],  // default: all three
+      minProviders: 2,      // minimum providers that must succeed before marked degraded
+      maxWaitMs: 300000,    // 5 minute timeout per provider
+    }
   }
 }
 ```
@@ -349,7 +361,7 @@ When multiple providers return evidence for the same cell/dimension:
 
 ### 7.3 Phases That Stay Unchanged
 
-These run identically regardless of evidence mode:
+These phase **slots** remain shared regardless of evidence mode (same orchestration positions and state transitions). Some checks below are roadmap-gated and become fully identical only after their corresponding tasks are implemented.
 
 - **Critic validation** — reviews evidence quality, flags weak cells
 - **Cross-subject consistency** (MX-04) — checks contradictions across subjects
@@ -551,6 +563,13 @@ Decision context and user role captured via the research setup popup are injecte
 
 ## 11. Implementation Plan
 
+### Phase 0: Runtime Foundation (Prerequisite)
+
+1. Implement durable async orchestration for deep runs (persisted step state, retries, cancellation, resume after reconnect/deploy).
+2. Keep non-breaking engine API contract (`input.options.evidenceMode` + `input.options.deepAssist`).
+3. Add degraded-complete semantics (`complete`, `complete_with_gaps`, `failed`) with explicit reason codes in `analysisMeta`.
+4. Add provider-level progress/status persistence so UI can recover state mid-run.
+
 ### Phase 1: Three-Provider Matrix (MVP)
 
 1. Define `DeepResearchAdapter` interface in engine
@@ -570,6 +589,7 @@ Decision context and user role captured via the research setup popup are injecte
 2. Add dimension clustering logic for scorecard prompts
 3. Add provider agreement as a confidence signal in calibration engine
 4. Keep bounded targeted recovery after merge for unresolved/contradicted dimensions
+5. Add run manifest + evidence cache (hash prompt/config/provider set, persist raw provider outputs + normalized extraction, safe cache reuse on retry/replay)
 
 ### Phase 3: Polish
 
@@ -578,13 +598,16 @@ Decision context and user role captured via the research setup popup are injecte
 3. Per-provider contribution tracking in `analysisMeta`
 4. Graceful degradation when providers are unavailable
 5. Publish benchmark deltas vs ChatGPT/Claude/Gemini deep research baselines
+6. Add provider data-governance controls (redaction policy, provider allow/deny per run, retention metadata in diagnostics)
 
 ---
 
 ## 12. What This Does NOT Change
 
-- **ResearchConfig contract** — no changes. Configs are evidence-mode-agnostic.
-- **Output format** — same matrix/scorecard structure regardless of evidence source.
+- **Evidence-mode placement in config** — `evidenceMode` is not added to `ResearchConfig`; mode stays runtime-selectable.  
+  Optional config enrichments (for example `decisionHints[]`) may still be added for UX/prompt quality without coupling config to execution mode.
+- **Output contract shape** — matrix/scorecard outputs keep the same top-level contract and compatibility guarantees.  
+  Deep Assist may add optional richer fields (for example matrix `full`, `arguments`, `risks`) while preserving backward-compatible base fields (`value`, `confidence`, `sources`).
 - **Follow-up pipeline** — follows up work against the stored evidence, regardless of how it was collected.
 - **Export format** — same HTML/PDF/ZIP output.
 - **Engine invariants** — engine still has zero host dependencies, zero direct API calls, all I/O through injected transport.
@@ -604,6 +627,9 @@ Decision context and user role captured via the research setup popup are injecte
 
 4. **Rate limits and quotas**: Deep research APIs may have aggressive rate limits. Can we run 5 parallel calls per provider?
    → Mitigation: Sequential fallback if parallel calls are rate-limited. Provider availability check before launch.
+
+5. **Data governance and compliance**: How do we guarantee sensitive user context is handled safely across multiple providers?
+   → Mitigation: enforce redaction policy before provider calls, expose provider routing in diagnostics, and attach retention metadata to every run manifest.
 
 ---
 
