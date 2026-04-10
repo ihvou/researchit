@@ -361,6 +361,45 @@ These run identically regardless of evidence mode:
 - **Confidence calibration** — provider agreement is an additional signal
 - **Synthesis** — more complete evidence produces better executive summaries
 
+### 7.5 Matrix Executive Synthesis (New Phase)
+
+Scorecard mode already has an executive summary in the first tab. Matrix mode needs the same. After critic + verification + consistency, add a synthesis phase that produces:
+
+- **Direct answer to the decision question** — "For [user's question], [Subject B] is the strongest choice because..."
+- **Provider agreement highlights** — where all 3 providers converge, high confidence
+- **Top 2-3 decisive differentiators** — the attributes that most separate the subjects
+- **Key risks to the recommendation** — what could change the conclusion
+- **Explicit gaps** — what the research could not determine
+
+This synthesis is shaped by the user's decision context (see Section 7.6) and displayed in a dedicated summary tab, consistent with the scorecard's first-tab summary.
+
+### 7.6 Matrix Cell Depth Alignment
+
+Scorecard dimensions have rich depth: `full` (3-5 paragraphs), `arguments` (supporting/limiting), `risks`. Matrix cells currently only have `value` (2-4 sentences).
+
+Deep Assist matrix cells should produce aligned depth:
+
+```js
+{
+  // Grid layer (visible in matrix table — keeps cells scannable)
+  value: "2-4 sentence finding",
+  confidence: "high|medium|low",
+  sources: [...],
+
+  // Detail layer (visible in detail/debate tab — full depth)
+  full: "1-2 paragraph detailed analysis",
+  arguments: {
+    supporting: [{ claim, detail, sources }],
+    limiting: [{ claim, detail, sources }]
+  },
+  risks: "key risks for this cell",
+}
+```
+
+The grid view stays compact and scannable. Each cell has a small navigation affordance (icon/link) that jumps the user to the corresponding item in the detail tab, where the full evidence, arguments, and debate thread are displayed — consistent with how scorecard dimensions work in their expandable list view.
+
+The `arguments` structure (short claims with details) is the primary depth layer — it's faster to scan than prose. The `full` field provides narrative context when needed, not a wall of text.
+
 ---
 
 ## 8. Cost Model
@@ -452,7 +491,31 @@ Each prompt must:
 4. **Demand explicit gaps** — what could not be found, what was inferred vs. evidenced
 5. **Inject config context** — the user's research prompt, framing fields, and any config-level hints
 
-### 10.2 Per-Research-Type Prompt Customization
+### 10.2 Provider-Specific Prompt Tuning
+
+The core research prompt is **identical across all 3 providers** to preserve cross-validation and hallucination detection through agreement. If a claim appears in only one provider's output, that is a reliable signal to flag it for critic review.
+
+However, each provider receives a small **emphasis suffix** that nudges priority without changing research scope:
+
+```
+[IDENTICAL across all 3 providers]
+Research [subject/topic] across these attributes/dimensions: [list]
+For each, provide: specific data points with dates, named sources with URLs,
+confidence assessment, and explicit gaps.
+Context: [user's prompt + framing fields]
+
+[PROVIDER-SPECIFIC suffix — does NOT change scope]
+OpenAI:  "Prioritize quantitative data, specific metrics, and measurable evidence."
+Claude:  "Pay special attention to risks, counterevidence, and uncertainty factors."
+Gemini:  "Include the most recent data points, developments, and emerging signals."
+```
+
+This ensures:
+- **Core claims overlap 90%+** → agreement/disagreement detection works for hallucination catching
+- **Each provider adds marginal emphasis** → more quantitative data from OpenAI, more risk factors from Claude, more recent signals from Gemini
+- The overlap preserves cross-validation; the differences are genuinely additive
+
+### 10.3 Per-Research-Type Prompt Customization
 
 The prompt templates should be influenced by the ResearchConfig's existing fields:
 - `dimensions[].fullDef` — rubric definitions guide what to look for
