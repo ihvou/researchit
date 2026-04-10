@@ -115,6 +115,16 @@ export default function ExpandedRow({
                 | Cells: {uc.matrix.coverage.totalCells} | Low confidence: {uc.matrix.coverage.lowConfidenceCells || 0} | Critic flags: {uc.matrix.coverage.contestedCells || 0}
               </span>
             )}
+            {isMatrixMode && uc.status === "complete" && uc.analysisMeta?.matrixCoverageSLAPassed != null && (
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
+                | Coverage SLA: {uc.analysisMeta.matrixCoverageSLAPassed ? "pass" : "fail"}
+              </span>
+            )}
+            {!isMatrixMode && uc.status === "complete" && uc.analysisMeta?.hybridReconcileRetryTriggered && (
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
+                | Reconcile retry: {uc.analysisMeta.hybridReconcileRetryUsed ? "applied" : "attempted"}
+              </span>
+            )}
           </div>
         </div>
       )}

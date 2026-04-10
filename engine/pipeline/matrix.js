@@ -400,6 +400,12 @@ function createInitialState(input) {
       sourceVerificationPenalizedCells: 0,
       sourceVerificationSkippedReason: null,
       matrixHybridStats: null,
+      matrixReconcileHealth: null,
+      matrixReconcileRetryTriggered: false,
+      matrixReconcileRetryAttempts: 0,
+      matrixReconcileRetryUsed: false,
+      matrixReconcileRetryReason: "",
+      matrixReconcileRetryDiagnostics: null,
       contestedCellsResolved: 0,
       contestedCellsConceded: 0,
       contestedCellsDefended: 0,
@@ -757,6 +763,51 @@ function matrixHybridStats(subjects = [], attributes = [], baseline = {}, web = 
   return { changedFromBaseline, changedFromWeb, totalCells: pairs.length };
 }
 
+function evaluateMatrixReconcileHealth(subjects = [], attributes = [], baseline = {}, web = {}, reconciled = {}) {
+  const stats = matrixHybridStats(subjects, attributes, baseline, web, reconciled);
+  const coverage = summarizeCoverage(Array.isArray(reconciled?.cells) ? reconciled.cells : []);
+  const lowConfidenceRatio = stats.totalCells ? (coverage.lowConfidenceCells / stats.totalCells) : 0;
+  const strongDisagreementThreshold = Math.max(3, Math.ceil(stats.totalCells * 0.2));
+  const highUncertaintyThreshold = Math.max(3, Math.ceil(stats.totalCells * 0.3));
+
+  const suspicious = (
+    stats.changedFromWeb === 0
+      && stats.changedFromBaseline <= 1
+      && coverage.lowConfidenceCells >= highUncertaintyThreshold
+  ) || (
+    stats.changedFromWeb <= 1
+      && stats.changedFromBaseline <= 1
+      && coverage.lowConfidenceCells >= highUncertaintyThreshold
+      && stats.totalCells >= strongDisagreementThreshold
+  );
+
+  const notes = [];
+  if (stats.changedFromWeb === 0) {
+    notes.push("Reconcile matched web draft exactly despite unresolved low-confidence cells.");
+  }
+  if (stats.changedFromBaseline <= 1) {
+    notes.push("Reconcile remained near-baseline while matrix uncertainty stayed high.");
+  }
+  if (coverage.lowConfidenceCells >= highUncertaintyThreshold) {
+    notes.push(`Low-confidence cells remain high: ${coverage.lowConfidenceCells}/${stats.totalCells}.`);
+  }
+
+  return {
+    ...stats,
+    lowConfidenceCells: coverage.lowConfidenceCells,
+    lowConfidenceRatio,
+    suspicious,
+    notes,
+  };
+}
+
+function scoreMatrixReconcileCandidate(diag = {}) {
+  const changedBlend = Math.max(Number(diag.changedFromWeb || 0), Number(diag.changedFromBaseline || 0));
+  const uncertaintyPenalty = Number(diag.lowConfidenceRatio || 0) * 2.5;
+  const suspiciousPenalty = diag.suspicious ? 2 : 0;
+  return changedBlend - uncertaintyPenalty - suspiciousPenalty;
+}
+
 async function fetchSourceWithCache(url, sourceFetchCache = new Map(), transport = null) {
   const normalizedUrl = normalizeHttpUrl(url);
   if (!normalizedUrl) {
@@ -939,7 +990,32 @@ Return JSON only:
 }`;
 }
 
-function buildMatrixReconcilePrompt({ rawInput, decisionQuestion, subjects, attributes, baseline, web }) {
+function buildMatrixReconcilePrompt({
+  rawInput,
+  decisionQuestion,
+  subjects,
+  attributes,
+  baseline,
+  web,
+  qualityGuard = null,
+}) {
+  const guard = qualityGuard && typeof qualityGuard === "object" ? qualityGuard : null;
+  const guardNotes = Array.isArray(guard?.notes)
+    ? guard.notes.map((note) => cleanText(note)).filter(Boolean)
+    : [];
+  const focusCells = Array.isArray(guard?.focusCells)
+    ? guard.focusCells
+      .map((item) => `${cleanText(item?.subjectId)}::${cleanText(item?.attributeId)}`)
+      .filter((item) => item && item !== "::")
+    : [];
+  const qualityGuardBlock = guard
+    ? `\nReconcile quality guard:
+- Previous reconcile looked implausibly unchanged.
+- Prioritize these unresolved cells first: ${focusCells.length ? focusCells.join(", ") : "none specified"}.
+- Guard notes:
+${guardNotes.length ? guardNotes.map((note) => `  - ${note}`).join("\n") : "  - Previous merge underused available draft disagreement signals."}\n`
+    : "";
+
   return `Merge two matrix drafts for the same research question.
 
 Research brief:
@@ -965,6 +1041,8 @@ Rules:
 - If one draft has clearly higher confidence with better sources, prefer it.
 - If both are weak, keep conservative wording and low confidence.
 - Keep output complete for all subject x attribute pairs.
+- Avoid blindly copying one draft when many cells still have low confidence.
+${qualityGuardBlock}
 
 Return JSON only with the same schema as analyst pass.`;
 }
@@ -1593,33 +1671,111 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       analysisMeta: state.analysisMeta,
     });
 
-    const reconcilePrompt = buildMatrixReconcilePrompt({
-      rawInput: state.rawInput,
-      decisionQuestion,
-      subjects,
-      attributes,
-      baseline: baselineMatrix,
-      web: webMatrix,
-    });
-    const reconcileRes = await transport.callAnalyst(
-      [{ role: "user", content: reconcilePrompt }],
-      analystPrompt,
-      analystTokens,
-      {
-        ...roleOptions(config, "analyst"),
-        liveSearch: false,
-        includeMeta: true,
-      }
-    );
-    const reconcileParsed = extractJson(reconcileRes?.text || reconcileRes, {});
-    let reconciledMatrix = normalizeAnalystMatrix(reconcileParsed, subjects, attributes);
-    state.analysisMeta = mergeMeta(state.analysisMeta, reconcileRes?.meta, "analyst");
-    await verifyMatrixCellSources(reconciledMatrix, state.analysisMeta, sourceFetchCache, {
-      penalizeConfidence: true,
-      transport,
-    });
+    const runReconcilePass = async (qualityGuard = null, attempt = "initial") => {
+      const reconcilePrompt = buildMatrixReconcilePrompt({
+        rawInput: state.rawInput,
+        decisionQuestion,
+        subjects,
+        attributes,
+        baseline: baselineMatrix,
+        web: webMatrix,
+        qualityGuard,
+      });
+      const reconcileRes = await transport.callAnalyst(
+        [{ role: "user", content: reconcilePrompt }],
+        analystPrompt,
+        analystTokens,
+        {
+          ...roleOptions(config, "analyst"),
+          liveSearch: false,
+          includeMeta: true,
+        }
+      );
+      state.analysisMeta = mergeMeta(state.analysisMeta, reconcileRes?.meta, "analyst");
+      const reconcileParsed = extractJson(reconcileRes?.text || reconcileRes, {});
+      const matrix = normalizeAnalystMatrix(reconcileParsed, subjects, attributes);
+      await verifyMatrixCellSources(matrix, state.analysisMeta, sourceFetchCache, {
+        penalizeConfidence: true,
+        transport,
+      });
+      appendAnalysisDebugEvent(debugSession, {
+        type: "reconcile_pass_complete",
+        phase: "matrix_reconcile",
+        attempt,
+      });
+      return matrix;
+    };
 
+    let reconciledMatrix = await runReconcilePass(null, "initial");
+    const initialHealth = evaluateMatrixReconcileHealth(subjects, attributes, baselineMatrix, webMatrix, reconciledMatrix);
+    state.analysisMeta.matrixReconcileHealth = initialHealth;
     state.analysisMeta.matrixHybridStats = matrixHybridStats(subjects, attributes, baselineMatrix, webMatrix, reconciledMatrix);
+
+    if (initialHealth.suspicious) {
+      state.analysisMeta.matrixReconcileRetryTriggered = true;
+      state.analysisMeta.matrixReconcileRetryAttempts += 1;
+      state.analysisMeta.matrixReconcileRetryReason = initialHealth.notes.join(" ");
+      appendAnalysisDebugEvent(debugSession, {
+        type: "reconcile_retry_triggered",
+        phase: "matrix_reconcile",
+        attempt: "quality_guard",
+        diagnostics: initialHealth,
+        note: state.analysisMeta.matrixReconcileRetryReason,
+      });
+
+      const focusCells = reconciledMatrix.cells
+        .filter((cell) => normalizeConfidence(cell.confidence) === "low")
+        .slice(0, 8)
+        .map((cell) => ({ subjectId: cell.subjectId, attributeId: cell.attributeId }));
+
+      const retryCandidate = await runReconcilePass({
+        notes: initialHealth.notes,
+        focusCells,
+      }, "quality_guard_retry");
+      const retryHealth = evaluateMatrixReconcileHealth(subjects, attributes, baselineMatrix, webMatrix, retryCandidate);
+      const beforeScore = scoreMatrixReconcileCandidate(initialHealth);
+      const retryScore = scoreMatrixReconcileCandidate(retryHealth);
+      const useRetry = !retryHealth.suspicious || retryScore > beforeScore;
+
+      state.analysisMeta.matrixReconcileRetryUsed = useRetry;
+      state.analysisMeta.matrixReconcileRetryDiagnostics = {
+        initial: initialHealth,
+        retry: retryHealth,
+        selected: useRetry ? "retry" : "initial",
+        qualityScoreInitial: beforeScore,
+        qualityScoreRetry: retryScore,
+      };
+
+      appendAnalysisDebugEvent(debugSession, {
+        type: "reconcile_retry_completed",
+        phase: "matrix_reconcile",
+        attempt: "quality_guard",
+        useRetry,
+        diagnostics: state.analysisMeta.matrixReconcileRetryDiagnostics,
+      });
+
+      if (useRetry) {
+        reconciledMatrix = retryCandidate;
+        state.analysisMeta.matrixReconcileHealth = retryHealth;
+        state.analysisMeta.matrixHybridStats = matrixHybridStats(subjects, attributes, baselineMatrix, webMatrix, reconciledMatrix);
+      }
+    }
+
+    const finalReconcileHealth = evaluateMatrixReconcileHealth(subjects, attributes, baselineMatrix, webMatrix, reconciledMatrix);
+    state.analysisMeta.matrixReconcileHealth = finalReconcileHealth;
+    state.analysisMeta.matrixHybridStats = matrixHybridStats(subjects, attributes, baselineMatrix, webMatrix, reconciledMatrix);
+    if (finalReconcileHealth.suspicious) {
+      const note = finalReconcileHealth.notes.join(" ")
+        || "Matrix reconcile remained implausibly unchanged after quality guard checks.";
+      appendAnalysisDebugEvent(debugSession, {
+        type: "reconcile_quality_guard_failed",
+        phase: "matrix_reconcile",
+        attempt: "final",
+        diagnostics: finalReconcileHealth,
+        note,
+      });
+      throw new Error(`Matrix reconcile quality guard failed. ${note}`);
+    }
 
     update("matrix_targeted", {
       matrix: {

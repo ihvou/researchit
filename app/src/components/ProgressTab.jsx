@@ -190,11 +190,128 @@ function stateBackground(state) {
   return "var(--ck-surface-soft)";
 }
 
+function percent(value, decimals = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${(n * 100).toFixed(decimals)}%`;
+}
+
+function diagnosticRows(uc, outputMode = "scorecard") {
+  const meta = uc?.analysisMeta || {};
+  const rows = [];
+
+  const checked = Number(meta.sourceVerificationChecked || 0);
+  const verified = Number(meta.sourceVerificationVerified || 0);
+  const notFound = Number(meta.sourceVerificationNotFound || 0);
+  const failed = Number(meta.sourceVerificationFetchFailed || 0);
+  if (checked > 0) {
+    rows.push({
+      label: "Source verification",
+      value: `${verified}/${checked} verified (${percent(checked ? verified / checked : 0)})`,
+      detail: `${notFound} not found in page, ${failed} fetch failures`,
+    });
+  } else if (meta.sourceVerificationSkippedReason) {
+    rows.push({
+      label: "Source verification",
+      value: "Skipped",
+      detail: String(meta.sourceVerificationSkippedReason),
+    });
+  }
+
+  const analystCalls = Number(meta.webSearchCalls || 0);
+  const criticCalls = Number(meta.criticWebSearchCalls || 0);
+  const discoveryCalls = Number(meta.discoveryWebSearchCalls || 0);
+  const targetedCalls = Number(meta.lowConfidenceTargetedWebSearchCalls || 0);
+  rows.push({
+    label: "Web search usage",
+    value: `${analystCalls + criticCalls + discoveryCalls + targetedCalls} calls`,
+    detail: `analyst ${analystCalls}, critic ${criticCalls}, targeted ${targetedCalls}, discovery ${discoveryCalls}`,
+  });
+
+  if (outputMode === "matrix") {
+    const coverage = uc?.matrix?.coverage || {};
+    const criticFlags = Number(meta.criticFlagsRaised || 0);
+    const criticAudited = Number(meta.criticCellsAudited || coverage.totalCells || 0);
+    const flagRate = Number(meta.criticFlagRate || 0);
+    rows.push({
+      label: "Critic coverage",
+      value: `${criticFlags}/${criticAudited} flags (${percent(flagRate)})`,
+      detail: meta.criticFlagRateAlert ? String(meta.criticFlagRateAlert) : "Flag rate monitor active",
+    });
+
+    const slaPassed = !!meta.matrixCoverageSLAPassed;
+    const slaDiag = meta.matrixCoverageSLA || {};
+    rows.push({
+      label: "Coverage SLA",
+      value: slaPassed ? "Passed" : "Not passed",
+      detail: slaPassed
+        ? `unresolved ${Number(slaDiag.unresolvedCells || 0)}/${Number(slaDiag.totalCells || coverage.totalCells || 0)}`
+        : String(meta.matrixCoverageSLAFailureReason || "Coverage threshold not met."),
+    });
+
+    if (meta.matrixHybridStats) {
+      const stats = meta.matrixHybridStats;
+      rows.push({
+        label: "Reconcile deltas",
+        value: `vs baseline ${Number(stats.changedFromBaseline || 0)}, vs web ${Number(stats.changedFromWeb || 0)}`,
+        detail: `${Number(stats.totalCells || 0)} total cells`,
+      });
+    }
+
+    if (meta.matrixReconcileRetryTriggered) {
+      rows.push({
+        label: "Reconcile quality retry",
+        value: meta.matrixReconcileRetryUsed ? "Applied" : "Attempted (kept initial)",
+        detail: String(meta.matrixReconcileRetryReason || "Quality guard triggered a targeted reconcile retry."),
+      });
+    }
+  } else {
+    const hybrid = meta.hybridStats || {};
+    if (hybrid && Object.keys(hybrid).length) {
+      rows.push({
+        label: "Hybrid reconcile",
+        value: `vs baseline ${Number(hybrid.changedFromBaseline || 0)}, vs web ${Number(hybrid.changedFromWeb || 0)}`,
+        detail: `weighted baseline ${hybrid.baselineWeightedScore ?? "-"}%, web ${hybrid.webWeightedScore ?? "-"}%, final ${hybrid.reconciledWeightedScore ?? "-"}%`,
+      });
+    }
+
+    if (meta.hybridReconcileRetryTriggered) {
+      rows.push({
+        label: "Reconcile quality retry",
+        value: meta.hybridReconcileRetryUsed ? "Applied" : "Attempted (kept initial)",
+        detail: String(meta.hybridReconcileRetryReason || "Quality guard triggered a targeted reconcile retry."),
+      });
+    }
+
+    const lowInitial = Number(meta.lowConfidenceInitialCount || 0);
+    const upgraded = Number(meta.lowConfidenceUpgradedCount || 0);
+    const validatedLow = Number(meta.lowConfidenceValidatedLowCount || 0);
+    const cycleFailures = Number(meta.lowConfidenceCycleFailures || 0);
+    rows.push({
+      label: "Low-confidence cycle",
+      value: `${lowInitial} scanned, ${upgraded} upgraded`,
+      detail: `${validatedLow} validated low, ${cycleFailures} failures`,
+    });
+
+    const decisionAdjustments = Number(meta.phase3DecisionGuardAdjustments || 0);
+    const confidenceAdjustments = Number(meta.phase3ConfidenceGuardAdjustments || 0);
+    const polarityAdjustments = Number(meta.phase3PolarityGuardAdjustments || 0);
+    rows.push({
+      label: "Final guard adjustments",
+      value: `${decisionAdjustments + confidenceAdjustments + polarityAdjustments} total`,
+      detail: `decision ${decisionAdjustments}, confidence ${confidenceAdjustments}, polarity ${polarityAdjustments}`,
+    });
+  }
+
+  return rows;
+}
+
 export default function ProgressTab({ uc, outputMode = "scorecard" }) {
   const flow = outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW;
   const rank = phaseRankMap(flow);
   const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
   const currentIdx = rank[resolvedPhase] ?? 0;
+  const diagnostics = diagnosticRows(uc, outputMode);
 
   return (
     <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
@@ -255,6 +372,27 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
             </div>
           );
         })}
+      </div>
+
+      <div style={{ marginTop: 12, border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, padding: "10px 10px 8px" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+          Run Diagnostics
+        </div>
+        <div style={{ display: "grid", gap: 7 }}>
+          {diagnostics.map((item, idx) => (
+            <div key={`${item.label}-${idx}`} style={{ border: "1px solid var(--ck-line)", background: "var(--ck-bg)", borderRadius: 2, padding: "6px 8px" }}>
+              <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>{item.label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-text)" }}>{item.value}</span>
+              </div>
+              {item.detail ? (
+                <div style={{ marginTop: 2, fontSize: 10, color: "var(--ck-muted)", lineHeight: 1.35 }}>
+                  {item.detail}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{

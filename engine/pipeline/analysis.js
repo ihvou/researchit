@@ -333,6 +333,8 @@ Hard rules:
 - Derive scores mechanically from the enumerated evidence above.
 - Do NOT add new facts, deployments, or claims not present in Step 1 evidence.
 - If evidence is weak or mixed, score conservatively and explain limits.
+- Do not assign score 4-5 when confidence is low or evidence language is mostly weak/uncertain.
+- If score is 4-5, include explicit strong-evidence wording (for example multiple verifiable deployments or independent corroboration).
 - Keep attributes consistent with Step 1 unless a clear correction is needed.
 - Keep "attributes.inputFrame.providedInput" verbatim.
 - Do not infer missing specifics in framing fields; keep "unspecified" where missing.
@@ -811,6 +813,7 @@ function sourceSummary(sources = []) {
 function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
   condensed = false,
   framingFields = [],
+  qualityGuard = null,
 } = {}) {
   const comparison = dims.map((d) => {
     const b = baseline?.dimensions?.[d.id] || {};
@@ -836,6 +839,21 @@ function buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
 
   const evidenceTemplate = buildDimEvidenceJsonTemplate(dims, condensed);
   const attrsTemplate = buildAttributesTemplate({ condensed, framingFields });
+  const guard = qualityGuard && typeof qualityGuard === "object" ? qualityGuard : null;
+  const focusDimensionIds = Array.isArray(guard?.focusDimensionIds)
+    ? guard.focusDimensionIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const guardNotes = Array.isArray(guard?.notes)
+    ? guard.notes.map((note) => String(note || "").trim()).filter(Boolean)
+    : [];
+  const qualityGuardBlock = guard
+    ? `\nRECONCILE QUALITY GUARD:
+- This reconcile pass was retried because the previous merge looked implausibly unchanged.
+- Focus dimensions with unresolved confidence gaps: ${focusDimensionIds.length ? focusDimensionIds.join(", ") : "none specified"}.
+- Explicit concerns to address:
+${guardNotes.length ? guardNotes.map((note) => `  - ${note}`).join("\n") : "  - Previous reconcile underused web-assisted deltas while uncertainty remained high."}
+- Keep every dimension complete and explicitly state gaps instead of silently reusing weaker baseline wording.\n`
+    : "";
 
   return `Step 1 of 2 - EVIDENCE ENUMERATION ONLY (HYBRID RECONCILE).
 You are a reliability reviewer combining two analyst drafts for the same use case.
@@ -858,9 +876,11 @@ Rules:
 - When confidence differs between drafts, prefer evidence from the higher-confidence draft.
 - When both drafts flag the same missing evidence, preserve that gap.
 - When one draft fills a gap that the other flags, include the gap-filling evidence.
+- Do not silently copy one draft across all dimensions when drafts materially disagree.
 - Enumerate evidence only. Do NOT output scores or confidence in this step.
 - Keep coherent attributes across drafts.
 - Preserve inputFrame.providedInput verbatim and keep missing framing fields as "unspecified".
+${qualityGuardBlock}
 
 Return ONLY this JSON:
 {
@@ -1579,6 +1599,81 @@ function computeHybridDeltaStats(dims, baseline, web, final) {
   };
 }
 
+function countScoreDelta(dims, left, right) {
+  let changed = 0;
+  dims.forEach((d) => {
+    const a = clampScore(left?.dimensions?.[d.id]?.score, null);
+    const b = clampScore(right?.dimensions?.[d.id]?.score, null);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return;
+    if (a !== b) changed += 1;
+  });
+  return changed;
+}
+
+function countLowConfidenceDimensions(payload, dims) {
+  let low = 0;
+  dims.forEach((d) => {
+    const conf = normalizeConfidenceLevel(payload?.dimensions?.[d.id]?.confidence);
+    if (conf === "low") low += 1;
+  });
+  return low;
+}
+
+function evaluateScorecardReconcileHealth(dims, baseline, web, reconciled) {
+  const total = Math.max(1, dims.length);
+  const baseVsWebChanged = countScoreDelta(dims, baseline, web);
+  const recVsBaseChanged = countScoreDelta(dims, baseline, reconciled);
+  const recVsWebChanged = countScoreDelta(dims, web, reconciled);
+  const lowConfidenceCount = countLowConfidenceDimensions(reconciled, dims);
+  const lowConfidenceRatio = lowConfidenceCount / total;
+  const strongDisagreementThreshold = Math.max(2, Math.ceil(total * 0.25));
+  const highUncertaintyThreshold = Math.max(2, Math.ceil(total * 0.3));
+  const suspicious = (
+    baseVsWebChanged >= strongDisagreementThreshold
+      && recVsWebChanged === 0
+      && lowConfidenceCount >= highUncertaintyThreshold
+  ) || (
+    baseVsWebChanged >= strongDisagreementThreshold
+      && recVsBaseChanged <= 1
+      && lowConfidenceRatio >= 0.45
+  );
+
+  const notes = [];
+  if (baseVsWebChanged >= strongDisagreementThreshold) {
+    notes.push(`Baseline vs web disagree on ${baseVsWebChanged}/${total} dimensions.`);
+  }
+  if (recVsWebChanged === 0) {
+    notes.push("Reconcile is identical to web pass despite unresolved uncertainty.");
+  }
+  if (recVsBaseChanged <= 1) {
+    notes.push("Reconcile remained near-baseline even though drafts diverged.");
+  }
+  if (lowConfidenceCount >= highUncertaintyThreshold) {
+    notes.push(`Low-confidence dimensions remain high: ${lowConfidenceCount}/${total}.`);
+  }
+
+  return {
+    totalDimensions: total,
+    baseVsWebChanged,
+    recVsBaseChanged,
+    recVsWebChanged,
+    lowConfidenceCount,
+    lowConfidenceRatio,
+    suspicious,
+    notes,
+  };
+}
+
+function scoreReconcileCandidate(diag = {}) {
+  const recVsWeb = Number(diag.recVsWebChanged || 0);
+  const recVsBase = Number(diag.recVsBaseChanged || 0);
+  const lowRatio = Number(diag.lowConfidenceRatio || 0);
+  const changedBlend = Math.max(recVsWeb, recVsBase);
+  const uncertaintyPenalty = lowRatio * 2;
+  const suspiciousPenalty = diag.suspicious ? 2 : 0;
+  return changedBlend - uncertaintyPenalty - suspiciousPenalty;
+}
+
 function buildConsistencyCheckPrompt(desc, dims, p1, p2, p3) {
   const rubricBlock = buildRubricCalibrationBlock(dims, { wordCap: 12 });
   const snapshots = dims.map((d) => {
@@ -2015,6 +2110,124 @@ function enforcePhase3ConfidenceRules(payload, phase1, phase2, dims) {
   return { adjusted: out, adjustments };
 }
 
+function polaritySignalCounts(text = "") {
+  const normalized = String(text || "").toLowerCase();
+  const negativePatterns = [
+    /\binsufficient evidence\b/g,
+    /\bno reliable evidence\b/g,
+    /\bweak evidence\b/g,
+    /\blimited evidence\b/g,
+    /\bthin evidence\b/g,
+    /\bhigh uncertainty\b/g,
+    /\buncertain\b/g,
+    /\bunproven\b/g,
+    /\bspeculative\b/g,
+    /\bhigh risk\b/g,
+    /\bimmature\b/g,
+  ];
+  const positivePatterns = [
+    /\bstrong evidence\b/g,
+    /\bmultiple independent sources\b/g,
+    /\bverifiable\b/g,
+    /\bwell evidenced\b/g,
+    /\brepeatable\b/g,
+    /\bvalidated\b/g,
+    /\bproven\b/g,
+    /\bdurable advantage\b/g,
+  ];
+
+  const countMatches = (patterns) => patterns.reduce((sum, pattern) => {
+    const matches = normalized.match(pattern);
+    return sum + (matches ? matches.length : 0);
+  }, 0);
+
+  return {
+    negative: countMatches(negativePatterns),
+    positive: countMatches(positivePatterns),
+  };
+}
+
+function enforcePhase3PolarityRules(payload, phase1, dims) {
+  const out = payload && typeof payload === "object"
+    ? JSON.parse(JSON.stringify(payload))
+    : {};
+  out.dimensions = out.dimensions && typeof out.dimensions === "object" ? out.dimensions : {};
+  const adjustments = [];
+
+  for (const d of dims) {
+    const id = d.id;
+    const initialDim = phase1?.dimensions?.[id] || {};
+    out.dimensions[id] = out.dimensions[id] || {};
+    const finalDim = out.dimensions[id];
+
+    const initialScore = clampScore(initialDim?.score, null);
+    let finalScore = clampScore(finalDim?.finalScore, initialScore);
+    const finalConfidence = normalizeConfidenceLevel(finalDim?.confidence) || "medium";
+    const basis = String(finalDim?.revisionBasis || "").trim().toLowerCase();
+    const textBundle = [
+      finalDim?.brief,
+      finalDim?.response,
+      finalDim?.confidenceReason,
+      finalDim?.revisionJustification,
+      finalDim?.confidenceGap,
+    ].filter(Boolean).join(" ");
+    const signals = polaritySignalCounts(textBundle);
+
+    if (basis === "evidence_gap" && Number.isFinite(initialScore) && Number.isFinite(finalScore) && finalScore > initialScore) {
+      const from = finalScore;
+      finalScore = initialScore;
+      finalDim.finalScore = finalScore;
+      finalDim.scoreChanged = false;
+      finalDim.decision = "defend";
+      finalDim.revisionBasis = "none";
+      finalDim.revisionJustification = "Score increase removed because revisionBasis was evidence_gap.";
+      adjustments.push({
+        dimensionId: id,
+        type: "evidence_gap_cannot_raise_score",
+        from,
+        to: finalScore,
+        detail: "Evidence-gap concessions cannot produce higher scores.",
+      });
+    }
+
+    if (Number.isFinite(finalScore) && finalScore >= 4 && finalConfidence === "low") {
+      const from = finalScore;
+      finalScore = 3;
+      finalDim.finalScore = finalScore;
+      finalDim.scoreChanged = Number.isFinite(initialScore) ? finalScore !== initialScore : true;
+      if (!String(finalDim?.revisionJustification || "").trim()) {
+        finalDim.revisionJustification = "High score reduced because confidence remained low after critique.";
+      }
+      adjustments.push({
+        dimensionId: id,
+        type: "high_score_low_confidence_cap",
+        from,
+        to: finalScore,
+        detail: "Scores 4-5 are not allowed with low confidence after final checks.",
+      });
+    }
+
+    if (Number.isFinite(finalScore) && finalScore >= 4 && signals.negative >= 2 && signals.positive === 0) {
+      const from = finalScore;
+      finalScore = 3;
+      finalDim.finalScore = finalScore;
+      finalDim.scoreChanged = Number.isFinite(initialScore) ? finalScore !== initialScore : true;
+      if (!String(finalDim?.revisionJustification || "").trim()) {
+        finalDim.revisionJustification = "Score capped due to negative evidence wording inconsistent with 4-5 rating.";
+      }
+      adjustments.push({
+        dimensionId: id,
+        type: "polarity_text_score_mismatch",
+        from,
+        to: finalScore,
+        detail: "Narrative indicates weak evidence while score remained high.",
+      });
+    }
+  }
+
+  return { adjusted: out, adjustments };
+}
+
 function sanitizeEvidenceItem(item) {
   if (!item || typeof item !== "object") return null;
   const point = String(item.point || "").trim();
@@ -2356,8 +2569,96 @@ async function runHybridPhase1(
     passLabel: "analyst_reconcile",
   });
 
-  analysisMeta.hybridStats = computeHybridDeltaStats(dims, baseline, web, reconciled);
-  return reconciled;
+  let reconciledFinal = reconciled;
+  const initialHealth = evaluateScorecardReconcileHealth(dims, baseline, web, reconciledFinal);
+  analysisMeta.hybridReconcileHealth = initialHealth;
+  analysisMeta.hybridStats = computeHybridDeltaStats(dims, baseline, web, reconciledFinal);
+
+  if (initialHealth.suspicious) {
+    analysisMeta.hybridReconcileRetryTriggered = true;
+    analysisMeta.hybridReconcileRetryAttempts += 1;
+    analysisMeta.hybridReconcileRetryReason = initialHealth.notes.join(" ");
+    appendAnalysisDebugEvent(debugSession, {
+      type: "reconcile_retry_triggered",
+      phase: "analyst_reconcile",
+      attempt: "quality_guard",
+      diagnostics: initialHealth,
+      note: analysisMeta.hybridReconcileRetryReason,
+    });
+
+    const focusDimensionIds = dims
+      .filter((d) => normalizeConfidenceLevel(reconciledFinal?.dimensions?.[d.id]?.confidence) === "low")
+      .map((d) => d.id)
+      .slice(0, 5);
+
+    const retryCandidate = await runAnalystPass({
+      evidencePromptBuilder: (condensed) => buildHybridReconcileEvidencePrompt(desc, dims, baseline, web, {
+        condensed,
+        framingFields,
+        qualityGuard: {
+          notes: initialHealth.notes,
+          focusDimensionIds,
+        },
+      }),
+      scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
+        condensed,
+        passLabel: "hybrid reliability reconcile retry (quality-guarded)",
+        framingFields,
+      }),
+      dims,
+      analysisMeta,
+      debugContext,
+      debugSession,
+      liveSearch: false,
+      evidenceMaxTokens,
+      scoringMaxTokens,
+      passLabel: "analyst_reconcile_retry",
+    });
+
+    const retryHealth = evaluateScorecardReconcileHealth(dims, baseline, web, retryCandidate);
+    const beforeScore = scoreReconcileCandidate(initialHealth);
+    const retryScore = scoreReconcileCandidate(retryHealth);
+    const useRetry = !retryHealth.suspicious || retryScore > beforeScore;
+
+    analysisMeta.hybridReconcileRetryUsed = useRetry;
+    analysisMeta.hybridReconcileRetryDiagnostics = {
+      initial: initialHealth,
+      retry: retryHealth,
+      selected: useRetry ? "retry" : "initial",
+      qualityScoreInitial: beforeScore,
+      qualityScoreRetry: retryScore,
+    };
+    appendAnalysisDebugEvent(debugSession, {
+      type: "reconcile_retry_completed",
+      phase: "analyst_reconcile",
+      attempt: "quality_guard",
+      useRetry,
+      diagnostics: analysisMeta.hybridReconcileRetryDiagnostics,
+    });
+
+    if (useRetry) {
+      reconciledFinal = retryCandidate;
+      analysisMeta.hybridReconcileHealth = retryHealth;
+      analysisMeta.hybridStats = computeHybridDeltaStats(dims, baseline, web, reconciledFinal);
+    }
+  }
+
+  const finalHealth = evaluateScorecardReconcileHealth(dims, baseline, web, reconciledFinal);
+  analysisMeta.hybridReconcileHealth = finalHealth;
+  analysisMeta.hybridStats = computeHybridDeltaStats(dims, baseline, web, reconciledFinal);
+  if (finalHealth.suspicious) {
+    const note = finalHealth.notes.join(" ") || "Hybrid reconcile remained implausibly unchanged after quality guard checks.";
+    appendAnalysisDebugEvent(debugSession, {
+      type: "reconcile_quality_guard_failed",
+      phase: "analyst_reconcile",
+      attempt: "final",
+      diagnostics: finalHealth,
+      note,
+    });
+    throw new Error(`Hybrid reconcile quality guard failed. ${note}`);
+  }
+
+  return reconciledFinal;
 }
 
 async function runLowConfidenceExtraCycle({
@@ -2699,7 +3000,14 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     sourceVerificationSkippedReason: null,
     phase3DecisionGuardAdjustments: 0,
     phase3ConfidenceGuardAdjustments: 0,
+    phase3PolarityGuardAdjustments: 0,
     hybridStats: null,
+    hybridReconcileHealth: null,
+    hybridReconcileRetryTriggered: false,
+    hybridReconcileRetryAttempts: 0,
+    hybridReconcileRetryUsed: false,
+    hybridReconcileRetryReason: "",
+    hybridReconcileRetryDiagnostics: null,
   };
 
   let runStatus = "failed";
@@ -2909,6 +3217,8 @@ Also provide a neutral plain-language brief for each dimension:
 - Use natural wording; DO NOT use template phrases like "Above 0 because" or "Below 5 because".
 - Keep it understandable for non-domain readers; avoid unexplained jargon/acronyms.
 - Do not invert rubric direction.
+- Polarity self-check: if your wording emphasizes weak/thin/uncertain evidence, do not output score 4-5.
+- Polarity self-check: score 4-5 requires concrete strong-evidence wording and cannot be paired with low confidence.
 Set confidence for every dimension:
 - High: named deployments with verifiable metrics and strong market familiarity.
 - Medium: deployments exist but evidence is sparse, self-reported, or moving fast.
@@ -3099,16 +3409,20 @@ STRICT JSON RULES:
       analysisMeta.phase3DecisionGuardAdjustments += decisionPass.adjustments.length;
       const confidencePass = enforcePhase3ConfidenceRules(decisionPass.adjusted, p1, p2, dims);
       analysisMeta.phase3ConfidenceGuardAdjustments += confidencePass.adjustments.length;
-      p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(confidencePass.adjusted, dims), dims), dims);
+      const polarityPass = enforcePhase3PolarityRules(confidencePass.adjusted, p1, dims);
+      analysisMeta.phase3PolarityGuardAdjustments += polarityPass.adjustments.length;
+      p3 = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(polarityPass.adjusted, dims), dims), dims);
       appendAnalysisDebugEvent(debugSession, {
         type: "phase3_guard_applied",
         phase: "finalizing",
         attempt: "post_parse",
         decisionAdjustments: decisionPass.adjustments.length,
         confidenceAdjustments: confidencePass.adjustments.length,
+        polarityAdjustments: polarityPass.adjustments.length,
         details: {
           decision: decisionPass.adjustments,
           confidence: confidencePass.adjustments,
+          polarity: polarityPass.adjustments,
         },
       });
     }
@@ -3146,7 +3460,9 @@ STRICT JSON RULES:
       analysisMeta.phase3DecisionGuardAdjustments += decisionPass.adjustments.length;
       const confidencePass = enforcePhase3ConfidenceRules(decisionPass.adjusted, p1, p2, dims);
       analysisMeta.phase3ConfidenceGuardAdjustments += confidencePass.adjustments.length;
-      finalResponse = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(confidencePass.adjusted, dims), dims), dims);
+      const polarityPass = enforcePhase3PolarityRules(confidencePass.adjusted, p1, dims);
+      analysisMeta.phase3PolarityGuardAdjustments += polarityPass.adjustments.length;
+      finalResponse = ensureFinalAnalystSummary(ensureDimensionArguments(ensureDimensionConfidence(polarityPass.adjusted, dims), dims), dims);
       appendAnalysisDebugEvent(debugSession, {
         type: "consistency_check_applied",
         phase: "finalizing_consistency",
@@ -3155,6 +3471,7 @@ STRICT JSON RULES:
         changed,
         decisionGuardAdjustments: decisionPass.adjustments.length,
         confidenceGuardAdjustments: confidencePass.adjustments.length,
+        polarityGuardAdjustments: polarityPass.adjustments.length,
       });
     } catch (consistencyErr) {
       appendAnalysisDebugEvent(debugSession, {
@@ -3435,6 +3752,15 @@ function createInitialUseCaseState(input) {
       sourceVerificationPenalizedDimensions: 0,
       sourceVerificationSkippedReason: null,
       hybridStats: null,
+      phase3DecisionGuardAdjustments: 0,
+      phase3ConfidenceGuardAdjustments: 0,
+      phase3PolarityGuardAdjustments: 0,
+      hybridReconcileHealth: null,
+      hybridReconcileRetryTriggered: false,
+      hybridReconcileRetryAttempts: 0,
+      hybridReconcileRetryUsed: false,
+      hybridReconcileRetryReason: "",
+      hybridReconcileRetryDiagnostics: null,
     },
   };
 }

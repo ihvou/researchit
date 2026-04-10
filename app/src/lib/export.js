@@ -570,6 +570,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       </div>
     `
     : "";
+  const diagnosticsBlock = diagnosticsHtml(uc, "scorecard");
 
   return `
     <article class="page summary-page">
@@ -583,6 +584,7 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       ${summaryMeta}
       ${lowConfidenceBanner}
       ${section("Strategic Conclusion", `<div class="small-text">${escapeHtml(uc.finalScores?.conclusion || "No conclusion available yet.")}</div>`)}
+      ${section("Run Diagnostics", diagnosticsBlock, "compact")}
       <div class="dim-grid">${dimCards}</div>
     </article>
   `;
@@ -674,6 +676,137 @@ function matrixCellMap(matrix = {}) {
     map.set(key, cell);
   });
   return map;
+}
+
+function percentLabel(value, decimals = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${(n * 100).toFixed(decimals)}%`;
+}
+
+function runDiagnosticsEntries(uc, outputMode = "scorecard") {
+  const meta = uc?.analysisMeta || {};
+  const entries = [];
+  const checked = Number(meta.sourceVerificationChecked || 0);
+  const verified = Number(meta.sourceVerificationVerified || 0);
+  const notFound = Number(meta.sourceVerificationNotFound || 0);
+  const fetchFailed = Number(meta.sourceVerificationFetchFailed || 0);
+
+  if (checked > 0) {
+    entries.push({
+      label: "Source verification",
+      value: `${verified}/${checked} verified (${percentLabel(checked ? verified / checked : 0)})`,
+      detail: `${notFound} not found in page; ${fetchFailed} fetch failures`,
+    });
+  } else if (meta.sourceVerificationSkippedReason) {
+    entries.push({
+      label: "Source verification",
+      value: "Skipped",
+      detail: String(meta.sourceVerificationSkippedReason),
+    });
+  }
+
+  const analystCalls = Number(meta.webSearchCalls || 0);
+  const criticCalls = Number(meta.criticWebSearchCalls || 0);
+  const targetedCalls = Number(meta.lowConfidenceTargetedWebSearchCalls || 0);
+  const discoveryCalls = Number(meta.discoveryWebSearchCalls || 0);
+  entries.push({
+    label: "Web search calls",
+    value: `${analystCalls + criticCalls + targetedCalls + discoveryCalls}`,
+    detail: `Analyst ${analystCalls}, Critic ${criticCalls}, Targeted ${targetedCalls}, Discovery ${discoveryCalls}`,
+  });
+
+  if (outputMode === "matrix") {
+    const coverage = uc?.matrix?.coverage || {};
+    const audited = Number(meta.criticCellsAudited || coverage.totalCells || 0);
+    const flags = Number(meta.criticFlagsRaised || 0);
+    const flagRate = Number(meta.criticFlagRate || 0);
+    entries.push({
+      label: "Critic flags",
+      value: `${flags}/${audited} (${percentLabel(flagRate)})`,
+      detail: meta.criticFlagRateAlert ? String(meta.criticFlagRateAlert) : "Flag-rate monitor active",
+    });
+
+    if (meta.matrixHybridStats) {
+      const stats = meta.matrixHybridStats;
+      entries.push({
+        label: "Reconcile deltas",
+        value: `vs baseline ${Number(stats.changedFromBaseline || 0)}, vs web ${Number(stats.changedFromWeb || 0)}`,
+        detail: `${Number(stats.totalCells || 0)} total cells`,
+      });
+    }
+
+    if (meta.matrixCoverageSLA) {
+      const sla = meta.matrixCoverageSLA;
+      entries.push({
+        label: "Coverage SLA",
+        value: meta.matrixCoverageSLAPassed ? "Passed" : "Not passed",
+        detail: meta.matrixCoverageSLAPassed
+          ? `unresolved ${Number(sla.unresolvedCells || 0)}/${Number(sla.totalCells || coverage.totalCells || 0)}`
+          : String(meta.matrixCoverageSLAFailureReason || "Coverage requirements were not met."),
+      });
+    }
+
+    if (meta.matrixReconcileRetryTriggered) {
+      entries.push({
+        label: "Reconcile retry",
+        value: meta.matrixReconcileRetryUsed ? "Applied" : "Attempted (kept initial)",
+        detail: String(meta.matrixReconcileRetryReason || "Quality guard triggered a retry."),
+      });
+    }
+  } else {
+    if (meta.hybridStats) {
+      const stats = meta.hybridStats;
+      entries.push({
+        label: "Hybrid reconcile",
+        value: `vs baseline ${Number(stats.changedFromBaseline || 0)}, vs web ${Number(stats.changedFromWeb || 0)}`,
+        detail: `weighted baseline ${stats.baselineWeightedScore ?? "-"}%, web ${stats.webWeightedScore ?? "-"}%, final ${stats.reconciledWeightedScore ?? "-"}%`,
+      });
+    }
+
+    if (meta.hybridReconcileRetryTriggered) {
+      entries.push({
+        label: "Reconcile retry",
+        value: meta.hybridReconcileRetryUsed ? "Applied" : "Attempted (kept initial)",
+        detail: String(meta.hybridReconcileRetryReason || "Quality guard triggered a retry."),
+      });
+    }
+
+    entries.push({
+      label: "Low-confidence cycle",
+      value: `${Number(meta.lowConfidenceInitialCount || 0)} scanned, ${Number(meta.lowConfidenceUpgradedCount || 0)} upgraded`,
+      detail: `${Number(meta.lowConfidenceValidatedLowCount || 0)} validated low; ${Number(meta.lowConfidenceCycleFailures || 0)} failures`,
+    });
+
+    const decisionAdj = Number(meta.phase3DecisionGuardAdjustments || 0);
+    const confidenceAdj = Number(meta.phase3ConfidenceGuardAdjustments || 0);
+    const polarityAdj = Number(meta.phase3PolarityGuardAdjustments || 0);
+    entries.push({
+      label: "Final guard adjustments",
+      value: `${decisionAdj + confidenceAdj + polarityAdj}`,
+      detail: `decision ${decisionAdj}, confidence ${confidenceAdj}, polarity ${polarityAdj}`,
+    });
+  }
+
+  return entries;
+}
+
+function diagnosticsHtml(uc, outputMode = "scorecard") {
+  const entries = runDiagnosticsEntries(uc, outputMode);
+  if (!entries.length) return "<div class=\"muted\">No diagnostics captured.</div>";
+  return `
+    <div class="diagnostics-list">
+      ${entries.map((entry) => `
+        <div class="diagnostics-item">
+          <div class="diagnostics-head">
+            <span class="diagnostics-label">${escapeHtml(entry.label)}</span>
+            <span class="diagnostics-value">${escapeHtml(entry.value || "-")}</span>
+          </div>
+          ${entry.detail ? `<div class="diagnostics-detail">${escapeHtml(entry.detail)}</div>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function matrixCompactTableHtml(matrix = {}) {
@@ -768,6 +901,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
       ` : ""}
     `
     : "<div class=\"muted\">No additional discovery suggestions.</div>";
+  const diagnosticsBlock = diagnosticsHtml(uc, "matrix");
 
   return `
     <article class="page matrix-summary-page">
@@ -776,6 +910,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
       <div class="summary-desc">${escapeHtml(uc?.rawInput || "")}</div>
       ${summaryMeta}
       ${section("Decision Question", `<div class="small-text pre-wrap">${escapeHtml(decisionQuestion)}</div>`)}
+      ${section("Run Diagnostics", diagnosticsBlock, "compact")}
       ${section("Matrix Overview", matrixCompactTableHtml(matrix), "compact")}
       ${section("Discovery Suggestions", discoveryBody, "compact")}
       <div class="small-text" style="margin-top:${isPdf ? "8px" : "10px"};">
@@ -1329,6 +1464,41 @@ function reportCss(mode = "html") {
       line-height: 1.22;
       white-space: pre-wrap;
     }
+    .diagnostics-list {
+      display: grid;
+      gap: 5px;
+    }
+    .diagnostics-item {
+      border: 1px solid #d5d5d2;
+      background: #f7f7f6;
+      border-radius: 2px;
+      padding: 5px 7px;
+    }
+    .diagnostics-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .diagnostics-label {
+      font-size: 9.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #4b4b48;
+    }
+    .diagnostics-value {
+      font-size: 10px;
+      font-weight: 800;
+      color: #121212;
+    }
+    .diagnostics-detail {
+      margin-top: 2px;
+      font-size: 9.3px;
+      color: #4b4b48;
+      line-height: 1.28;
+    }
     .discover-list {
       display: grid;
       gap: 6px;
@@ -1676,6 +1846,19 @@ function markdownThreadSection(thread = []) {
   }).join("\n");
 }
 
+function markdownDiagnosticsSection(uc, outputMode = "scorecard") {
+  const entries = runDiagnosticsEntries(uc, outputMode);
+  if (!entries.length) return "- No diagnostics captured.";
+  return entries
+    .map((entry) => {
+      const label = markdownEscapeInline(entry.label || "Diagnostic");
+      const value = markdownEscapeInline(entry.value || "-");
+      const detail = markdownEscapeInline(entry.detail || "");
+      return `- **${label}:** ${value}${detail ? ` — ${detail}` : ""}`;
+    })
+    .join("\n");
+}
+
 function buildScorecardMarkdown(uc, dims = []) {
   const title = String(uc?.attributes?.title || uc?.rawInput || uc?.id || "Untitled research").trim();
   const weighted = calcWeightedScore(uc, dims);
@@ -1701,6 +1884,11 @@ function buildScorecardMarkdown(uc, dims = []) {
     lines.push(markdownTextBlock(conclusion));
     lines.push("");
   }
+
+  lines.push("## Run Diagnostics");
+  lines.push("");
+  lines.push(markdownDiagnosticsSection(uc, "scorecard"));
+  lines.push("");
 
   lines.push("## Dimension Analysis");
   lines.push("");
@@ -1849,6 +2037,11 @@ function buildMatrixMarkdown(uc) {
     lines.push(decisionQuestion);
     lines.push("");
   }
+
+  lines.push("## Run Diagnostics");
+  lines.push("");
+  lines.push(markdownDiagnosticsSection(uc, "matrix"));
+  lines.push("");
 
   lines.push("## Subjects");
   lines.push("");
