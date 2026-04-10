@@ -112,9 +112,13 @@ Attributes:
 ...
 
 Context: [user's research prompt / decision question]
+Decision being made: [from UX-01 popup, e.g. "Choose a vendor to adopt for enterprise legal"]
+User role/context: [from UX-01 popup, e.g. "VP Product evaluating vendors under $50K budget"]
 
 Output structure: One section per attribute with labeled subsections for data, sources, confidence, and gaps.
 ```
+
+Note: Decision context and user role (captured via UX-01 popup) are injected here to shape what evidence providers prioritize. If not provided, these lines are omitted and prompts degrade gracefully to generic framing.
 
 This produces N × P evidence documents (N subjects × P providers).
 
@@ -164,6 +168,8 @@ For each dimension provide:
 - Confidence in your findings
 
 Context: [user's research prompt + framing fields]
+Decision being made: [from UX-01 popup, if provided]
+User role/context: [from UX-01 popup, if provided]
 ```
 
 **Step 2: Evidence Structuring**
@@ -490,6 +496,7 @@ Each prompt must:
 3. **Require evidence standards** — named sources, URLs, dates, quantitative data
 4. **Demand explicit gaps** — what could not be found, what was inferred vs. evidenced
 5. **Inject config context** — the user's research prompt, framing fields, and any config-level hints
+6. **Inject user context (UX-01)** — decision being made and user role/context, when provided. This shapes evidence collection (what to prioritize), not just synthesis
 
 ### 10.2 Provider-Specific Prompt Tuning
 
@@ -503,6 +510,8 @@ Research [subject/topic] across these attributes/dimensions: [list]
 For each, provide: specific data points with dates, named sources with URLs,
 confidence assessment, and explicit gaps.
 Context: [user's prompt + framing fields]
+Decision being made: [from UX-01, if provided]
+User role/context: [from UX-01, if provided]
 
 [PROVIDER-SPECIFIC suffix — does NOT change scope]
 OpenAI:  "Prioritize quantitative data, specific metrics, and measurable evidence."
@@ -524,6 +533,19 @@ The prompt templates should be influenced by the ResearchConfig's existing field
 - `attributes[].brief` — what each matrix column should capture
 - `prompts.analyst` — config-level system prompt overlay
 - `methodology` — methodological framing to guide evidence standards
+
+### 10.4 User Context Injection Points (UX-01)
+
+Decision context and user role captured via the research setup popup are injected into prompts at every stage where they add value. Both fields are optional — all prompts degrade gracefully to generic framing when not provided.
+
+| Pipeline Phase | How user context is used |
+|---------------|-------------------------|
+| **Evidence collection** (Deep Assist providers) | Shapes what evidence providers prioritize. E.g., "Decision: choose a vendor under $50K" makes providers focus on pricing/TCO data more aggressively. |
+| **Evidence collection** (Native web_search) | Injected into query planning and analyst prompts for the same reason. |
+| **Critic validation** | Critic evaluates findings against the user's actual decision frame. E.g., if decision is "go/no-go on market entry," critic specifically challenges market-entry assumptions. |
+| **Executive synthesis** | Answers the specific decision with explicit risks, not generic "here are some considerations." E.g., "Given your goal of choosing a vendor under $50K, Vendor B is the strongest fit because..." |
+| **Discovery suggestions** | Tailored to user's role and decision. E.g., VP Product gets product-strategy adjacent opportunities, not generic market trends. |
+| **Follow-up pipeline** | User context persists in follow-up threads so responses stay decision-relevant. |
 
 ---
 
