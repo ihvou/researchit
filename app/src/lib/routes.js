@@ -3,6 +3,7 @@ import { RESEARCH_CONFIGS, DEFAULT_RESEARCH_CONFIG } from "../../../configs/rese
 export const HOME_PATH = "/";
 export const LEGACY_WORKSPACE_PATH = "/workspace";
 export const LEGACY_RESEARCH_BASE_PATH = "/research";
+export const AUTH_CALLBACK_PATH = "/auth/callback";
 
 const RESERVED_SINGLE_PATHS = new Set(["api"]);
 
@@ -60,6 +61,15 @@ export function resolveAppRoute(pathname = "/") {
       kind: "home",
       pathname: HOME_PATH,
       canonicalPath: HOME_PATH,
+      shouldRedirect: false,
+    };
+  }
+
+  if (normalized === AUTH_CALLBACK_PATH) {
+    return {
+      kind: "auth_callback",
+      pathname: raw,
+      canonicalPath: raw,
       shouldRedirect: false,
     };
   }

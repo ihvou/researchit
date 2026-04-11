@@ -49,6 +49,10 @@ export default function LandingPage({
   onOpenConfig,
   onOpenWorkspace,
   onExportDebug,
+  authUser = null,
+  authLoading = false,
+  onOpenAuth = null,
+  onSignOut = null,
 }) {
   const DESKTOP_VISIBLE_CONFIG_COUNT = 4;
   const desktopTabConfigs = featuredConfigs.slice(0, DESKTOP_VISIBLE_CONFIG_COUNT);
@@ -195,6 +199,82 @@ export default function LandingPage({
               ))}
             </div>
           </details>
+          {authLoading ? (
+            <button
+              type="button"
+              disabled
+              style={{
+                border: "1px solid var(--ck-line)",
+                background: "var(--ck-surface)",
+                color: "var(--ck-muted)",
+                padding: "7px 10px",
+                fontSize: 12,
+                fontWeight: 700,
+              }}>
+              Session
+            </button>
+          ) : authUser ? (
+            <details style={{ position: "relative" }}>
+              <summary
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  padding: "7px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                {authUser.email}
+              </summary>
+              <div style={{
+                position: "absolute",
+                right: 0,
+                top: "calc(100% + 6px)",
+                minWidth: 220,
+                border: "1px solid var(--ck-line)",
+                background: "var(--ck-surface)",
+                padding: 8,
+                display: "grid",
+                gap: 8,
+                zIndex: 60,
+              }}>
+                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                  Signed in. Researches can be synced to your account in workspace.
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    onSignOut?.();
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                  style={{
+                    border: "1px solid var(--ck-line)",
+                    background: "var(--ck-surface-soft)",
+                    color: "var(--ck-text)",
+                    textAlign: "left",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    padding: "6px 8px",
+                  }}>
+                  Sign out
+                </button>
+              </div>
+            </details>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onOpenAuth?.()}
+              style={{
+                border: "1px solid var(--ck-line)",
+                background: "var(--ck-surface)",
+                color: "var(--ck-text)",
+                padding: "7px 10px",
+                fontSize: 12,
+                fontWeight: 700,
+              }}>
+              Sign in
+            </button>
+          )}
         </div>
       </header>
 

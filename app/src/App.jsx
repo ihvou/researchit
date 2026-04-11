@@ -22,6 +22,8 @@ import ChevronIcon from "./components/ChevronIcon";
 import { downloadDebugLogsBundle } from "./lib/debug";
 import SiteFooter from "./components/SiteFooter";
 import { appTransport } from "./lib/api";
+import { listAccountResearches, upsertAccountResearches } from "./lib/accountApi";
+import { loadLocalDraftState, saveLocalDraftState } from "./lib/localDrafts";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
@@ -157,25 +159,112 @@ function normalizeResearchSetup(raw = {}) {
   };
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function withUpdatedAt(nextState, previousState = null) {
+  const createdAt = String(nextState?.createdAt || previousState?.createdAt || nowIso());
+  const updatedAt = nowIso();
+  return {
+    ...nextState,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeRecoveredUseCase(useCase = {}) {
+  if (!useCase || typeof useCase !== "object") return null;
+  const status = String(useCase.status || "").trim().toLowerCase();
+  if (status === "analyzing") {
+    return {
+      ...useCase,
+      status: "error",
+      phase: "error",
+      errorMsg: useCase.errorMsg || "Run was interrupted. Start the research again to continue.",
+      updatedAt: nowIso(),
+      recoveredDraft: true,
+    };
+  }
+  return {
+    ...useCase,
+    createdAt: String(useCase.createdAt || nowIso()),
+    updatedAt: String(useCase.updatedAt || useCase.createdAt || nowIso()),
+  };
+}
+
+function mergeUseCaseLists(localList = [], remoteList = []) {
+  const map = new Map();
+  [...(Array.isArray(localList) ? localList : []), ...(Array.isArray(remoteList) ? remoteList : [])].forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const id = String(item.id || "").trim();
+    if (!id) return;
+    const normalized = normalizeRecoveredUseCase(item);
+    if (!normalized) return;
+    const existing = map.get(id);
+    if (!existing) {
+      map.set(id, normalized);
+      return;
+    }
+    const existingTime = Date.parse(existing.updatedAt || existing.createdAt || "") || 0;
+    const candidateTime = Date.parse(normalized.updatedAt || normalized.createdAt || "") || 0;
+    map.set(id, candidateTime >= existingTime ? normalized : existing);
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    const aTime = Date.parse(a.updatedAt || a.createdAt || "") || 0;
+    const bTime = Date.parse(b.updatedAt || b.createdAt || "") || 0;
+    return bTime - aTime;
+  });
+}
+
 export default function App({
   initialConfigId = DEFAULT_RESEARCH_CONFIG.id,
   routeConfigId = null,
   onActiveConfigChange = null,
   onNavigateHome = null,
+  authUser = null,
+  authLoading = false,
+  onOpenAuth = null,
+  onSignOut = null,
 }) {
-  const [useCases, setUseCases] = useState([]);
-  const [activeConfigId, setActiveConfigId] = useState(resolveConfigId(routeConfigId || initialConfigId));
-  const [dimsByConfig, setDimsByConfig] = useState(() => (
-    Object.fromEntries(
-      RESEARCH_CONFIGS.map((config) => [config.id, cloneDims(config.dimensions)])
-    )
+  const draftRef = useRef(loadLocalDraftState());
+  const draftState = draftRef.current || {};
+  const initialDimsByConfig = Object.fromEntries(
+    RESEARCH_CONFIGS.map((config) => [config.id, cloneDims(config.dimensions)])
+  );
+  const initialSetupByConfig = Object.fromEntries(
+    RESEARCH_CONFIGS.map((config) => [config.id, normalizeResearchSetup({})])
+  );
+
+  const [useCases, setUseCases] = useState(() => (
+    Array.isArray(draftState?.useCases)
+      ? draftState.useCases.map((item) => normalizeRecoveredUseCase(item)).filter(Boolean)
+      : []
   ));
-  const [inputText, setInputText] = useState("");
-  const [setupByConfig, setSetupByConfig] = useState(() => (
-    Object.fromEntries(
-      RESEARCH_CONFIGS.map((config) => [config.id, normalizeResearchSetup({})])
-    )
-  ));
+  const [activeConfigId, setActiveConfigId] = useState(resolveConfigId(routeConfigId || draftState?.activeConfigId || initialConfigId));
+  const [dimsByConfig, setDimsByConfig] = useState(() => {
+    const loaded = draftState?.dimsByConfig && typeof draftState.dimsByConfig === "object"
+      ? draftState.dimsByConfig
+      : {};
+    const merged = { ...initialDimsByConfig };
+    Object.keys(loaded).forEach((configId) => {
+      if (!merged[configId]) return;
+      merged[configId] = cloneDims(loaded[configId]);
+    });
+    return merged;
+  });
+  const [inputText, setInputText] = useState(() => String(draftState?.inputText || ""));
+  const [setupByConfig, setSetupByConfig] = useState(() => {
+    const loaded = draftState?.setupByConfig && typeof draftState.setupByConfig === "object"
+      ? draftState.setupByConfig
+      : {};
+    const merged = { ...initialSetupByConfig };
+    Object.keys(loaded).forEach((configId) => {
+      if (!merged[configId]) return;
+      merged[configId] = normalizeResearchSetup(loaded[configId]);
+    });
+    return merged;
+  });
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [setupMode, setSetupMode] = useState("scorecard");
   const [setupDraft, setSetupDraft] = useState(normalizeResearchSetup({}));
@@ -183,7 +272,11 @@ export default function App({
   const [setupError, setSetupError] = useState("");
   const [setupNotice, setSetupNotice] = useState("");
   const [showInputPanel, setShowInputPanel] = useState(false);
-  const [evidenceMode, setEvidenceMode] = useState("native");
+  const [evidenceMode, setEvidenceMode] = useState(() => (
+    String(draftState?.evidenceMode || "").trim().toLowerCase() === "deep-assist"
+      ? "deep-assist"
+      : "native"
+  ));
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
@@ -196,8 +289,15 @@ export default function App({
   const [importLoading, setImportLoading] = useState(false);
   const [importWarning, setImportWarning] = useState("");
   const [importError, setImportError] = useState("");
+  const [accountSyncMessage, setAccountSyncMessage] = useState("");
 
   const ucRef = useRef(useCases);
+  const accountSyncStateRef = useRef({
+    lastSyncedUpdatedAt: new Map(),
+    lastSyncAtById: new Map(),
+    initializedForUser: null,
+    timer: null,
+  });
   const cardRefs = useRef({});
   const importFileRef = useRef(null);
   useEffect(() => { ucRef.current = useCases; }, [useCases]);
@@ -226,6 +326,134 @@ export default function App({
     setSetupBusy(false);
   }, [activeConfig?.id, isMatrixMode]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveLocalDraftState({
+        useCases,
+        setupByConfig,
+        dimsByConfig,
+        activeConfigId,
+        inputText,
+        evidenceMode,
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [useCases, setupByConfig, dimsByConfig, activeConfigId, inputText, evidenceMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const hasActiveRun = useCases.some((item) => String(item?.status || "").toLowerCase() === "analyzing");
+    if (!hasActiveRun) return undefined;
+    const onBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [useCases]);
+
+  useEffect(() => {
+    const userId = String(authUser?.id || "").trim();
+    const syncState = accountSyncStateRef.current;
+    if (!userId) {
+      syncState.initializedForUser = null;
+      syncState.lastSyncedUpdatedAt = new Map();
+      syncState.lastSyncAtById = new Map();
+      if (syncState.timer) {
+        clearTimeout(syncState.timer);
+        syncState.timer = null;
+      }
+      setAccountSyncMessage("");
+      return;
+    }
+
+    let cancelled = false;
+    syncState.initializedForUser = userId;
+    syncState.lastSyncedUpdatedAt = new Map();
+    syncState.lastSyncAtById = new Map();
+    if (syncState.timer) {
+      clearTimeout(syncState.timer);
+      syncState.timer = null;
+    }
+
+    setAccountSyncMessage("Syncing account researches...");
+    (async () => {
+      try {
+        const payload = await listAccountResearches();
+        if (cancelled) return;
+        const remoteList = Array.isArray(payload?.researches)
+          ? payload.researches.map((item) => normalizeRecoveredUseCase(item)).filter(Boolean)
+          : [];
+        setUseCases((prev) => mergeUseCaseLists(prev, remoteList));
+        remoteList.forEach((item) => {
+          syncState.lastSyncedUpdatedAt.set(item.id, String(item.updatedAt || item.createdAt || ""));
+          syncState.lastSyncAtById.set(item.id, Date.now());
+        });
+        setAccountSyncMessage(
+          remoteList.length
+            ? `Account sync enabled (${remoteList.length} stored researches).`
+            : "Account sync enabled."
+        );
+      } catch (err) {
+        if (cancelled) return;
+        setAccountSyncMessage(`Account sync unavailable: ${err?.message || "failed to load researches"}`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.id]);
+
+  useEffect(() => {
+    const userId = String(authUser?.id || "").trim();
+    const syncState = accountSyncStateRef.current;
+    if (!userId || syncState.initializedForUser !== userId) return undefined;
+
+    if (syncState.timer) {
+      clearTimeout(syncState.timer);
+      syncState.timer = null;
+    }
+
+    syncState.timer = setTimeout(async () => {
+      const nowMs = Date.now();
+      const changed = useCases.filter((item) => {
+        const id = String(item?.id || "").trim();
+        if (!id) return false;
+        const updatedAt = String(item?.updatedAt || item?.createdAt || "");
+        const previouslySynced = syncState.lastSyncedUpdatedAt.get(id);
+        if (updatedAt && previouslySynced === updatedAt) return false;
+
+        const status = String(item?.status || "").toLowerCase();
+        if (status === "analyzing") {
+          const lastSyncMs = Number(syncState.lastSyncAtById.get(id) || 0);
+          if (nowMs - lastSyncMs < 5000) return false;
+        }
+        return true;
+      });
+
+      if (!changed.length) return;
+
+      try {
+        await upsertAccountResearches(changed);
+        changed.forEach((item) => {
+          syncState.lastSyncedUpdatedAt.set(item.id, String(item.updatedAt || item.createdAt || ""));
+          syncState.lastSyncAtById.set(item.id, Date.now());
+        });
+        setAccountSyncMessage(`Synced ${changed.length} research${changed.length === 1 ? "" : "es"} to account.`);
+      } catch (err) {
+        setAccountSyncMessage(`Account sync failed: ${err?.message || "unknown error"}`);
+      }
+    }, 1200);
+
+    return () => {
+      if (syncState.timer) {
+        clearTimeout(syncState.timer);
+        syncState.timer = null;
+      }
+    };
+  }, [useCases, authUser?.id]);
+
   function setActiveDims(updater) {
     if (isMatrixMode) return;
     setDimsByConfig((prev) => {
@@ -239,7 +467,7 @@ export default function App({
   }
 
   function updateUC(id, fn) {
-    setUseCases(prev => prev.map(u => u.id === id ? fn(u) : u));
+    setUseCases((prev) => prev.map((u) => (u.id === id ? withUpdatedAt(fn(u), u) : u)));
   }
 
   function setFuInput(key, val) {
@@ -348,8 +576,9 @@ export default function App({
         userRoleContext: normalizedSetup.userRoleContext,
       },
     };
+    const stampedBlankUC = withUpdatedAt(blankUC);
 
-    setUseCases(prev => [...prev, blankUC]);
+    setUseCases(prev => [...prev, stampedBlankUC]);
     setShowInputPanel(false);
     setInputText("");
     setExpandedId(id);
@@ -364,7 +593,7 @@ export default function App({
         researchSetup: normalizedSetup,
         evidenceMode: normalizedEvidenceMode,
         deepAssist: normalizedEvidenceMode === "deep-assist" ? deepAssistRunOptions : null,
-        initialState: blankUC,
+        initialState: stampedBlankUC,
       });
     } catch (err) {
       console.error("Analysis error:", err);
@@ -707,6 +936,8 @@ export default function App({
         ...uc,
         researchConfigId: activeConfig.id,
         researchConfigName: activeConfig.name,
+        createdAt: String(uc?.createdAt || nowIso()),
+        updatedAt: String(uc?.updatedAt || nowIso()),
       }));
       setUseCases((prev) => [...prev, ...importedWithConfig]);
       setExpandedId(importedWithConfig[importedWithConfig.length - 1].id);
@@ -962,6 +1193,88 @@ export default function App({
                 })}
               </div>
             </details>
+            <div style={{ marginLeft: 10, display: "inline-flex", alignItems: "center", gap: 8 }}>
+              {authLoading ? (
+                <button
+                  type="button"
+                  disabled
+                  style={{
+                    border: "1px solid var(--ck-line)",
+                    background: "var(--ck-surface)",
+                    color: "var(--ck-muted)",
+                    padding: "7px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}>
+                  <Spinner size={10} color="var(--ck-muted)" /> Session
+                </button>
+              ) : authUser ? (
+                <details style={{ position: "relative" }}>
+                  <summary
+                    style={{
+                      border: "1px solid var(--ck-line)",
+                      background: "var(--ck-surface)",
+                      color: "var(--ck-text)",
+                      padding: "7px 10px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}>
+                    {authUser.email}
+                  </summary>
+                  <div style={{
+                    position: "absolute",
+                    right: 0,
+                    top: "calc(100% + 6px)",
+                    minWidth: 220,
+                    background: "var(--ck-surface)",
+                    border: "1px solid var(--ck-line)",
+                    borderRadius: 2,
+                    padding: 8,
+                    display: "grid",
+                    gap: 8,
+                    zIndex: 55,
+                  }}>
+                    <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                      Account storage active. Researches sync as you work.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        onSignOut?.();
+                        e.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      style={{
+                        border: "1px solid var(--ck-line)",
+                        background: "var(--ck-surface-soft)",
+                        color: "var(--ck-text)",
+                        textAlign: "left",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: "6px 8px",
+                      }}>
+                      Sign out
+                    </button>
+                  </div>
+                </details>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onOpenAuth?.()}
+                  style={{
+                    border: "1px solid var(--ck-line)",
+                    background: "var(--ck-surface)",
+                    color: "var(--ck-text)",
+                    padding: "7px 10px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}>
+                  Sign in
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1462,6 +1775,11 @@ export default function App({
             {importWarning}
           </div>
         )}
+        {accountSyncMessage ? (
+          <div style={{ marginBottom: 10, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "9px 12px", color: "var(--ck-muted)", fontSize: 12 }}>
+            {accountSyncMessage}
+          </div>
+        ) : null}
         {visibleUseCases.length >= 2 ? (
           <div className="research-list-toolbar">
             <button

@@ -321,6 +321,28 @@ Optional SEO canonical base URL (used by build-time prerendering):
 RESEARCHIT_PUBLIC_URL=https://your-domain.example
 ```
 
+Phase 1 account/auth variables (optional, but recommended for production):
+```bash
+# Session signing (required in production auth deployments)
+RESEARCHIT_AUTH_SECRET=replace-with-long-random-secret
+
+# Magic-link email delivery (if not set, dev link fallback is used)
+RESEND_API_KEY=re_...
+RESEARCHIT_AUTH_FROM_EMAIL=Research it <noreply@your-domain.example>
+
+# Optional: allow dev link fallback in production (default false in production)
+RESEARCHIT_AUTH_ALLOW_DEV_LINK=false
+
+# Optional persistent account storage via Upstash/Vercel KV REST API
+KV_REST_API_URL=https://...upstash.io
+KV_REST_API_TOKEN=...
+# aliases are also supported:
+UPSTASH_REDIS_REST_URL=https://...upstash.io
+UPSTASH_REDIS_REST_TOKEN=...
+```
+
+Without KV env vars, account data falls back to in-memory storage (works for local/dev testing only; not durable across serverless restarts).
+
 Resolution precedence for provider/model/base URL is:
 1. Role-specific `RESEARCHIT_*` env vars
 2. Global `RESEARCHIT_*` env vars
@@ -366,7 +388,10 @@ This repo deploys from root with root-level `vercel.json` that builds `app/`:
 - build command: `cd app && npm run build`
 - output directory: `app/dist`
 
-Root-level API entrypoints (`/api/analyst`, `/api/critic`, `/api/fetch-source`) re-export handlers from `app/api/*`.
+Root-level API entrypoints re-export handlers from `app/api/*`:
+- research pipeline: `/api/analyst`, `/api/critic`, `/api/fetch-source`
+- auth/session: `/api/auth/request-link`, `/api/auth/verify`, `/api/auth/session`, `/api/auth/logout`
+- account data: `/api/account/researches`
 
 If deployment settings in Vercel override these commands, reset them so repo `vercel.json` takes effect.
 

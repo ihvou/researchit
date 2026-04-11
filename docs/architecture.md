@@ -69,14 +69,15 @@ resolveMatrixResearchInput(input, config, callbacks, options)
 - All LLM calls go through the engine's transport abstraction — app provides the `callFn` implementation.
 - `analyst.js` / `critic.js` are thin wrappers around engine's `callOpenAI`; `providerConfig.js` and `fetch-source.js` handle host-only concerns.
 - UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
+- Auth/session and account storage are host concerns implemented in `app/api/*`; engine remains unaware of user identity.
 
 **Internal structure:**
 | Directory | Contents |
 |-----------|----------|
-| `api/` | Vercel serverless routes: `analyst.js`, `critic.js`, `fetch-source.js`, `providerConfig.js` |
+| `api/` | Vercel serverless routes: pipeline (`analyst.js`, `critic.js`, `fetch-source.js`), auth (`auth/*`), account storage (`account/*`), host resolver (`providerConfig.js`) |
 | `src/components/` | React UI components (tabs, pills, badges, lists, threads) |
 | `src/hooks/` | `useAnalysis.js`, `useFollowUp.js` — orchestration hooks that wire engine to React state |
-| `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation), `seo.js` (meta tag management), `routes.js` (URL ↔ config resolution) |
+| `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation), `accountApi.js` (auth/account endpoints), `localDrafts.js` (RU-01 client crash-safety state), `seo.js`, `routes.js` |
 | `scripts/` | Build-time scripts: `prerender-meta.js` (stamps route-specific SEO tags into static HTML) |
 
 ### configs/ — Research Configurations
@@ -106,6 +107,18 @@ App's callFn → fetch("/api/analyst" | "/api/critic" | "/api/fetch-source")
 Serverless route (`analyst` / `critic`) → engine's callOpenAI() → OpenAI API
   ↓
 Results flow back through callbacks.onProgress → React state → UI
+```
+
+Phase 1 account/session flow (host shell only):
+
+```
+User email → /api/auth/request-link
+  ↓
+Magic link (/auth/callback?token=...) → /api/auth/verify
+  ↓ sets signed HttpOnly session cookie
+/api/auth/session resolves user for UI shell
+  ↓
+Workspace state sync → /api/account/researches (load/upsert/delete)
 ```
 
 ---
@@ -233,6 +246,7 @@ The app is a client-side SPA. Routing is handled by a custom router (`Researchit
 **URL structure:**
 - `/` — homepage (landing page)
 - `/{slug}/` — research workspace for a specific config (e.g. `/startup-validation/`)
+- `/auth/callback` — magic-link verification landing route
 - `/workspace`, `/research/{slug}` — legacy paths, redirected client-side
 
 **Static prerendering:** At build time, `app/scripts/prerender-meta.js` runs after `vite build`. It uses shared builders from `src/lib/seo.js`, generates route-specific `<title>`, `<meta>`, `<link rel="canonical">`, and JSON-LD, and writes one `index.html` per route into `dist/{slug}/index.html`. Canonical base URL is configurable via `RESEARCHIT_PUBLIC_URL` (fallback: `https://researchit.app`). Vercel serves these static files directly — no rewrite needed for known slugs.
@@ -269,6 +283,14 @@ API key, model, and base URL are resolved at request time with this precedence:
 5. Built-in defaults
 
 Key is server-side only. BYOK UI is planned but not yet implemented.
+
+---
+
+## Phase 1 Account Storage Modes
+
+- Preferred: KV REST adapter (`KV_REST_API_URL` + `KV_REST_API_TOKEN`, or Upstash aliases).
+- Fallback: in-memory map for local/dev testing.
+- In-memory mode is non-durable across serverless restarts and must not be treated as production persistence.
 
 ---
 
