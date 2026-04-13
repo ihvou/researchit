@@ -320,10 +320,11 @@ Optional SEO canonical base URL (used by build-time prerendering):
 ```bash
 RESEARCHIT_PUBLIC_URL=https://your-domain.example
 ```
+For production auth/account routes, this same variable is required (used as trusted magic-link origin).
 
-Phase 1 account/auth variables (optional, but recommended for production):
+Phase 1 account/auth variables:
 ```bash
-# Session signing (required in production auth deployments)
+# Session signing (required for production auth/account routes)
 RESEARCHIT_AUTH_SECRET=replace-with-long-random-secret
 
 # Magic-link email delivery (if not set, dev link fallback is used)
@@ -333,7 +334,11 @@ RESEARCHIT_AUTH_FROM_EMAIL=Research it <noreply@your-domain.example>
 # Optional: allow dev link fallback in production (default false in production)
 RESEARCHIT_AUTH_ALLOW_DEV_LINK=false
 
-# Optional persistent account storage via Upstash/Vercel KV REST API
+# Public base URL used for magic-link origin (required for production auth/account routes)
+RESEARCHIT_PUBLIC_URL=https://your-domain.example
+
+# Persistent account storage via Upstash/Vercel KV REST API
+# required for production auth/account routes
 KV_REST_API_URL=https://...upstash.io
 KV_REST_API_TOKEN=...
 # aliases are also supported:
@@ -341,7 +346,7 @@ UPSTASH_REDIS_REST_URL=https://...upstash.io
 UPSTASH_REDIS_REST_TOKEN=...
 ```
 
-Without KV env vars, account data falls back to in-memory storage (works for local/dev testing only; not durable across serverless restarts).
+Without KV env vars, account data falls back to in-memory storage in local/dev only; production auth/account APIs fail closed until KV is configured.
 
 Resolution precedence for provider/model/base URL is:
 1. Role-specific `RESEARCHIT_*` env vars
@@ -352,7 +357,10 @@ Resolution precedence for provider/model/base URL is:
 
 Key handling:
 - Current app architecture is server-key only.
-- API key is read from env vars (`RESEARCHIT_*_API_KEY`, `RESEARCHIT_API_KEY`, `OPENAI_API_KEY`).
+- API key is read from env vars with provider-aware resolution:
+  - provider-specific first (`RESEARCHIT_<ROLE>_<PROVIDER>_API_KEY`, `RESEARCHIT_<PROVIDER>_API_KEY`, etc.)
+  - then role/global `RESEARCHIT_*_API_KEY`
+  - `OPENAI_*` / `OPENAI_API_KEY` are used for OpenAI provider resolution only
 - Request-body API keys are intentionally not used yet.
 - End-user BYOK UI will be added later without changing engine contracts.
 

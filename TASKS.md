@@ -67,12 +67,12 @@ Phase 2 — payment gate, payments/billing/balance, and sharing:
 
 | ID | Implemented in | Summary |
 |----|---------------|---------|
-| NEW-08 (Auth Secret + Origin Hard Requirement) | `TBD` | Production auth now fails closed when `RESEARCHIT_AUTH_SECRET` or `RESEARCHIT_PUBLIC_URL` is missing (no insecure fallback secret, no header-trusted origin in production). |
-| NEW-09 (Persistent Store Guardrails for Auth/Account) | `TBD` | Auth and account APIs now require durable KV storage in production; in-memory mode is dev-only and explicit configuration errors are surfaced. |
-| NEW-10 (Strict Provider Key Isolation) | `TBD` | Provider key resolution no longer silently reuses `OPENAI_API_KEY` for Anthropic/Gemini candidates, preventing cross-provider auth misrouting. |
-| NEW-11 (Account Merge Safety for In-Flight Runs) | `TBD` | Account sync merge logic now preserves live `analyzing` runs instead of downgrading them to recovered draft errors during remote merge. |
-| NEW-12 (Deep Assist Provider Diagnostics Race Fix) | `TBD` | Deep Assist per-provider diagnostics now use per-run meta accounting, removing shared-state race artifacts in `webSearchCalls` and provider contribution totals. |
-| NEW-13 (KV Write Locking for Account Researches) | `TBD` | Added KV lock guards around user creation and research upsert/delete paths to reduce concurrent overwrite risk in account-backed storage. |
+| NEW-08 (Auth Secret + Origin Hard Requirement) | `21c8dd6` | Production auth now fails closed when `RESEARCHIT_AUTH_SECRET` or `RESEARCHIT_PUBLIC_URL` is missing (no insecure fallback secret, no header-trusted origin in production). |
+| NEW-09 (Persistent Store Guardrails for Auth/Account) | `21c8dd6` | Auth and account APIs now require durable KV storage in production; in-memory mode is dev-only and explicit configuration errors are surfaced. |
+| NEW-10 (Strict Provider Key Isolation) | `21c8dd6` | Provider key resolution no longer silently reuses `OPENAI_API_KEY` for Anthropic/Gemini candidates, preventing cross-provider auth misrouting. |
+| NEW-11 (Account Merge Safety for In-Flight Runs) | `21c8dd6` | Account sync merge logic now preserves live `analyzing` runs instead of downgrading them to recovered draft errors during remote merge. |
+| NEW-12 (Deep Assist Provider Diagnostics Race Fix) | `21c8dd6` | Deep Assist per-provider diagnostics now use per-run meta accounting, removing shared-state race artifacts in `webSearchCalls` and provider contribution totals. |
+| NEW-13 (KV Write Locking for Account Researches) | `21c8dd6` | Added KV lock guards around user creation and research upsert/delete paths to reduce concurrent overwrite risk in account-backed storage. |
 | DA-01 (Deep Assist 3-Provider Default + Agreement Surface) | `TBD` | Deep Assist defaults now run ChatGPT + Claude + Gemini; provider agreement/disagreement is surfaced in scorecard/matrix UI, progress diagnostics, and exports. |
 | CF-08 (Classic Role Routing Defaults) | `TBD` | Classic routing now defaults by role/capability (Analyst, Critic, Retrieval) with provider candidate fallback mesh and env-driven overrides. |
 | RQ-11 (Round-Robin Retrieval Planner) | `TBD` | Native scorecard and matrix targeted recovery now allocate low-confidence work in round-robin order with per-target diagnostics. |

@@ -70,6 +70,7 @@ resolveMatrixResearchInput(input, config, callbacks, options)
 - `analyst.js` / `critic.js` are thin wrappers around engine's `callOpenAI`; `providerConfig.js` and `fetch-source.js` handle host-only concerns.
 - UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
 - Auth/session and account storage are host concerns implemented in `app/api/*`; engine remains unaware of user identity.
+- Production auth/account routes fail closed when required env config is missing (`RESEARCHIT_AUTH_SECRET`, `RESEARCHIT_PUBLIC_URL`, and KV REST credentials).
 
 **Internal structure:**
 | Directory | Contents |
@@ -115,7 +116,7 @@ Phase 1 account/session flow (host shell only):
 User email → /api/auth/request-link
   ↓
 Magic link (/auth/callback?token=...) → /api/auth/verify
-  ↓ sets signed HttpOnly session cookie
+  ↓ sets signed HttpOnly session cookie (HMAC with `RESEARCHIT_AUTH_SECRET`)
 /api/auth/session resolves user for UI shell
   ↓
 Workspace state sync → /api/account/researches (load/upsert/delete)
@@ -282,7 +283,10 @@ API key, model, and base URL are resolved at request time with this precedence:
 4. `ResearchConfig.models.*` values
 5. Built-in defaults
 
-Key is server-side only. BYOK UI is planned but not yet implemented.
+Provider key isolation rule:
+- Provider-specific keys are preferred and must match the selected provider.
+- `OPENAI_*` and `OPENAI_API_KEY` are only used when resolving OpenAI provider candidates.
+- Key is server-side only. BYOK UI is planned but not yet implemented.
 
 ---
 
@@ -291,6 +295,8 @@ Key is server-side only. BYOK UI is planned but not yet implemented.
 - Preferred: KV REST adapter (`KV_REST_API_URL` + `KV_REST_API_TOKEN`, or Upstash aliases).
 - Fallback: in-memory map for local/dev testing.
 - In-memory mode is non-durable across serverless restarts and must not be treated as production persistence.
+- Production auth/account APIs require KV and return configuration errors when KV env vars are missing.
+- Account writes use short-lived KV locks to reduce concurrent upsert/delete overwrite risk.
 
 ---
 
