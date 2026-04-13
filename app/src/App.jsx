@@ -173,10 +173,11 @@ function withUpdatedAt(nextState, previousState = null) {
   };
 }
 
-function normalizeRecoveredUseCase(useCase = {}) {
+function normalizeRecoveredUseCase(useCase = {}, options = {}) {
   if (!useCase || typeof useCase !== "object") return null;
+  const markInterrupted = options?.markInterrupted !== false;
   const status = String(useCase.status || "").trim().toLowerCase();
-  if (status === "analyzing") {
+  if (markInterrupted && status === "analyzing") {
     return {
       ...useCase,
       status: "error",
@@ -195,14 +196,30 @@ function normalizeRecoveredUseCase(useCase = {}) {
 
 function mergeUseCaseLists(localList = [], remoteList = []) {
   const map = new Map();
-  [...(Array.isArray(localList) ? localList : []), ...(Array.isArray(remoteList) ? remoteList : [])].forEach((item) => {
+  const entries = [
+    ...(Array.isArray(localList) ? localList.map((item) => ({ item })) : []),
+    ...(Array.isArray(remoteList) ? remoteList.map((item) => ({ item })) : []),
+  ];
+  entries.forEach(({ item }) => {
     if (!item || typeof item !== "object") return;
     const id = String(item.id || "").trim();
     if (!id) return;
-    const normalized = normalizeRecoveredUseCase(item);
+    const normalized = normalizeRecoveredUseCase(item, {
+      markInterrupted: false,
+    });
     if (!normalized) return;
     const existing = map.get(id);
     if (!existing) {
+      map.set(id, normalized);
+      return;
+    }
+    const existingStatus = String(existing.status || "").toLowerCase();
+    const candidateStatus = String(normalized.status || "").toLowerCase();
+    if (existingStatus === "analyzing" && candidateStatus === "error" && normalized.recoveredDraft) {
+      map.set(id, existing);
+      return;
+    }
+    if (candidateStatus === "analyzing" && existingStatus === "error" && existing.recoveredDraft) {
       map.set(id, normalized);
       return;
     }

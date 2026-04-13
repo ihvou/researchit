@@ -72,15 +72,24 @@ function resolveProviderOrder(role, requestedProvider, liveSearch = false) {
 function resolveApiKey(role, provider) {
   const roleKey = rolePrefix(role);
   const providerKey = providerPrefix(provider);
-  return (
+  const providerSpecific = (
     envValue(`RESEARCHIT_${roleKey}_${providerKey}_API_KEY`)
     || envValue(`RESEARCHIT_${providerKey}_API_KEY`)
     || envValue(`${providerKey}_API_KEY`)
     || envValue(`${providerKey}_${roleKey}_API_KEY`)
-    || envValue(`RESEARCHIT_${roleKey}_API_KEY`)
+  );
+  if (providerSpecific) return providerSpecific;
+  if (provider === "openai") {
+    return (
+      envValue(`RESEARCHIT_${roleKey}_API_KEY`)
+      || envValue("RESEARCHIT_API_KEY")
+      || envValue(`OPENAI_${roleKey}_API_KEY`)
+      || envValue("OPENAI_API_KEY")
+    );
+  }
+  return (
+    envValue(`RESEARCHIT_${roleKey}_API_KEY`)
     || envValue("RESEARCHIT_API_KEY")
-    || envValue(`OPENAI_${roleKey}_API_KEY`)
-    || envValue("OPENAI_API_KEY")
   );
 }
 

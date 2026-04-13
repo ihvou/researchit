@@ -3452,7 +3452,11 @@ async function runDeepAssistPhase1(
       const passLabel = `deep_assist_${providerId}`;
       const requestOptions = resolveDeepAssistProviderRequestOptions(providerId, "analyst", deepAssistOptions);
       const startedAt = Date.now();
-      const beforeCalls = Number(analysisMeta.webSearchCalls || 0);
+      const providerMeta = {
+        liveSearchUsed: false,
+        webSearchCalls: 0,
+        liveSearchFallbackReason: null,
+      };
       try {
         const payload = await runAnalystPass({
           evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
@@ -3469,7 +3473,7 @@ async function runDeepAssistPhase1(
             researchSetup,
           }),
           dims,
-          analysisMeta,
+          analysisMeta: providerMeta,
           debugContext,
           debugSession,
           liveSearch: true,
@@ -3479,8 +3483,8 @@ async function runDeepAssistPhase1(
           requestOptions,
         });
         const durationMs = Math.max(0, Date.now() - startedAt);
-        const afterCalls = Number(analysisMeta.webSearchCalls || 0);
-        const webSearchCalls = Math.max(0, afterCalls - beforeCalls);
+        absorbAnalystMeta(analysisMeta, providerMeta);
+        const webSearchCalls = Number(providerMeta.webSearchCalls || 0);
         appendAnalysisDebugEvent(debugSession, {
           type: "deep_assist_provider_complete",
           phase: "deep_assist_collect",
@@ -3498,6 +3502,7 @@ async function runDeepAssistPhase1(
         };
       } catch (err) {
         const durationMs = Math.max(0, Date.now() - startedAt);
+        absorbAnalystMeta(analysisMeta, providerMeta);
         appendAnalysisDebugEvent(debugSession, {
           type: "deep_assist_provider_failed",
           phase: "deep_assist_collect",
@@ -3510,7 +3515,7 @@ async function runDeepAssistPhase1(
           label,
           status: "failed",
           durationMs,
-          webSearchCalls: 0,
+          webSearchCalls: Number(providerMeta.webSearchCalls || 0),
           error: err?.message || String(err),
           payload: null,
         };

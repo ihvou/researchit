@@ -3,6 +3,14 @@ import crypto from "node:crypto";
 const KV_URL = String(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "").trim();
 const KV_TOKEN = String(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
 const KV_ENABLED = !!(KV_URL && KV_TOKEN);
+const KV_LOCK_TTL_SECONDS = 8;
+const KV_LOCK_WAIT_MS = 2400;
+
+function isProductionEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || "").trim().toLowerCase();
+  const vercelEnv = String(process.env.VERCEL_ENV || "").trim().toLowerCase();
+  return nodeEnv === "production" || vercelEnv === "production";
+}
 
 function getMemoryStore() {
   if (!globalThis.__RESEARCHIT_MEMORY_STORE__) {
@@ -26,6 +34,11 @@ function normalizeJsonValue(raw) {
   }
 }
 
+function sleep(ms = 0) {
+  const timeout = Math.max(0, Number(ms) || 0);
+  return new Promise((resolve) => setTimeout(resolve, timeout));
+}
+
 async function kvCommand(args = []) {
   const res = await fetch(KV_URL, {
     method: "POST",
@@ -44,6 +57,38 @@ async function kvCommand(args = []) {
     throw new Error(`KV error: ${data.error}`);
   }
   return data?.result;
+}
+
+async function withKvLock(lockKey, fn, options = {}) {
+  if (!KV_ENABLED) {
+    return fn();
+  }
+  const ttlSeconds = Math.max(2, Number(options?.ttlSeconds) || KV_LOCK_TTL_SECONDS);
+  const maxWaitMs = Math.max(300, Number(options?.maxWaitMs) || KV_LOCK_WAIT_MS);
+  const owner = crypto.randomUUID();
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() <= deadline) {
+    const acquired = await kvCommand(["SET", lockKey, owner, "NX", "EX", ttlSeconds]);
+    if (acquired === "OK" || acquired === true) {
+      try {
+        return await fn();
+      } finally {
+        try {
+          const currentOwner = await kvCommand(["GET", lockKey]);
+          if (String(currentOwner || "") === owner) {
+            await kvCommand(["DEL", lockKey]);
+          }
+        } catch (_) {
+          // Best-effort unlock only.
+        }
+      }
+    }
+    await sleep(70 + Math.floor(Math.random() * 50));
+  }
+  const err = new Error("Storage is busy. Please retry.");
+  err.code = "STORE_LOCK_TIMEOUT";
+  throw err;
 }
 
 async function getValue(key) {
@@ -103,8 +148,16 @@ function researchesKey(userId) {
   return `ri:user:${String(userId || "").trim()}:researches`;
 }
 
+function userResearchesLockKey(userId) {
+  return `${researchesKey(userId)}:lock`;
+}
+
 function magicTokenKey(token) {
   return `ri:auth:magic:${String(token || "").trim()}`;
+}
+
+function userEmailLockKey(email) {
+  return `${emailIndexKey(email)}:lock`;
 }
 
 function createUserRecord(email) {
@@ -120,6 +173,15 @@ export function getStorageMode() {
   return KV_ENABLED ? "kv" : "memory";
 }
 
+export function assertPersistentStoreAvailable() {
+  if (KV_ENABLED) return;
+  if (isProductionEnv()) {
+    const err = new Error("KV_REST_API_URL and KV_REST_API_TOKEN are required in production.");
+    err.code = "KV_REQUIRED_IN_PRODUCTION";
+    throw err;
+  }
+}
+
 export async function getUserById(userId) {
   if (!userId) return null;
   return getValue(userKey(userId));
@@ -129,16 +191,18 @@ export async function getOrCreateUserByEmail(email) {
   const normalized = String(email || "").trim().toLowerCase();
   if (!normalized) return null;
 
-  const existingUserId = await getValue(emailIndexKey(normalized));
-  if (existingUserId) {
-    const existing = await getUserById(existingUserId);
-    if (existing) return existing;
-  }
+  return withKvLock(userEmailLockKey(normalized), async () => {
+    const existingUserId = await getValue(emailIndexKey(normalized));
+    if (existingUserId) {
+      const existing = await getUserById(existingUserId);
+      if (existing) return existing;
+    }
 
-  const created = createUserRecord(normalized);
-  await setValue(userKey(created.id), created);
-  await setValue(emailIndexKey(normalized), created.id);
-  return created;
+    const created = createUserRecord(normalized);
+    await setValue(userKey(created.id), created);
+    await setValue(emailIndexKey(normalized), created.id);
+    return created;
+  });
 }
 
 export async function putMagicToken(token, payload, ttlSeconds = 900) {
@@ -171,47 +235,51 @@ export async function getUserResearches(userId) {
 
 export async function upsertUserResearches(userId, researches = []) {
   if (!userId) return { upserted: 0, total: 0 };
-  const currentList = await getUserResearches(userId);
-  const map = Object.fromEntries(currentList.map((item) => [item.id, item]));
-  let upserted = 0;
+  return withKvLock(userResearchesLockKey(userId), async () => {
+    const currentList = await getUserResearches(userId);
+    const map = Object.fromEntries(currentList.map((item) => [item.id, item]));
+    let upserted = 0;
 
-  const items = Array.isArray(researches) ? researches : [researches];
-  items.forEach((item) => {
-    if (!item || typeof item !== "object") return;
-    const id = String(item.id || "").trim();
-    if (!id) return;
-    const createdAt = String(item.createdAt || map[id]?.createdAt || nowIso());
-    const updatedAt = String(item.updatedAt || nowIso());
-    map[id] = {
-      ...item,
-      id,
-      ownerId: userId,
-      createdAt,
-      updatedAt,
-      storedAt: nowIso(),
-    };
-    upserted += 1;
+    const items = Array.isArray(researches) ? researches : [researches];
+    items.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const id = String(item.id || "").trim();
+      if (!id) return;
+      const createdAt = String(item.createdAt || map[id]?.createdAt || nowIso());
+      const updatedAt = String(item.updatedAt || nowIso());
+      map[id] = {
+        ...item,
+        id,
+        ownerId: userId,
+        createdAt,
+        updatedAt,
+        storedAt: nowIso(),
+      };
+      upserted += 1;
+    });
+
+    const capped = Object.values(map)
+      .sort((a, b) => {
+        const aTime = Date.parse(a.updatedAt || a.createdAt || "") || 0;
+        const bTime = Date.parse(b.updatedAt || b.createdAt || "") || 0;
+        return bTime - aTime;
+      })
+      .slice(0, 500);
+
+    const payload = Object.fromEntries(capped.map((item) => [item.id, item]));
+    await setValue(researchesKey(userId), payload);
+    return { upserted, total: capped.length };
   });
-
-  const capped = Object.values(map)
-    .sort((a, b) => {
-      const aTime = Date.parse(a.updatedAt || a.createdAt || "") || 0;
-      const bTime = Date.parse(b.updatedAt || b.createdAt || "") || 0;
-      return bTime - aTime;
-    })
-    .slice(0, 500);
-
-  const payload = Object.fromEntries(capped.map((item) => [item.id, item]));
-  await setValue(researchesKey(userId), payload);
-  return { upserted, total: capped.length };
 }
 
 export async function deleteUserResearch(userId, researchId) {
   if (!userId || !researchId) return false;
-  const list = await getUserResearches(userId);
-  const map = Object.fromEntries(list.map((item) => [item.id, item]));
-  if (!map[researchId]) return false;
-  delete map[researchId];
-  await setValue(researchesKey(userId), map);
-  return true;
+  return withKvLock(userResearchesLockKey(userId), async () => {
+    const list = await getUserResearches(userId);
+    const map = Object.fromEntries(list.map((item) => [item.id, item]));
+    if (!map[researchId]) return false;
+    delete map[researchId];
+    await setValue(researchesKey(userId), map);
+    return true;
+  });
 }

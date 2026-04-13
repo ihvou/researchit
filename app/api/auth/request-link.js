@@ -50,6 +50,10 @@ export default async function handler(req, res) {
       devMagicLink,
     });
   } catch (err) {
-    return res.status(400).json({ error: err?.message || "Failed to issue magic link" });
+    const code = String(err?.code || "").trim();
+    const isConfigError = code === "AUTH_SECRET_MISSING"
+      || code === "AUTH_ORIGIN_MISSING"
+      || code === "KV_REQUIRED_IN_PRODUCTION";
+    return res.status(isConfigError ? 500 : 400).json({ error: err?.message || "Failed to issue magic link" });
   }
 }

@@ -1,10 +1,23 @@
 import crypto from "node:crypto";
-import { consumeMagicToken, getOrCreateUserByEmail, getStorageMode, putMagicToken } from "./store.js";
+import {
+  assertPersistentStoreAvailable,
+  consumeMagicToken,
+  getOrCreateUserByEmail,
+  getStorageMode,
+  putMagicToken,
+} from "./store.js";
 
 const SESSION_COOKIE_NAME = "researchit_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const MAGIC_LINK_TTL_SECONDS = 60 * 15; // 15 minutes
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DEV_SECRET_KEY = "__RESEARCHIT_DEV_AUTH_SECRET__";
+
+function isProductionEnv() {
+  const nodeEnv = String(process.env.NODE_ENV || "").trim().toLowerCase();
+  const vercelEnv = String(process.env.VERCEL_ENV || "").trim().toLowerCase();
+  return nodeEnv === "production" || vercelEnv === "production";
+}
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -27,9 +40,15 @@ function fromBase64url(input) {
 function authSecret() {
   const configured = String(process.env.RESEARCHIT_AUTH_SECRET || process.env.SESSION_SECRET || "").trim();
   if (configured) return configured;
-  const fallback = String(process.env.OPENAI_API_KEY || "").trim();
-  if (fallback) return fallback;
-  return "researchit-dev-auth-secret";
+  if (isProductionEnv()) {
+    const err = new Error("RESEARCHIT_AUTH_SECRET is required in production.");
+    err.code = "AUTH_SECRET_MISSING";
+    throw err;
+  }
+  if (!globalThis[DEV_SECRET_KEY]) {
+    globalThis[DEV_SECRET_KEY] = crypto.randomBytes(32).toString("hex");
+  }
+  return String(globalThis[DEV_SECRET_KEY]);
 }
 
 function signValue(value) {
@@ -76,6 +95,22 @@ function appendSetCookie(res, cookieValue) {
 }
 
 export function buildOrigin(req) {
+  const configured = String(process.env.RESEARCHIT_PUBLIC_URL || process.env.APP_BASE_URL || "").trim();
+  if (configured) {
+    try {
+      const parsed = new URL(configured);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.origin;
+      }
+    } catch (_) {
+      // fall through to runtime host detection in non-production
+    }
+  }
+  if (isProductionEnv()) {
+    const err = new Error("RESEARCHIT_PUBLIC_URL is required in production for magic-link origin.");
+    err.code = "AUTH_ORIGIN_MISSING";
+    throw err;
+  }
   const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim();
   const proto = forwardedProto || (process.env.NODE_ENV === "development" ? "http" : "https");
   const host = String(req?.headers?.["x-forwarded-host"] || req?.headers?.host || "").trim();
@@ -96,11 +131,15 @@ export function createSessionToken(user) {
 
 export function verifySessionToken(token) {
   const raw = String(token || "").trim();
-  if (!raw.includes(".")) return null;
-  const [encoded, sig] = raw.split(".");
+  const parts = raw.split(".");
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
   if (!encoded || !sig) return null;
   const expected = signValue(encoded);
-  if (sig !== expected) return null;
+  const actualBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expected);
+  if (actualBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(actualBuf, expectedBuf)) return null;
   try {
     const payload = JSON.parse(fromBase64url(encoded));
     if (!payload?.sub || !payload?.exp) return null;
@@ -160,6 +199,7 @@ export async function requireSessionUser(req, res) {
 }
 
 export async function issueMagicLink(email, options = {}) {
+  assertPersistentStoreAvailable();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!isValidEmail(normalizedEmail)) {
     throw new Error("Please provide a valid email address.");
@@ -186,6 +226,7 @@ export async function issueMagicLink(email, options = {}) {
 }
 
 export async function consumeMagicLinkToken(token) {
+  assertPersistentStoreAvailable();
   const payload = await consumeMagicToken(token);
   if (!payload?.email) return null;
   const user = await getOrCreateUserByEmail(payload.email);

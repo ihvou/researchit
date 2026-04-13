@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { requireSessionUser } from "../_lib/auth.js";
-import { deleteUserResearch, getUserResearches, upsertUserResearches } from "../_lib/store.js";
+import {
+  assertPersistentStoreAvailable,
+  deleteUserResearch,
+  getUserResearches,
+  upsertUserResearches,
+} from "../_lib/store.js";
 
 function normalizeResearch(input) {
   if (!input || typeof input !== "object") return null;
@@ -23,6 +28,11 @@ function normalizeResearch(input) {
 export default async function handler(req, res) {
   const auth = await requireSessionUser(req, res);
   if (!auth.user) return auth.handled;
+  try {
+    assertPersistentStoreAvailable();
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "Persistent storage is not configured" });
+  }
 
   if (req.method === "GET") {
     try {

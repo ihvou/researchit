@@ -2012,7 +2012,6 @@ async function runMatrixDeepAssistEnrichment({
     deepAssist.providers.map(async (providerId) => {
       const label = deepAssistProviderLabel(providerId);
       const startedAt = Date.now();
-      const beforeCalls = Number(analysisMeta.webSearchCalls || 0);
       try {
         const prompt = buildMatrixEvidencePrompt({
           rawInput,
@@ -2033,12 +2032,11 @@ async function runMatrixDeepAssistEnrichment({
             includeMeta: true,
           }
         );
-        Object.assign(analysisMeta, mergeMeta(analysisMeta, response?.meta, "analyst"));
+        const responseMeta = response?.meta && typeof response.meta === "object" ? response.meta : null;
         const parsed = extractJson(response?.text || response, {});
         const matrix = normalizeAnalystMatrix(parsed, subjects, attributes);
         const durationMs = Math.max(0, Date.now() - startedAt);
-        const afterCalls = Number(analysisMeta.webSearchCalls || 0);
-        const webSearchCalls = Math.max(0, afterCalls - beforeCalls);
+        const webSearchCalls = Number(responseMeta?.webSearchCalls || 0);
         appendAnalysisDebugEvent(debugSession, {
           type: "deep_assist_provider_complete",
           phase: "matrix_deep_assist",
@@ -2053,7 +2051,7 @@ async function runMatrixDeepAssistEnrichment({
           durationMs,
           webSearchCalls,
           matrix,
-          meta: response?.meta || null,
+          meta: responseMeta,
         };
       } catch (err) {
         appendAnalysisDebugEvent(debugSession, {
@@ -2075,6 +2073,11 @@ async function runMatrixDeepAssistEnrichment({
       }
     })
   );
+
+  providerRuns.forEach((run) => {
+    if (!run?.meta) return;
+    Object.assign(analysisMeta, mergeMeta(analysisMeta, run.meta, "analyst"));
+  });
 
   analysisMeta.deepAssistProviderRuns = providerRuns.map((run) => ({
     providerId: run.providerId,

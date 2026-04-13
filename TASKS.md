@@ -6,11 +6,41 @@ Priority scale: P0 = reliability blocker / correctness bug, P1 = strong quality 
 
 Classic-flow target stack (quality-first default routing): OpenAI reasoning model as Analyst, Anthropic model as Critic, Gemini-grounded retrieval/query planning for web evidence, with fallback mesh when one provider degrades.
 
+Execution order for user account roadmap: durable run persistence first, then auth, then billing gates, then collaboration (`DA-05 -> RU-03 -> UA-01/UA-02/UA-03 -> PAY-01/PAY-02/BIL-01 -> CO-01/CO-02`).
+
+### Delivery Phases (Account -> Monetization/Sharing)
+
+Phase 1 — account foundation (store researches under account, sign in/sign up):
+- `DA-05` async orchestration + run persistence (Native + Deep Assist)
+- `RU-01` client crash-safety restore
+- `RU-03` run storage, retention, hard delete
+- `UA-01` magic-link auth baseline
+- `UA-02` anonymous-to-account claiming
+- `UA-03` user research library + resume
+
+Phase 2 — payment gate, payments/billing/balance, and sharing:
+- `PAY-01` payment provider and checkout integration
+- `PAY-02` balance ledger + usage charging + webhook reconciliation
+- `BIL-01` free-run policy, balance gates, pre-run estimate gate, export gate
+- `FR-01` in-app cost transparency
+- `CO-01` share links/TTL/access controls
+- `CO-02` collaborative comments and review threads
+
 | ID | Type | Problem | Solution | Impact | Extra calls | Cost +% | Priority |
 |----|------|---------|----------|--------|-------------|---------|----------|
 | DA-02 (Deep Assist Quality Recovery Loop) | feature | Deep Assist can still return thin or contradictory evidence in some cells/dimensions. | Keep a bounded targeted recovery phase after merge (for unresolved/contradicted/low-confidence items) instead of assuming "deep research is always enough." | Prevents false-complete outputs in hard domains. | +1-6 | +5-30% | P0 |
 | DA-03 (No-Cap Safety Guardrails) | feature | With no hard spend cap, retry or parser loops can create runaway cost without improving quality. | Add strict max retries per step, per-step timeouts, and terminal degraded states with explicit reason codes. No budget cap; safety only prevents accidental loops. | Quality-first policy without runaway failure cost. | 0 (happy path) | 0% | P0 |
-| DA-05 (Deep Assist Async Orchestration + Run Persistence) | feature | Deep Assist runs are multi-minute and multi-provider. Request-lifecycle execution risks timeouts, partial-loss, and poor resume/cancel behavior. | Introduce durable async run orchestration with persisted run state, resumable steps, cancellation, and idempotent retries. Progress events must survive reconnects. | Makes Deep Assist production-safe and operable at scale. | 0 (quality infra) | 0% | P0 |
+| DA-05 (Async Orchestration + Run Persistence, Native + Deep Assist) | feature | Closing/reloading browser tabs can drop in-flight progress visibility and make long runs feel lost. Deep Assist has higher risk due to multi-minute, multi-provider execution. | Introduce durable async run orchestration with persisted run state, resumable steps, cancellation, and idempotent retries for both Native and Deep Assist. Progress events must survive reconnects and recover by `runId`. | Foundation for reliable resume/reconnect behavior and prerequisite for account-backed run continuity. | 0 (quality infra) | 0% | P0 |
+| RU-01 (Client Crash-Safety Draft Restore) | feature | Before full server-backed persistence, users can still lose visible in-progress context after accidental tab close or refresh. | Persist lightweight in-progress snapshots locally, restore with resume/clear prompt on reload, and show unload guard when a run is active. | Immediate UX safety net while durable orchestration is rolling out. | 0 | 0% | P1 |
+| RU-03 (Run Storage, Retention, and Hard Delete) | feature | Account features require explicit lifecycle rules for run artifacts and user-controlled deletion. | Add durable run artifact storage model with retention metadata, hard-delete path, and compatibility with existing export/import artifacts. | Enables trustworthy persistence and privacy controls before broad auth rollout. | 0 | 0% | P1 |
+| UA-01 (Magic-Link Auth Baseline) | feature | Returning users currently rely on local state and cannot reliably recover work across devices/sessions. | Implement email magic-link sign-in/up, session handling, and account shell integrated with persisted run retrieval. | Baseline identity layer for returning users and durable history access. | 0 | 0% | P1 |
+| UA-02 (Anonymous-to-Account Claiming) | feature | Hard auth gate before users see value increases drop-off and can orphan anonymous runs. | Allow anonymous first run, then claim recent runs after sign-up using secure ownership handoff. | Keeps low-friction onboarding while preserving continuity after signup. | 0 | 0% | P1 |
+| UA-03 (User Research Library + Resume) | feature | Returning users need a reliable home for owned runs, status, and continuation actions. | Add "My Researches" library with status filters (`running/completed/degraded/failed`), resume/open/delete/export actions, and reconnect by `runId`. | Makes Researchit usable as an ongoing workspace, not a single-session tool. | 0 | 0% | P1 |
+| PAY-01 (Payments Provider Integration) | feature | Billing gates cannot work without a reliable top-up checkout path tied to account identity. | Integrate payment provider checkout/session return flow and account crediting entry point; support test/sandbox and production modes. | Enables monetization and funding of paid runs. | 0 | 0% | P1 |
+| PAY-02 (Balance Ledger + Usage Charging + Webhook Reconciliation) | feature | Balance changes can drift without a canonical ledger and asynchronous payment reconciliation. | Implement append-only balance ledger, per-run debit records, idempotent webhook reconciliation, and audit trail for credits/debits/refunds/adjustments. | Accurate balances and trustworthy billing operations. | 0 | 0% | P1 |
+| BIL-01 (Free Run + Balance Gate Policy) | feature | Onboarding/billing flow in product scenarios requires explicit gate rules tied to identity, payments, and persisted runs. | Add free-run entitlement policy, pre-run estimate checks, low-balance handling, export/top-up gates, and UX messaging wired to account state + ledger. Depends on `PAY-01` and `PAY-02`. | Aligns onboarding promise with operable monetization and cost controls. | 0 | 0% | P1 |
+| CO-01 (Share Links, TTL, and Access Controls) | feature | Shared research is needed for async review, but current flow lacks controlled link-based access and expiry. | Implement share links for one or multiple researches, configurable TTL, revoke controls, and "shared with me" access model. | Enables lightweight collaboration without forcing immediate full account creation for reviewers. | 0 | 0% | P2 |
+| CO-02 (Collaborative Comment Threads) | feature | Current challenge threads are single-user; reviewer feedback cannot be captured inline in shared research. | Add per-dimension/per-cell comments and replies with participant labeling, notifications, and owner moderation/revoke actions. | Turns outputs into collaborative decision artifacts instead of static reports. | 0 | 0% | P2 |
 | FR-02 (Benchmark Regression Suite) | feature | Pipeline/prompt/model changes can silently degrade quality. No way to measure impact of improvements. | Build hybrid benchmark stack: (1) replay regression tests in CI using dumped model/tool responses (zero API spend), (2) small live canary subset on schedule to detect provider/retrieval drift, (3) full live benchmark pre-release and before major quality claims. Start with 6-8 gold cases, expand to 20. Define fixed scoring rubric + scorer protocol so DA-04 comparisons are reproducible. Prerequisite for DA-04. | Measurement infrastructure: prevents regressions and makes "beats mainstream deep research" claims auditable when DA-04 runs on top. | low recurring + periodic full run | low recurring + periodic full run | P3 |
 | DA-04 (External Deep Research Head-to-Head Harness) | feature | "Beats mainstream deep research" cannot be claimed without direct side-by-side evidence. | Add benchmark harness that runs fixed prompts against Researchit, ChatGPT Deep Research, Claude Research, and Gemini Research; score with rubric (accuracy, source quality, decision utility, contradiction handling). Publish win/loss deltas in debug artifacts. Depends on FR-02 for infrastructure. | Objective proof that quality direction is working. | benchmark-only | benchmark-only | P3 |
 | DA-06 (Deep Assist Run Manifest + Evidence Cache) | feature | Retries/re-runs can re-pay for identical deep calls and make audits hard. | Persist a deterministic run manifest (prompt hash + config version + provider/model set + timestamps) and cache raw provider outputs + normalized extraction. Reuse cache on safe retries/replays; expose provenance in debug/export artifacts. | Lower avoidable cost, better reproducibility, stronger auditability. | 0 (happy path) | 0% to lower | P1 |
@@ -37,6 +67,12 @@ Classic-flow target stack (quality-first default routing): OpenAI reasoning mode
 
 | ID | Implemented in | Summary |
 |----|---------------|---------|
+| NEW-08 (Auth Secret + Origin Hard Requirement) | `TBD` | Production auth now fails closed when `RESEARCHIT_AUTH_SECRET` or `RESEARCHIT_PUBLIC_URL` is missing (no insecure fallback secret, no header-trusted origin in production). |
+| NEW-09 (Persistent Store Guardrails for Auth/Account) | `TBD` | Auth and account APIs now require durable KV storage in production; in-memory mode is dev-only and explicit configuration errors are surfaced. |
+| NEW-10 (Strict Provider Key Isolation) | `TBD` | Provider key resolution no longer silently reuses `OPENAI_API_KEY` for Anthropic/Gemini candidates, preventing cross-provider auth misrouting. |
+| NEW-11 (Account Merge Safety for In-Flight Runs) | `TBD` | Account sync merge logic now preserves live `analyzing` runs instead of downgrading them to recovered draft errors during remote merge. |
+| NEW-12 (Deep Assist Provider Diagnostics Race Fix) | `TBD` | Deep Assist per-provider diagnostics now use per-run meta accounting, removing shared-state race artifacts in `webSearchCalls` and provider contribution totals. |
+| NEW-13 (KV Write Locking for Account Researches) | `TBD` | Added KV lock guards around user creation and research upsert/delete paths to reduce concurrent overwrite risk in account-backed storage. |
 | DA-01 (Deep Assist 3-Provider Default + Agreement Surface) | `TBD` | Deep Assist defaults now run ChatGPT + Claude + Gemini; provider agreement/disagreement is surfaced in scorecard/matrix UI, progress diagnostics, and exports. |
 | CF-08 (Classic Role Routing Defaults) | `TBD` | Classic routing now defaults by role/capability (Analyst, Critic, Retrieval) with provider candidate fallback mesh and env-driven overrides. |
 | RQ-11 (Round-Robin Retrieval Planner) | `TBD` | Native scorecard and matrix targeted recovery now allocate low-confidence work in round-robin order with per-target diagnostics. |
