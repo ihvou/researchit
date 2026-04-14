@@ -7,7 +7,7 @@ function ensureFunction(callFn) {
 export const DEFAULT_RETRYABLE_STATUS = [408, 409, 425, 429, 500, 502, 503, 504];
 const DEFAULT_POLICY_BY_ROLE = {
   analyst: {
-    timeoutMs: 55000,
+    timeoutMs: 180000,
     maxRetries: 2,
     initialBackoffMs: 300,
     maxBackoffMs: 2500,
@@ -15,7 +15,7 @@ const DEFAULT_POLICY_BY_ROLE = {
     retryableStatus: DEFAULT_RETRYABLE_STATUS,
   },
   critic: {
-    timeoutMs: 55000,
+    timeoutMs: 120000,
     maxRetries: 2,
     initialBackoffMs: 300,
     maxBackoffMs: 2500,
@@ -51,16 +51,26 @@ function timeoutError(label, timeoutMs) {
 
 async function withTimeout(fn, timeoutMs, label) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fn();
-  let timer = null;
+  const controller = new AbortController();
+  let timedOut = false;
+  const onTimeout = () => {
+    timedOut = true;
+    try {
+      controller.abort();
+    } catch (_) {
+      // no-op
+    }
+  };
+  const timer = setTimeout(onTimeout, timeoutMs);
   try {
-    return await Promise.race([
-      fn(),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutError(label, timeoutMs)), timeoutMs);
-      }),
-    ]);
+    return await fn(controller.signal);
+  } catch (err) {
+    if (timedOut) {
+      throw timeoutError(label, timeoutMs);
+    }
+    throw err;
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -161,7 +171,7 @@ async function callWithRetry({
     attempt += 1;
     try {
       const data = await withTimeout(
-        () => callFn(role, payload),
+        (signal) => callFn(role, payload, { signal }),
         policy.timeoutMs,
         `${role} request`
       );

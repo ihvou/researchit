@@ -1,12 +1,13 @@
 import { createTransport, DEFAULT_RETRYABLE_STATUS } from "@researchit/engine";
 
-async function callRoute(role, payload) {
+async function callRoute(role, payload, runtime = {}) {
   let res;
   try {
     res = await fetch(`/api/${role}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
+      signal: runtime?.signal,
     });
   } catch (err) {
     const networkErr = new Error(err?.message || `Network error: /api/${role}`);
