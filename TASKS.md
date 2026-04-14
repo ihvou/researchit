@@ -68,46 +68,6 @@ Phase 2 — payment gate, payments/billing/balance, and sharing:
 | RQ-07 (Deep Mode: Triple Baseline) | feature | Standard mode lacks explicit model-divergence signal. | Add optional deep mode with parallel baseline passes and disagreement-guided retrieval focus. Depends on RQ-25. | Better calibration on high-stakes runs. | +3 (parallel) | +15% | P3 |
 | RQ-08 (Targeted Multi-Model Search) | feature | Single-model query framing misses retrieval diversity in disputed cells. | In deep mode, run disputed-dimension retrieval through multiple models, merge evidence, and reconcile. Depends on RQ-25 + RQ-07. | Higher recall in contentious cells. | +4-8 | +20-40% | P3 |
 
-### Completed Items
-
-| ID | Implemented in | Summary |
-|----|---------------|---------|
-| NEW-08 (Auth Secret + Origin Hard Requirement) | `21c8dd6` | Production auth now fails closed when `RESEARCHIT_AUTH_SECRET` or `RESEARCHIT_PUBLIC_URL` is missing (no insecure fallback secret, no header-trusted origin in production). |
-| NEW-09 (Persistent Store Guardrails for Auth/Account) | `21c8dd6` | Auth and account APIs now require durable KV storage in production; in-memory mode is dev-only and explicit configuration errors are surfaced. |
-| NEW-10 (Strict Provider Key Isolation) | `21c8dd6` | Provider key resolution no longer silently reuses `OPENAI_API_KEY` for Anthropic/Gemini candidates, preventing cross-provider auth misrouting. |
-| NEW-11 (Account Merge Safety for In-Flight Runs) | `21c8dd6` | Account sync merge logic now preserves live `analyzing` runs instead of downgrading them to recovered draft errors during remote merge. |
-| NEW-12 (Deep Assist Provider Diagnostics Race Fix) | `21c8dd6` | Deep Assist per-provider diagnostics now use per-run meta accounting, removing shared-state race artifacts in `webSearchCalls` and provider contribution totals. |
-| NEW-13 (KV Write Locking for Account Researches) | `21c8dd6` | Added KV lock guards around user creation and research upsert/delete paths to reduce concurrent overwrite risk in account-backed storage. |
-| DA-01 (Deep Assist 3-Provider Default + Agreement Surface) | `2e8627d` | Deep Assist defaults now run ChatGPT + Claude + Gemini; provider agreement/disagreement is surfaced in scorecard/matrix UI, progress diagnostics, and exports. |
-| CF-08 (Classic Role Routing Defaults) | `2e8627d` | Classic routing now defaults by role/capability (Analyst, Critic, Retrieval) with provider candidate fallback mesh and env-driven overrides. |
-| RQ-11 (Round-Robin Retrieval Planner) | `2e8627d` | Native scorecard and matrix targeted recovery now allocate low-confidence work in round-robin order with per-target diagnostics. |
-| RQ-15 (Niche Query Strategist) | `2e8627d` | Added niche/domain strategist prompts that expand aliases/rebrands and emit targeted retrieval hints for scorecard dimensions and matrix cells. |
-| RQ-17 (Per-Cell Budget Orchestrator) | `2e8627d` | Added explicit low-confidence budget planning/usage counters and bounded targeted recovery selection in scorecard and matrix flows. |
-| RQ-20 (Claim/Quote Verification Hardening) | `2e8627d` | Source verification now tracks invalid URL/partial/name-only outcomes and applies stronger confidence caps tied to verification and URL coverage. |
-| RQ-23 (Run Diagnostics Surface) | `2e8627d` | Diagnostics now render both in Progress and a standalone diagnostics panel; exports include stale/verification/provider/budget diagnostics. |
-| RA-10 | `2e8627d` | Added cross-dimension coherence audit with contradiction flags and conservative score-cap adjustments before finalization. |
-| MX-05 | `2e8627d` | Derived matrix attributes are generated only after critic/consistency/verification phases in a dedicated late derivation step. |
-| NEW-01 (Empty Cell Root Cause Diagnostics) | `2e8627d` | Matrix targeted recovery now logs per-cell query plans, coverage, findings, and failure reasons into diagnostics/debug outputs. |
-| UX-01 (Research Setup Popup) | `2e8627d` | Matrix runs now require a setup popup (subjects + optional decision context + role), scorecard keeps zero-friction analyze with optional Configure popup, and setup context is injected into evidence/critic/synthesis/discovery prompts in Native and Deep Assist flows. |
-| MX-04 | `2e8627d` | Added cross-subject consistency audit for matrix outputs with contradiction detection and confidence adjustments in post-critic reconciliation. |
-| RQ-13 (Independent Critic Protocol) | `2e8627d` | Critic pass now enforces stronger challenge behavior, including a stricter re-run when high/medium-confidence outputs show suspiciously low challenge rate. |
-| RQ-14 (Source Diversity Floor) | `2e8627d` | Confidence is now capped when evidence lacks independent corroboration and over-relies on vendor sources. |
-| RQ-21 (Confidence Calibration Engine) — partial | `2e8627d` | Confidence now uses measurable signals (verification, source diversity, contradiction pressure, recency/staleness) with explicit capping logic. Remaining: final UI rationale decomposition per dimension/cell. |
-| RQ-22 (Decision-Grade Synthesis Contract) | `2e8627d` | Matrix pipeline now produces required executive synthesis (closest threats, whitespace, strategic classification, risks, uncertainty) with dedicated summary tab and export section. |
-| RQ-06 (Temporal Evidence Gating) | `2e8627d` | Added stale-evidence detection and confidence gating when evidence recency falls below thresholds; stale ratio is exposed in diagnostics. |
-| RA-13 | `2e8627d` | Added optional extra refinement pass for unresolved low-confidence items with alternate query strategy. |
-| NEW-05 (Graceful Degraded-Complete State) | `2e8627d` | Coverage/reconcile quality failures now complete as degraded runs with explicit `qualityGrade`/`degradedReasons` instead of hard-aborting. |
-| NEW-06 (Polarity Guard Uses Config polarityHint) | `2e8627d` | Polarity guard now reads config `polarityHint` and correctly handles inverse-polarity dimensions during score/text consistency checks. |
-| NEW-07 (Deduplicate Retryable Status List) | `2e8627d` | Exported shared retryable HTTP status list from transport and reused it in app API client (single source of truth). |
-| NEW-04 (Matrix Cell Fuzzy Matching) | `2e8627d` | Matrix normalization now uses fuzzy subject/attribute matching fallback to reduce silent empty-cell backfills from label drift. |
-| MX-06 (Matrix Cell Depth Alignment) | `2e8627d` | Matrix cells now carry `value` + `full` + `arguments` + `risks`; compact table stays scannable while Debate/Detail surfaces full depth. |
-| MX-07 (Matrix Executive Synthesis) | `2e8627d` | Added matrix executive summary generation + dedicated tab and export rendering, including provider agreement signals. |
-| RQ-10 (Coverage SLA Gate) | `7fe792b` | Matrix coverage SLA with per-cell source minimums, per-subject coverage thresholds, global unresolved cell limits. Config-driven via `limits.matrixCoverageSLA`. |
-| RQ-12 (Reconcile Fail-Fast + Auto-Retry) | `7fe792b`, `00f008b` | `evaluateMatrixReconcileHealth()` detects suspicious reconcile (no changes despite high uncertainty). Quality-scored retry with best-of selection. Throws on persistent failure. Scorecard reconcile also guarded. |
-| RA-11 (Polarity Inversion Fix) | `00f008b` | `enforcePhase3PolarityRules()` with three guard rules: evidence-gap can't raise scores, high-score + low-confidence cap, text polarity mismatch cap. Adjustment counts in `analysisMeta`. |
-| NEW-02 (Critic Flag Rate Monitoring) | `7fe792b` | `computeCriticFlagMonitoring()` tracks flag rate vs. low-confidence rate. Alerts when flag rate is suspiciously low. Config-driven thresholds via `limits.criticFlagMonitoring`. |
-| NEW-03 (Transport Error Recovery) | `7fe792b` | Full rewrite of `transport.js`: per-role retry policies, exponential backoff with jitter, timeout via `Promise.race`, retryable error detection (HTTP status + message patterns), policy merging hierarchy. `api.js` updated with `retryable` tagging. |
-
 ### Removed / Merged Items
 
 | Original ID | Action | Reason |
