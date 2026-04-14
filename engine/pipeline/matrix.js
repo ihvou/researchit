@@ -286,9 +286,105 @@ function normalizeSourceList(sources = []) {
       sourceType: cleanText(src?.sourceType || "").toLowerCase(),
       verificationStatus: cleanText(src?.verificationStatus || ""),
       verificationNote: cleanText(src?.verificationNote || ""),
+      displayStatus: cleanText(src?.displayStatus || "").toLowerCase(),
     }))
     .filter((src) => src.name || src.quote || src.url)
-    .slice(0, 10);
+    .slice(0, 10)
+    .map((src) => ({
+      ...src,
+      displayStatus: src.displayStatus || deriveSourceDisplayStatus(src, { staleEvidenceRatio: null }),
+    }));
+}
+
+function extractEvidenceYearsFromSource(source = {}) {
+  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
+  const matches = String(text).match(/\b(20\d{2})\b/g);
+  if (!matches || !matches.length) return [];
+  return matches
+    .map((value) => Number(value))
+    .filter((year) => Number.isFinite(year) && year >= 2000 && year <= 2099);
+}
+
+function sourceHasOnlyStaleYears(source = {}, staleCutoff = (new Date().getFullYear() - 2)) {
+  const years = extractEvidenceYearsFromSource(source);
+  if (!years.length) return false;
+  return years.every((year) => year < staleCutoff);
+}
+
+function deriveSourceDisplayStatus(source = {}, options = {}) {
+  const verificationStatus = cleanText(source?.verificationStatus);
+  const sourceType = cleanText(source?.sourceType).toLowerCase();
+  const staleEvidenceRatio = Number(options?.staleEvidenceRatio);
+  const staleCutoff = Number.isFinite(Number(options?.staleCutoff))
+    ? Number(options.staleCutoff)
+    : (new Date().getFullYear() - 2);
+
+  if (verificationStatus === "verified_in_page") return "cited";
+  if (
+    Number.isFinite(staleEvidenceRatio)
+    && staleEvidenceRatio >= 0.6
+    && sourceHasOnlyStaleYears(source, staleCutoff)
+  ) {
+    return "excluded_stale";
+  }
+  if (sourceType === "vendor" && verificationStatus !== "verified_in_page") {
+    return "excluded_marketing";
+  }
+  if (verificationStatus === "name_only_in_page" && sourceType !== "vendor") {
+    return "corroborating";
+  }
+  if (
+    verificationStatus === "not_found_in_page"
+    || verificationStatus === "fetch_failed"
+    || verificationStatus === "invalid_url"
+  ) {
+    return "unverified";
+  }
+  if (sourceType === "independent" || sourceType === "press") return "corroborating";
+  return "unverified";
+}
+
+function annotateSourceListDisplayStatus(sources = [], options = {}) {
+  return normalizeSourceList(sources).map((source) => ({
+    ...source,
+    displayStatus: deriveSourceDisplayStatus(source, options),
+  }));
+}
+
+function emptySourceUniverseSummary() {
+  return {
+    cited: 0,
+    corroborating: 0,
+    unverified: 0,
+    excludedMarketing: 0,
+    excludedStale: 0,
+    total: 0,
+  };
+}
+
+function buildMatrixSourceUniverse(matrix = {}) {
+  const totals = emptySourceUniverseSummary();
+  const seen = new Set();
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  cells.forEach((cell) => {
+    const staleEvidenceRatio = Number(cell?.staleEvidenceRatio);
+    const sources = annotateSourceListDisplayStatus(cell?.sources, {
+      staleEvidenceRatio: Number.isFinite(staleEvidenceRatio) ? staleEvidenceRatio : null,
+    });
+    sources.forEach((source) => {
+      const key = `${cleanText(source?.name)}|${cleanText(source?.quote)}|${cleanText(source?.url)}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      const status = cleanText(source?.displayStatus).toLowerCase() || "unverified";
+      if (status === "cited") totals.cited += 1;
+      else if (status === "corroborating") totals.corroborating += 1;
+      else if (status === "excluded_marketing") totals.excludedMarketing += 1;
+      else if (status === "excluded_stale") totals.excludedStale += 1;
+      else totals.unverified += 1;
+      totals.total += 1;
+    });
+  });
+  return totals;
 }
 
 function normalizeHttpUrl(value) {
@@ -541,6 +637,23 @@ function roleOptions(config, role) {
   return options;
 }
 
+function roleOptionsWithFallback(config, primaryRole, fallbackRole) {
+  const primary = roleOptions(config, primaryRole);
+  const fallback = roleOptions(config, fallbackRole);
+  return {
+    provider: primary.provider || fallback.provider,
+    model: primary.model || fallback.model,
+    webSearchModel: primary.webSearchModel || fallback.webSearchModel,
+    baseUrl: primary.baseUrl || fallback.baseUrl,
+  };
+}
+
+function modelSignatureFromOptions(options = {}) {
+  const provider = cleanText(options?.provider) || "default";
+  const model = cleanText(options?.model) || "default";
+  return `${provider}:${model}`;
+}
+
 function capabilityOptions(config, capability, fallbackRole = "analyst") {
   const capCfg = config?.models?.[capability] || {};
   const hasCapabilityConfig = !!(
@@ -671,6 +784,16 @@ function createInitialState(input) {
       targetedRetrievalNiche: "",
       targetedRetrievalAliases: [],
       targetedCellDiagnostics: [],
+      counterfactualQueriesGenerated: 0,
+      counterfactualFindingsUsed: 0,
+      deepAssistRecoveryTriggered: false,
+      deepAssistRecoveryCandidates: 0,
+      deepAssistRecoveryBudgetCells: 0,
+      deepAssistRecoveryDroppedByBudget: 0,
+      deepAssistRecoveryUpgraded: 0,
+      deepAssistRecoveryValidatedLow: 0,
+      deepAssistRecoveryFailed: false,
+      deepAssistRecoveryDiagnostics: [],
       subjectDiscoveryRequested: false,
       subjectDiscoveryUsed: false,
       subjectDiscoveryWebSearchCalls: 0,
@@ -727,6 +850,11 @@ function createInitialState(input) {
       verificationConfidenceCaps: 0,
       urlCoverageConfidenceCaps: 0,
       zeroSourceConfidenceCaps: 0,
+      sourceUniverse: emptySourceUniverseSummary(),
+      redTeamCallMade: false,
+      redTeamHighSeverityCount: 0,
+      synthesizerCallMade: false,
+      synthesizerModel: "",
       providerContributions: {},
       decisionContext: researchSetup.decisionContext,
       userRoleContext: researchSetup.userRoleContext,
@@ -1210,7 +1338,7 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
       analysisMeta.sourceVerificationSkippedReason = "fetchSource transport is not available.";
     }
     return {
-      sources: normalizedSources,
+      sources: annotateSourceListDisplayStatus(normalizedSources),
       counters: {
         checked: 0,
         verified: 0,
@@ -1294,7 +1422,7 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
   analysisMeta.sourceVerificationPartialMatch = Number(analysisMeta.sourceVerificationPartialMatch || 0) + counters.partial;
   analysisMeta.sourceVerificationNameOnly = Number(analysisMeta.sourceVerificationNameOnly || 0) + counters.nameOnly;
 
-  return { sources: out, counters };
+  return { sources: annotateSourceListDisplayStatus(out), counters };
 }
 
 function applyCellVerificationPenalty(cell, counters, analysisMeta) {
@@ -1316,10 +1444,7 @@ function applyCellVerificationPenalty(cell, counters, analysisMeta) {
 }
 
 function extractEvidenceYearFromSource(source = {}) {
-  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
-  const matches = String(text).match(/\b(20\d{2})\b/g);
-  if (!matches || !matches.length) return null;
-  const years = matches.map((value) => Number(value)).filter((year) => year >= 2000 && year <= 2099);
+  const years = extractEvidenceYearsFromSource(source);
   if (!years.length) return null;
   return Math.max(...years);
 }
@@ -1394,6 +1519,7 @@ function applyCellQualityCaps(cell = {}, analysisMeta = {}) {
     vendor: sources.filter((source) => source.sourceType === "vendor").length,
     press: sources.filter((source) => source.sourceType === "press").length,
   };
+  cell.sources = annotateSourceListDisplayStatus(sources, { staleEvidenceRatio: staleRatio });
   cell.confidence = confidence;
 }
 
@@ -1408,6 +1534,12 @@ async function verifyMatrixCellSources(matrix, analysisMeta, sourceFetchCache, o
     if (penalizeConfidence) {
       applyCellVerificationPenalty(cell, checked.counters, analysisMeta);
       applyCellQualityCaps(cell, analysisMeta);
+    } else {
+      cell.sources = annotateSourceListDisplayStatus(cell.sources, {
+        staleEvidenceRatio: Number.isFinite(Number(cell?.staleEvidenceRatio))
+          ? Number(cell.staleEvidenceRatio)
+          : null,
+      });
     }
   }
 
@@ -1535,7 +1667,16 @@ ${qualityGuardBlock}
 Return JSON only with the same schema as analyst pass.`;
 }
 
-function buildLowConfidenceQueryPrompt({ rawInput, decisionQuestion, subject, attribute, cell, researchSetup = {} }) {
+function buildLowConfidenceQueryPrompt({
+  rawInput,
+  decisionQuestion,
+  subject,
+  attribute,
+  cell,
+  researchSetup = {},
+  counterfactualLimit = 2,
+}) {
+  const normalizedCounterfactualLimit = Math.max(1, Math.min(4, Number(counterfactualLimit) || 2));
   const setupContext = buildResearchSetupContextBlock(researchSetup);
   return `Generate targeted search queries for one low-confidence matrix cell.
 
@@ -1557,12 +1698,14 @@ Cell under review:
 
 Task:
 - Produce 3 to 4 specific search queries to close evidence gaps for this exact cell.
+- Produce ${normalizedCounterfactualLimit} to ${Math.min(normalizedCounterfactualLimit + 1, 4)} counterfactual/disconfirming queries to challenge this cell.
 - Focus on verifiable facts and current market evidence.
 
 Return JSON only:
 {
   "gap": "<single sentence gap>",
-  "queries": ["<q1>", "<q2>", "<q3>", "<q4 optional>"]
+  "queries": ["<q1>", "<q2>", "<q3>", "<q4 optional>"],
+  "counterfactualQueries": ["<counterfactual q1>", "<counterfactual q2>"]
 }`;
 }
 
@@ -1588,15 +1731,22 @@ Cell:
 Queries:
 ${(queryPlan?.queries || []).map((query, idx) => `${idx + 1}. ${query}`).join("\n")}
 
+Counterfactual queries:
+${(queryPlan?.counterfactualQueries || []).length
+  ? (queryPlan.counterfactualQueries || []).map((query, idx) => `${idx + 1}. ${query}`).join("\n")
+  : "- none"}
+
 Rules:
 - Return only concrete findings with sources.
 - Mark whether each query produced useful evidence.
+- Label each finding as "supporting" or "counterfactual" based on query intent.
 
 Return JSON only:
 {
   "findings": [
     {
       "query": "<exact query>",
+      "evidenceType": "<supporting|counterfactual>",
       "fact": "<single concrete fact>",
       "source": {"name":"...","quote":"<max 20 words>","url":"...","sourceType":"<vendor|press|independent>"}
     }
@@ -1636,6 +1786,7 @@ ${JSON.stringify(harvest || {}, null, 2)}
 Rules:
 - Keep updates evidence-based and conservative.
 - Raise confidence only if uncertainty materially decreases.
+- Explicitly weigh supporting vs counterfactual findings; counterfactual findings should influence limiting arguments.
 
 Return JSON only:
 {
@@ -1676,7 +1827,7 @@ ${candidateCells.map((cell) => `- ${cell.subjectId} x ${cell.attributeId} (${nor
 
 Task:
 - Infer niche/domain and alias/rebrand/acquisition hints that improve retrieval recall.
-- Provide query seeds and source targets for the low-confidence cells.
+- Provide supporting query seeds, counterfactual query seeds, and source targets for the low-confidence cells.
 - Keep outputs concise and factual.
 
 Return JSON only:
@@ -1688,6 +1839,7 @@ Return JSON only:
       "subjectId": "<subject id>",
       "attributeId": "<attribute id>",
       "querySeeds": ["<query seed>"],
+      "counterfactualQueries": ["<disconfirming query seed>"],
       "sourceTargets": ["<source target>"]
     }
   ]
@@ -1706,6 +1858,7 @@ function normalizeMatrixStrategistHints(payload = {}, subjects = [], attributes 
     const key = buildCellKey(subjectId, attributeId);
     out[key] = {
       querySeeds: normalizeStringList(entry?.querySeeds, 4, 170),
+      counterfactualQueries: normalizeStringList(entry?.counterfactualQueries, 4, 170),
       sourceTargets: normalizeStringList(entry?.sourceTargets, 4, 170),
     };
   });
@@ -1778,6 +1931,68 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
     allCount: candidates.length,
     budgetCells,
     droppedByBudget: Math.max(0, candidates.length - selected.length),
+  };
+}
+
+function selectDeepAssistRecoveryCells(cells = [], limits = {}, derivedAttributeIds = new Set(), analysisMeta = {}) {
+  const candidates = (Array.isArray(cells) ? cells : [])
+    .filter((cell) => !derivedAttributeIds?.has?.(cell.attributeId))
+    .map((cell) => {
+      const confidence = normalizeConfidence(cell?.confidence);
+      const sourceCount = normalizeSourceList(cell?.sources).length;
+      const providerAgreement = cleanText(cell?.providerAgreement).toLowerCase();
+      const reasons = [];
+      let pressure = matrixCellPressure(cell);
+      if (providerAgreement === "contradict") {
+        reasons.push("provider_contradict");
+        pressure += 5;
+      }
+      if (confidence === "low") {
+        reasons.push("confidence_low");
+        pressure += 4;
+      }
+      if (sourceCount < 2) {
+        reasons.push("source_sparse");
+        pressure += sourceCount === 0 ? 3 : 2;
+      }
+      if (
+        Number(analysisMeta?.deepAssistProvidersFailed || 0) > 0
+        && confidence !== "high"
+        && !reasons.includes("provider_failure_signal")
+      ) {
+        reasons.push("provider_failure_signal");
+        pressure += 1;
+      }
+      return {
+        ...cell,
+        _pressure: pressure,
+        _reasons: reasons,
+      };
+    })
+    .filter((cell) => Array.isArray(cell._reasons) && cell._reasons.length > 0)
+    .sort((a, b) => b._pressure - a._pressure || normalizeSourceList(a.sources).length - normalizeSourceList(b.sources).length);
+
+  const defaultBudget = Math.max(1, Math.min(6, candidates.length));
+  const budgetRaw = Number(limits?.deepAssistRecoveryBudgetCells ?? limits?.matrixTargetedBudgetCells);
+  const budgetCells = Number.isFinite(budgetRaw)
+    ? Math.max(1, Math.min(candidates.length || 1, Math.round(budgetRaw)))
+    : defaultBudget;
+  const selected = candidates.slice(0, budgetCells);
+  return {
+    selected,
+    allCount: candidates.length,
+    budgetCells,
+    droppedByBudget: Math.max(0, candidates.length - selected.length),
+    diagnostics: candidates.map((cell) => ({
+      cellKey: buildCellKey(cell.subjectId, cell.attributeId),
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      pressure: Number(cell._pressure || 0),
+      reasons: cell._reasons || [],
+      sourceCount: normalizeSourceList(cell.sources).length,
+      confidence: normalizeConfidence(cell.confidence),
+      providerAgreement: cleanText(cell.providerAgreement).toLowerCase(),
+    })),
   };
 }
 
@@ -2386,6 +2601,170 @@ Return JSON only:
 }`;
 }
 
+function buildMatrixSynthesizerPrompt({ rawInput, decisionQuestion, matrix, analysisMeta = {}, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const compactCells = cells.map((cell) => ({
+    subjectId: cell.subjectId,
+    attributeId: cell.attributeId,
+    confidence: normalizeConfidence(cell.confidence),
+    confidenceReason: cleanText(cell.confidenceReason),
+    value: cleanText(cell.value),
+    risks: cleanText(cell.risks),
+    providerAgreement: cleanText(cell.providerAgreement),
+    limiting: Array.isArray(cell?.arguments?.limiting)
+      ? cell.arguments.limiting.map((entry) => cleanText(entry?.claim || entry?.detail)).filter(Boolean).slice(0, 2)
+      : [],
+  }));
+
+  return `You are an independent synthesizer for a completed strategic comparison matrix.
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Structured matrix signals (no raw source prose):
+${JSON.stringify({
+    coverage: matrix?.coverage || null,
+    providerSignals: analysisMeta?.providerContributions || {},
+    redTeam: matrix?.redTeam || {},
+    crossMatrixSummary: cleanText(matrix?.crossMatrixSummary),
+    cells: compactCells,
+  }, null, 2)}
+
+Task:
+- Produce neutral decision synthesis from structured signals only.
+- Do not repeat analyst wording.
+- Include strongest dissent and key uncertainty.
+
+Return JSON only:
+{
+  "decisionAnswer":"<direct answer to the decision question>",
+  "closestThreats":"<closest threats and why>",
+  "whitespace":"<main whitespace/opportunity>",
+  "strategicClassification":"<classification of this concept>",
+  "keyRisks":"<top viability risks>",
+  "decisionImplications":"<what to do next>",
+  "uncertaintyNotes":"<major evidence gaps/uncertainties>",
+  "providerAgreementHighlights":"<where providers agreed/disagreed if available>"
+}`;
+}
+
+function buildMatrixRedTeamPrompt({ rawInput, decisionQuestion, matrix, maxCells = 24, researchSetup = {} }) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const prioritized = [...cells]
+    .sort((a, b) => {
+      const rankDelta = confidenceRank(normalizeConfidence(a?.confidence)) - confidenceRank(normalizeConfidence(b?.confidence));
+      if (rankDelta !== 0) return rankDelta;
+      return cleanText(b?.providerAgreement).toLowerCase() === "contradict" ? 1 : 0;
+    })
+    .slice(0, Math.max(1, maxCells))
+    .map((cell) => ({
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      value: cleanText(cell.value),
+      confidence: normalizeConfidence(cell.confidence),
+      risks: cleanText(cell.risks),
+      providerAgreement: cleanText(cell.providerAgreement),
+    }));
+
+  return `You are the Red Team for a completed comparison matrix.
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Structured matrix state (bounded set):
+${JSON.stringify({
+    executiveSummary: matrix?.executiveSummary || null,
+    crossMatrixSummary: cleanText(matrix?.crossMatrixSummary),
+    cells: prioritized,
+  }, null, 2)}
+
+Task:
+- Construct strongest credible counter-cases.
+- Identify assumptions that could be catastrophically wrong.
+- Focus on structural threats and missed risks.
+- Do NOT change confidence or cell values; add risk context only.
+
+Return JSON only:
+{
+  "redTeamVerdict": "<1-2 sentence overall counter-case>",
+  "cells": [
+    {
+      "subjectId":"<subject id>",
+      "attributeId":"<attribute id>",
+      "threat":"<strongest counter-argument>",
+      "missedRisk":"<risk not explicit in current cell>",
+      "severityIfWrong":"<high|medium|low>"
+    }
+  ]
+}`;
+}
+
+function applyMatrixRedTeam(matrix = {}, raw = {}, subjects = [], attributes = []) {
+  const subjectSet = new Set((Array.isArray(subjects) ? subjects : []).map((item) => item.id));
+  const attributeSet = new Set((Array.isArray(attributes) ? attributes : []).map((item) => item.id));
+  const entries = Array.isArray(raw?.cells) ? raw.cells : [];
+  const redTeamByKey = new Map();
+  let highSeverityCount = 0;
+
+  entries.forEach((entry) => {
+    const subjectId = cleanText(entry?.subjectId);
+    const attributeId = cleanText(entry?.attributeId);
+    if (!subjectSet.has(subjectId) || !attributeSet.has(attributeId)) return;
+    const threat = cleanText(entry?.threat);
+    const missedRisk = cleanText(entry?.missedRisk);
+    if (!threat && !missedRisk) return;
+    const severityRaw = cleanText(entry?.severityIfWrong).toLowerCase();
+    const severityIfWrong = severityRaw === "high" || severityRaw === "medium" || severityRaw === "low"
+      ? severityRaw
+      : "medium";
+    if (severityIfWrong === "high") highSeverityCount += 1;
+    redTeamByKey.set(buildCellKey(subjectId, attributeId), {
+      threat,
+      missedRisk,
+      severityIfWrong,
+    });
+  });
+
+  const output = {
+    ...(matrix || {}),
+    redTeam: {
+      redTeamVerdict: cleanText(raw?.redTeamVerdict),
+      cells: Object.fromEntries([...redTeamByKey.entries()]),
+    },
+    cells: (Array.isArray(matrix?.cells) ? matrix.cells : []).map((cell) => {
+      const key = buildCellKey(cell.subjectId, cell.attributeId);
+      const red = redTeamByKey.get(key);
+      if (!red) return cell;
+      const addition = [cleanText(red?.threat), cleanText(red?.missedRisk)].filter(Boolean).join(" ");
+      const nextRisks = [cleanText(cell?.risks), `Red Team (${red.severityIfWrong}): ${addition}`]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      return {
+        ...cell,
+        redTeam: red,
+        risks: nextRisks,
+      };
+    }),
+  };
+
+  return { matrix: output, highSeverityCount };
+}
+
 function buildSubjectDiscoveryPrompt({ rawInput, decisionQuestion, subjectsSpec, researchSetup = {} }) {
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
   const maxCount = Math.max(minCount, Number(subjectsSpec?.maxCount) || 8);
@@ -2573,21 +2952,38 @@ function normalizeQueryPlan(raw = {}, fallback = {}) {
   const queries = Array.isArray(raw?.queries)
     ? raw.queries.map((query) => cleanText(query)).filter(Boolean).slice(0, 4)
     : [];
+  const counterfactualQueriesRaw = Array.isArray(raw?.counterfactualQueries)
+    ? raw.counterfactualQueries.map((query) => cleanText(query)).filter(Boolean).slice(0, 4)
+    : [];
+  const fallbackCounterfactual = Array.isArray(fallback?.counterfactualQueries)
+    ? fallback.counterfactualQueries.map((query) => cleanText(query)).filter(Boolean).slice(0, 4)
+    : [];
   const fallbackQueries = Array.isArray(fallback?.queries)
     ? fallback.queries.map((query) => cleanText(query)).filter(Boolean).slice(0, 4)
     : [];
   const merged = [...new Set([...queries, ...fallbackQueries])].slice(0, 4);
+  const mergedCounterfactual = [...new Set([...counterfactualQueriesRaw, ...fallbackCounterfactual])]
+    .filter((query) => !merged.includes(query))
+    .slice(0, 2);
   return {
     gap: cleanText(raw?.gap || fallback?.gap || "Evidence is still sparse for this cell."),
     queries: merged,
+    counterfactualQueries: mergedCounterfactual,
   };
 }
 
 function normalizeSearchHarvest(raw = {}, queryPlan = {}) {
+  const counterfactualSet = new Set(
+    normalizeStringList(queryPlan?.counterfactualQueries, 8, 170).map((query) => query.toLowerCase())
+  );
   const findings = Array.isArray(raw?.findings)
     ? raw.findings
       .map((entry) => ({
         query: cleanText(entry?.query),
+        evidenceType: cleanText(entry?.evidenceType).toLowerCase() === "counterfactual"
+          || counterfactualSet.has(cleanText(entry?.query).toLowerCase())
+          ? "counterfactual"
+          : "supporting",
         fact: cleanText(entry?.fact),
         source: entry?.source && typeof entry.source === "object"
           ? {
@@ -2614,9 +3010,13 @@ function normalizeSearchHarvest(raw = {}, queryPlan = {}) {
     : [];
 
   if (!queryCoverage.length) {
+    const fallbackQueries = [
+      ...normalizeStringList(queryPlan?.queries, 8, 170),
+      ...normalizeStringList(queryPlan?.counterfactualQueries, 8, 170),
+    ];
     return {
       findings,
-      queryCoverage: (queryPlan?.queries || []).map((query) => ({
+      queryCoverage: fallbackQueries.map((query) => ({
         query,
         useful: findings.some((entry) => entry.query === query),
         note: findings.some((entry) => entry.query === query)
@@ -2627,6 +3027,47 @@ function normalizeSearchHarvest(raw = {}, queryPlan = {}) {
   }
 
   return { findings, queryCoverage };
+}
+
+function mergeHarvestFindingsIntoMatrixArguments(baseArguments = {}, harvest = {}) {
+  const normalized = normalizeMatrixCellArguments(baseArguments || {});
+  const supporting = Array.isArray(normalized?.supporting) ? [...normalized.supporting] : [];
+  const limiting = Array.isArray(normalized?.limiting) ? [...normalized.limiting] : [];
+  const seen = new Set(
+    [...supporting, ...limiting]
+      .map((entry) => cleanText(entry?.claim).toLowerCase())
+      .filter(Boolean)
+  );
+
+  (Array.isArray(harvest?.findings) ? harvest.findings : []).forEach((entry, idx) => {
+    const fact = cleanText(entry?.fact);
+    if (!fact) return;
+    const key = fact.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const target = cleanText(entry?.evidenceType).toLowerCase() === "counterfactual"
+      ? limiting
+      : supporting;
+    const idPrefix = target === limiting ? "lim-harvest" : "sup-harvest";
+    target.push({
+      id: `${idPrefix}-${idx + 1}`,
+      claim: clip(fact, 90),
+      detail: cleanText(entry?.query)
+        ? `Targeted query: ${clip(entry.query, 120)}`
+        : "Captured during targeted low-confidence recovery.",
+      sources: normalizeSourceList([entry?.source]),
+      group: target === limiting ? "limiting" : "supporting",
+      status: "active",
+      discardedBy: "",
+      discardReason: "",
+      discardedAt: "",
+    });
+  });
+
+  return {
+    supporting: supporting.slice(0, 6),
+    limiting: limiting.slice(0, 6),
+  };
 }
 
 function mergeSources(...lists) {
@@ -2705,6 +3146,25 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     terminalReasonCodes: Array.isArray(state.analysisMeta?.terminalReasonCodes)
       ? state.analysisMeta.terminalReasonCodes.map((item) => cleanText(item)).filter(Boolean)
       : [],
+    counterfactualQueriesGenerated: Number(state.analysisMeta?.counterfactualQueriesGenerated || 0),
+    counterfactualFindingsUsed: Number(state.analysisMeta?.counterfactualFindingsUsed || 0),
+    deepAssistRecoveryTriggered: !!state.analysisMeta?.deepAssistRecoveryTriggered,
+    deepAssistRecoveryCandidates: Number(state.analysisMeta?.deepAssistRecoveryCandidates || 0),
+    deepAssistRecoveryBudgetCells: Number(state.analysisMeta?.deepAssistRecoveryBudgetCells || 0),
+    deepAssistRecoveryDroppedByBudget: Number(state.analysisMeta?.deepAssistRecoveryDroppedByBudget || 0),
+    deepAssistRecoveryUpgraded: Number(state.analysisMeta?.deepAssistRecoveryUpgraded || 0),
+    deepAssistRecoveryValidatedLow: Number(state.analysisMeta?.deepAssistRecoveryValidatedLow || 0),
+    deepAssistRecoveryFailed: !!state.analysisMeta?.deepAssistRecoveryFailed,
+    deepAssistRecoveryDiagnostics: Array.isArray(state.analysisMeta?.deepAssistRecoveryDiagnostics)
+      ? state.analysisMeta.deepAssistRecoveryDiagnostics
+      : [],
+    sourceUniverse: state.analysisMeta?.sourceUniverse && typeof state.analysisMeta.sourceUniverse === "object"
+      ? state.analysisMeta.sourceUniverse
+      : emptySourceUniverseSummary(),
+    redTeamCallMade: !!state.analysisMeta?.redTeamCallMade,
+    redTeamHighSeverityCount: Number(state.analysisMeta?.redTeamHighSeverityCount || 0),
+    synthesizerCallMade: !!state.analysisMeta?.synthesizerCallMade,
+    synthesizerModel: cleanText(state.analysisMeta?.synthesizerModel),
     deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssistOptions.providers.length : Number(state.analysisMeta?.deepAssistProvidersRequested || 0),
   };
   const sourceFetchCache = new Map();
@@ -3040,8 +3500,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           `${subject.label} ${attribute.label} benchmark evidence`,
           `${subject.label} ${attribute.label} customer outcome`,
         ])].slice(0, 4),
+        counterfactualQueries: [...new Set([
+          ...normalizeStringList(strategistForCell?.counterfactualQueries, 4, 170),
+          `${subject.label} ${attribute.label} criticism`,
+          `${subject.label} ${attribute.label} failure cases`,
+          `${subject.label} alternatives outperforming ${attribute.label}`,
+        ])].slice(0, Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2))),
       };
       diag.fallbackQueries = fallbackPlan.queries;
+      diag.fallbackCounterfactualQueries = fallbackPlan.counterfactualQueries;
       diag.sourceTargets = normalizeStringList(strategistForCell?.sourceTargets, 4, 170);
 
       let queryPlan = fallbackPlan;
@@ -3053,6 +3520,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           attribute,
           cell,
           researchSetup,
+          counterfactualLimit: Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2)),
         });
         const queryRes = await transport.callAnalyst(
           [{ role: "user", content: queryPrompt }],
@@ -3070,6 +3538,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           ...normalizeStringList(strategistForCell?.querySeeds, 3, 170),
           ...normalizeStringList(queryPlan.queries, 4, 170),
         ])].slice(0, 4);
+        queryPlan.counterfactualQueries = [...new Set([
+          ...normalizeStringList(strategistForCell?.counterfactualQueries, 4, 170),
+          ...normalizeStringList(queryPlan?.counterfactualQueries, 4, 170),
+        ])]
+          .filter((query) => !queryPlan.queries.includes(query))
+          .slice(0, Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2)));
         diag.queryPlan = queryPlan;
       } catch (queryErr) {
         queryPlan = fallbackPlan;
@@ -3077,9 +3551,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         diag.queryPlanError = cleanText(queryErr?.message || "query_plan_failed");
       }
 
+      state.analysisMeta.counterfactualQueriesGenerated = Number(state.analysisMeta.counterfactualQueriesGenerated || 0)
+        + Number(queryPlan?.counterfactualQueries?.length || 0);
+
       let harvest = {
         findings: [],
-        queryCoverage: queryPlan.queries.map((query) => ({ query, useful: false, note: "No useful findings captured." })),
+        queryCoverage: [
+          ...normalizeStringList(queryPlan?.queries, 8, 170),
+          ...normalizeStringList(queryPlan?.counterfactualQueries, 8, 170),
+        ].map((query) => ({ query, useful: false, note: "No useful findings captured." })),
       };
       try {
         const searchPrompt = buildLowConfidenceSearchPrompt({
@@ -3108,7 +3588,10 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       } catch (searchErr) {
         harvest = {
           findings: [],
-          queryCoverage: queryPlan.queries.map((query) => ({ query, useful: false, note: "No useful findings captured." })),
+          queryCoverage: [
+            ...normalizeStringList(queryPlan?.queries, 8, 170),
+            ...normalizeStringList(queryPlan?.counterfactualQueries, 8, 170),
+          ].map((query) => ({ query, useful: false, note: "No useful findings captured." })),
         };
         diag.queryCoverage = harvest?.queryCoverage || [];
         diag.findingsCount = 0;
@@ -3147,7 +3630,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           value: cleanText(parsed?.value || cell.value),
           full: cleanText(parsed?.full || cell.full || parsed?.value || cell.value),
           risks: cleanText(parsed?.risks || cell.risks),
-          arguments: normalizeMatrixCellArguments(parsed?.arguments || cell.arguments || {}),
+          arguments: mergeHarvestFindingsIntoMatrixArguments(parsed?.arguments || cell.arguments || {}, harvest),
           confidence: nextConfidence,
           confidenceReason: cleanText(parsed?.confidenceReason || cell.confidenceReason),
           sources: mergeSources(cell.sources, parsed?.sources, (harvest.findings || []).map((entry) => entry.source)),
@@ -3165,6 +3648,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
         diag.confidenceAfter = nextConfidence;
         diag.usefulQueryCount = (harvest?.queryCoverage || []).filter((entry) => entry?.useful).length;
+        diag.counterfactualFindingCount = (harvest?.findings || [])
+          .filter((entry) => cleanText(entry?.evidenceType).toLowerCase() === "counterfactual")
+          .length;
+        state.analysisMeta.counterfactualFindingsUsed = Number(state.analysisMeta.counterfactualFindingsUsed || 0)
+          + Number(diag.counterfactualFindingCount || 0);
         state.analysisMeta.targetedCellDiagnostics.push(diag);
       } catch (rescoreErr) {
         state.analysisMeta.lowConfidenceCycleFailures += 1;
@@ -3214,6 +3702,220 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           penalizeConfidence: true,
           transport,
         });
+
+        const deepAssistRecovery = selectDeepAssistRecoveryCells(
+          reconciledMatrix.cells,
+          config?.limits || {},
+          derivedAttributeIds,
+          state.analysisMeta
+        );
+        state.analysisMeta.deepAssistRecoveryTriggered = deepAssistRecovery.selected.length > 0;
+        state.analysisMeta.deepAssistRecoveryCandidates = deepAssistRecovery.allCount;
+        state.analysisMeta.deepAssistRecoveryBudgetCells = deepAssistRecovery.budgetCells;
+        state.analysisMeta.deepAssistRecoveryDroppedByBudget = deepAssistRecovery.droppedByBudget;
+        state.analysisMeta.deepAssistRecoveryDiagnostics = deepAssistRecovery.diagnostics;
+        state.analysisMeta.deepAssistRecoveryUpgraded = 0;
+        state.analysisMeta.deepAssistRecoveryValidatedLow = 0;
+
+        if (deepAssistRecovery.selected.length) {
+          let deepAssistStrategistHints = { niche: "", aliases: [], cellHints: {} };
+          try {
+            const strategistPrompt = buildMatrixQueryStrategistPrompt({
+              rawInput: state.rawInput,
+              decisionQuestion,
+              subjects,
+              attributes,
+              candidateCells: deepAssistRecovery.selected,
+              researchSetup,
+            });
+            const strategistRes = await transport.callAnalyst(
+              [{ role: "user", content: strategistPrompt }],
+              analystPrompt,
+              1400,
+              {
+                ...capabilityOptions(config, "retrieval", "analyst"),
+                liveSearch: false,
+                includeMeta: true,
+              }
+            );
+            state.analysisMeta = mergeTargetedMeta(state.analysisMeta, strategistRes?.meta);
+            deepAssistStrategistHints = normalizeMatrixStrategistHints(
+              extractJson(strategistRes?.text || strategistRes, {}),
+              subjects,
+              attributes
+            );
+          } catch (_) {
+            deepAssistStrategistHints = { niche: "", aliases: [], cellHints: {} };
+          }
+
+          for (const cell of deepAssistRecovery.selected) {
+            const subject = subjects.find((item) => item.id === cell.subjectId);
+            const attribute = attributes.find((item) => item.id === cell.attributeId);
+            if (!subject || !attribute) continue;
+            const diag = {
+              cycleLabel: "deep_assist_recovery",
+              cellKey: buildCellKey(cell.subjectId, cell.attributeId),
+              subjectId: cell.subjectId,
+              attributeId: cell.attributeId,
+              confidenceBefore: normalizeConfidence(cell.confidence),
+              providerAgreement: cleanText(cell.providerAgreement).toLowerCase(),
+            };
+            const strategistForCell = deepAssistStrategistHints?.cellHints?.[buildCellKey(cell.subjectId, cell.attributeId)] || {};
+            const aliasHints = normalizeStringList(deepAssistStrategistHints?.aliases, 6, 110);
+            const fallbackPlan = {
+              gap: `Post-merge Deep Assist conflict/uncertainty for ${subject.label} x ${attribute.label}.`,
+              queries: [...new Set([
+                ...normalizeStringList(strategistForCell?.querySeeds, 4, 170),
+                ...normalizeStringList(aliasHints.map((alias) => `${alias} ${attribute.label} evidence`), 2, 170),
+                `${subject.label} ${attribute.label} benchmark evidence`,
+                `${subject.label} ${attribute.label} deployment outcomes`,
+              ])].slice(0, 4),
+              counterfactualQueries: [...new Set([
+                ...normalizeStringList(strategistForCell?.counterfactualQueries, 4, 170),
+                `${subject.label} ${attribute.label} criticism`,
+                `${subject.label} ${attribute.label} failure cases`,
+              ])].slice(0, Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2))),
+            };
+
+            let queryPlan = fallbackPlan;
+            try {
+              const queryPrompt = buildLowConfidenceQueryPrompt({
+                rawInput: state.rawInput,
+                decisionQuestion,
+                subject,
+                attribute,
+                cell,
+                researchSetup,
+                counterfactualLimit: Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2)),
+              });
+              const queryRes = await transport.callAnalyst(
+                [{ role: "user", content: queryPrompt }],
+                analystPrompt,
+                1400,
+                {
+                  ...capabilityOptions(config, "retrieval", "analyst"),
+                  liveSearch: false,
+                  includeMeta: true,
+                }
+              );
+              state.analysisMeta = mergeTargetedMeta(state.analysisMeta, queryRes?.meta);
+              queryPlan = normalizeQueryPlan(extractJson(queryRes?.text || queryRes, {}), fallbackPlan);
+            } catch (_) {
+              queryPlan = fallbackPlan;
+            }
+            state.analysisMeta.counterfactualQueriesGenerated = Number(state.analysisMeta.counterfactualQueriesGenerated || 0)
+              + Number(queryPlan?.counterfactualQueries?.length || 0);
+
+            let harvest = {
+              findings: [],
+              queryCoverage: [
+                ...normalizeStringList(queryPlan?.queries, 8, 170),
+                ...normalizeStringList(queryPlan?.counterfactualQueries, 8, 170),
+              ].map((query) => ({ query, useful: false, note: "No useful findings captured." })),
+            };
+            try {
+              const searchPrompt = buildLowConfidenceSearchPrompt({
+                rawInput: state.rawInput,
+                decisionQuestion,
+                subject,
+                attribute,
+                queryPlan,
+                cell,
+                researchSetup,
+              });
+              const searchRes = await transport.callAnalyst(
+                [{ role: "user", content: searchPrompt }],
+                analystPrompt,
+                2600,
+                {
+                  ...capabilityOptions(config, "retrieval", "analyst"),
+                  liveSearch: true,
+                  includeMeta: true,
+                }
+              );
+              state.analysisMeta = mergeTargetedMeta(state.analysisMeta, searchRes?.meta);
+              harvest = normalizeSearchHarvest(extractJson(searchRes?.text || searchRes, {}), queryPlan);
+            } catch (_) {
+              harvest = {
+                findings: [],
+                queryCoverage: [
+                  ...normalizeStringList(queryPlan?.queries, 8, 170),
+                  ...normalizeStringList(queryPlan?.counterfactualQueries, 8, 170),
+                ].map((query) => ({ query, useful: false, note: "No useful findings captured." })),
+              };
+            }
+
+            try {
+              const rescorePrompt = buildLowConfidenceRescorePrompt({
+                rawInput: state.rawInput,
+                decisionQuestion,
+                subject,
+                attribute,
+                cell,
+                queryPlan,
+                harvest,
+                researchSetup,
+              });
+              const rescoreRes = await transport.callAnalyst(
+                [{ role: "user", content: rescorePrompt }],
+                analystPrompt,
+                2400,
+                {
+                  ...roleOptions(config, "analyst"),
+                  liveSearch: false,
+                  includeMeta: true,
+                }
+              );
+              state.analysisMeta = mergeTargetedMeta(state.analysisMeta, rescoreRes?.meta);
+              const parsed = extractJson(rescoreRes?.text || rescoreRes, {});
+              const nextConfidence = normalizeConfidence(parsed?.confidence || cell.confidence);
+              const upgraded = confidenceRank(nextConfidence) > confidenceRank(cell.confidence);
+              const updatedCell = {
+                ...cell,
+                value: cleanText(parsed?.value || cell.value),
+                full: cleanText(parsed?.full || cell.full || parsed?.value || cell.value),
+                risks: cleanText(parsed?.risks || cell.risks),
+                arguments: mergeHarvestFindingsIntoMatrixArguments(parsed?.arguments || cell.arguments || {}, harvest),
+                confidence: nextConfidence,
+                confidenceReason: cleanText(parsed?.confidenceReason || cell.confidenceReason),
+                sources: mergeSources(cell.sources, parsed?.sources, (harvest.findings || []).map((entry) => entry.source)),
+              };
+              reconciledMatrix = upsertCell(reconciledMatrix, updatedCell);
+              if (upgraded) state.analysisMeta.deepAssistRecoveryUpgraded += 1;
+              else if (nextConfidence === "low") state.analysisMeta.deepAssistRecoveryValidatedLow += 1;
+              const counterfactualFindingCount = (harvest?.findings || [])
+                .filter((entry) => cleanText(entry?.evidenceType).toLowerCase() === "counterfactual")
+                .length;
+              state.analysisMeta.counterfactualFindingsUsed = Number(state.analysisMeta.counterfactualFindingsUsed || 0)
+                + Number(counterfactualFindingCount || 0);
+              appendAnalysisDebugEvent(debugSession, {
+                type: "matrix_targeted_cell_diagnostics",
+                phase: "matrix_targeted",
+                attempt: diag.cellKey,
+                extra: {
+                  ...diag,
+                  confidenceAfter: nextConfidence,
+                  status: upgraded ? "upgraded" : (nextConfidence === "low" ? "validated_low" : "updated"),
+                  usefulQueryCount: (harvest?.queryCoverage || []).filter((entry) => entry?.useful).length,
+                  counterfactualFindingCount,
+                },
+              });
+            } catch (recoveryErr) {
+              state.analysisMeta.deepAssistRecoveryFailed = true;
+              appendAnalysisDebugEvent(debugSession, {
+                type: "matrix_deep_assist_recovery_failed",
+                phase: "matrix_targeted",
+                attempt: diag.cellKey,
+                error: cleanText(recoveryErr?.message || "deep_assist_recovery_failed"),
+              });
+            }
+          }
+
+          await verifyMatrixCellSources(reconciledMatrix, state.analysisMeta, sourceFetchCache, {
+            penalizeConfidence: true,
+            transport,
+          });
+        }
       } catch (deepAssistErr) {
         const note = deepAssistErr?.message || "Matrix deep assist enrichment failed.";
         markDegraded(state.analysisMeta, "matrix_deep_assist_enrichment_failed", note);
@@ -3486,6 +4188,49 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       }
     }
 
+    update("matrix_red_team", {
+      matrix: {
+        ...state.matrix,
+        ...resolvedMatrix,
+        coverage: summarizeCoverage(resolvedMatrix.cells),
+      },
+      analysisMeta: state.analysisMeta,
+    });
+
+    try {
+      const redTeamPrompt = buildMatrixRedTeamPrompt({
+        rawInput: state.rawInput,
+        decisionQuestion,
+        matrix: resolvedMatrix,
+        maxCells: Math.max(8, Math.min(24, Number(config?.limits?.matrixRedTeamMaxCells || 24))),
+        researchSetup,
+      });
+      const redTeamRes = await transport.callCritic(
+        [{ role: "user", content: redTeamPrompt }],
+        cleanText(config?.prompts?.redTeam) || criticPrompt,
+        Math.max(2800, Math.min(4600, responseTokens)),
+        {
+          ...roleOptions(config, "critic"),
+          liveSearch: false,
+          includeMeta: true,
+        }
+      );
+      state.analysisMeta = mergeMeta(state.analysisMeta, redTeamRes?.meta, "critic");
+      const parsedRedTeam = extractJson(redTeamRes?.text || redTeamRes, {});
+      const redTeamApplied = applyMatrixRedTeam(resolvedMatrix, parsedRedTeam, subjects, attributes);
+      resolvedMatrix.cells = redTeamApplied.matrix.cells;
+      resolvedMatrix.redTeam = redTeamApplied.matrix.redTeam;
+      state.analysisMeta.redTeamCallMade = true;
+      state.analysisMeta.redTeamHighSeverityCount = Number(redTeamApplied.highSeverityCount || 0);
+    } catch (redTeamErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_red_team_failed",
+        phase: "matrix_red_team",
+        attempt: "final",
+        error: cleanText(redTeamErr?.message || "matrix_red_team_failed"),
+      });
+    }
+
     update("matrix_synthesis", {
       matrix: {
         ...state.matrix,
@@ -3496,23 +4241,27 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     });
 
     try {
-      const synthesisPrompt = buildMatrixExecutiveSynthesisPrompt({
+      const synthesisPrompt = buildMatrixSynthesizerPrompt({
         rawInput: state.rawInput,
         decisionQuestion,
         matrix: resolvedMatrix,
+        analysisMeta: state.analysisMeta,
         researchSetup,
       });
+      const synthOptions = roleOptionsWithFallback(config, "synthesizer", "critic");
       const synthesisRes = await transport.callAnalyst(
         [{ role: "user", content: synthesisPrompt }],
-        cleanText(config?.prompts?.analystResponse) || MATRIX_ANALYST_PROMPT,
+        cleanText(config?.prompts?.synthesizer) || cleanText(config?.prompts?.analystResponse) || MATRIX_ANALYST_PROMPT,
         Math.max(2800, Math.min(4600, responseTokens)),
         {
-          ...roleOptions(config, "analyst"),
-          liveSearch: true,
+          ...synthOptions,
+          liveSearch: false,
           includeMeta: true,
         }
       );
       state.analysisMeta = mergeMeta(state.analysisMeta, synthesisRes?.meta, "analyst");
+      state.analysisMeta.synthesizerCallMade = true;
+      state.analysisMeta.synthesizerModel = modelSignatureFromOptions(synthOptions);
       const parsedSynthesis = extractJson(synthesisRes?.text || synthesisRes, {});
       resolvedMatrix.executiveSummary = {
         decisionAnswer: cleanText(parsedSynthesis?.decisionAnswer),
@@ -3576,6 +4325,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     state.analysisMeta.staleEvidenceRatio = staleObservedCells
       ? Number(state.analysisMeta.staleEvidenceRatioSum || 0) / staleObservedCells
       : 0;
+    state.analysisMeta.sourceUniverse = buildMatrixSourceUniverse(resolvedMatrix);
     state.analysisMeta.providerContributions = {
       ...(state.analysisMeta.providerContributions || {}),
       native: [

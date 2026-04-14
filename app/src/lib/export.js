@@ -126,6 +126,10 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
 function limitWords(text, maxWords) {
   if (!text) return "";
   const parts = String(text).trim().split(/\s+/);
@@ -143,6 +147,30 @@ function trimUrlSuffix(raw) {
 
 function sourceLabel(n) {
   return `Source ${n}`;
+}
+
+function normalizeSourceDisplayStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  if (status === "cited") return "cited";
+  if (status === "corroborating") return "corroborating";
+  if (status === "excluded_marketing") return "excluded_marketing";
+  if (status === "excluded_stale") return "excluded_stale";
+  return "unverified";
+}
+
+function sourceStatusLabel(status) {
+  if (status === "cited") return "Cited";
+  if (status === "corroborating") return "Corroborating";
+  if (status === "excluded_marketing") return "Excluded: marketing";
+  if (status === "excluded_stale") return "Excluded: stale";
+  return "Unverified";
+}
+
+function sourceStatusClass(status) {
+  if (status === "cited") return "source-status-cited";
+  if (status === "corroborating") return "source-status-corroborating";
+  if (status === "excluded_marketing" || status === "excluded_stale") return "source-status-excluded";
+  return "source-status-unverified";
 }
 
 function createSourceUrlMap(sources = []) {
@@ -256,6 +284,8 @@ function sectionIcon(label) {
     "Follow-up Thread": "THR",
     "Critic Sources": "CRS",
     "How to read this report": "GDE",
+    "Source Quality": "SQL",
+    "Red Team": "RED",
   };
   return map[label] || "SEC";
 }
@@ -311,12 +341,15 @@ function sourceChipArrayHtml(sources = [], options = {}) {
   const visible = Number.isFinite(maxItems) ? sources.slice(0, maxItems) : sources;
   const chips = visible.map((s, idx) => {
     const label = sourceLabel(idx + 1);
+    const status = normalizeSourceDisplayStatus(s?.displayStatus);
+    const statusLabel = sourceStatusLabel(status);
+    const chipText = `${label} · ${statusLabel}`;
     const note = [s?.name, s?.quote ? limitWords(s.quote, 14) : ""].filter(Boolean).join(" - ");
     const title = note ? ` title="${escapeHtml(note)}"` : "";
     if (s?.url) {
-      return `<a class="source-chip" href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer"${title}>${escapeHtml(label)}</a>`;
+      return `<a class="source-chip source-chip-status ${sourceStatusClass(status)}" href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer"${title}>${escapeHtml(chipText)}</a>`;
     }
-    return `<span class="source-chip source-chip-static"${title}>${escapeHtml(label)}</span>`;
+    return `<span class="source-chip source-chip-static source-chip-status ${sourceStatusClass(status)}"${title}>${escapeHtml(chipText)}</span>`;
   }).join("");
   const extra = Number.isFinite(maxItems) && sources.length > maxItems
     ? `<span class="source-chip source-chip-static">+${sources.length - maxItems}</span>`
@@ -481,6 +514,102 @@ function section(label, body, className = "") {
   `;
 }
 
+function normalizeSourceUniverse(summary = {}) {
+  return {
+    cited: Number(summary?.cited || 0),
+    corroborating: Number(summary?.corroborating || 0),
+    unverified: Number(summary?.unverified || 0),
+    excludedMarketing: Number(summary?.excludedMarketing || 0),
+    excludedStale: Number(summary?.excludedStale || 0),
+    total: Number(summary?.total || 0),
+  };
+}
+
+function sourceUniverseHtml(meta = {}) {
+  const summary = normalizeSourceUniverse(meta?.sourceUniverse || {});
+  if (!summary.total) return "<div class=\"muted\">No source quality summary available.</div>";
+  return `
+    <div class="grid-auto">
+      <div><strong>Total sources:</strong> ${escapeHtml(summary.total)}</div>
+      <div><strong>Cited:</strong> ${escapeHtml(summary.cited)}</div>
+      <div><strong>Corroborating:</strong> ${escapeHtml(summary.corroborating)}</div>
+      <div><strong>Unverified:</strong> ${escapeHtml(summary.unverified)}</div>
+      <div><strong>Excluded marketing:</strong> ${escapeHtml(summary.excludedMarketing)}</div>
+      <div><strong>Excluded stale:</strong> ${escapeHtml(summary.excludedStale)}</div>
+    </div>
+  `;
+}
+
+function scorecardRedTeamHtml(uc, dims = []) {
+  const redTeam = uc?.finalScores?.redTeam || {};
+  const verdict = cleanText(redTeam?.redTeamVerdict);
+  const entries = (Array.isArray(dims) ? dims : [])
+    .map((dim) => ({
+      dim,
+      entry: redTeam?.dimensions?.[dim.id] || null,
+    }))
+    .filter(({ entry }) => cleanText(entry?.threat) || cleanText(entry?.missedRisk));
+
+  if (!verdict && !entries.length) {
+    return "<div class=\"muted\">No Red Team findings.</div>";
+  }
+
+  return `
+    ${verdict ? `<div class="small-text pre-wrap">${escapeHtml(verdict)}</div>` : ""}
+    ${entries.length ? `
+      <div class="grid-auto" style="margin-top:8px;">
+        ${entries.map(({ dim, entry }) => `
+          <div style="border:1px solid #d5d5d2;background:#f7f7f6;border-radius:2px;padding:7px 8px;">
+            <div class="small-muted"><strong>${escapeHtml(dim.label)}</strong> ${cleanText(entry?.severityIfWrong) ? `(${escapeHtml(cleanText(entry.severityIfWrong))})` : ""}</div>
+            ${cleanText(entry?.threat) ? `<div class="small-text"><strong>Threat:</strong> ${escapeHtml(cleanText(entry.threat))}</div>` : ""}
+            ${cleanText(entry?.missedRisk) ? `<div class="small-text"><strong>Missed risk:</strong> ${escapeHtml(cleanText(entry.missedRisk))}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    ` : ""}
+  `;
+}
+
+function matrixRedTeamHtml(uc) {
+  const matrix = uc?.matrix || {};
+  const redTeam = matrix?.redTeam || {};
+  const verdict = cleanText(redTeam?.redTeamVerdict);
+  const cells = redTeam?.cells && typeof redTeam.cells === "object" ? redTeam.cells : {};
+  const subjectLabelById = new Map((Array.isArray(matrix?.subjects) ? matrix.subjects : []).map((item) => [item.id, item.label || item.id]));
+  const attributeLabelById = new Map((Array.isArray(matrix?.attributes) ? matrix.attributes : []).map((item) => [item.id, item.label || item.id]));
+  const rows = Object.entries(cells)
+    .map(([key, entry]) => {
+      const [subjectId, attributeId] = String(key).split("::");
+      return {
+        subjectLabel: subjectLabelById.get(subjectId) || subjectId || "Unknown subject",
+        attributeLabel: attributeLabelById.get(attributeId) || attributeId || "Unknown attribute",
+        threat: cleanText(entry?.threat),
+        missedRisk: cleanText(entry?.missedRisk),
+        severityIfWrong: cleanText(entry?.severityIfWrong),
+      };
+    })
+    .filter((row) => row.threat || row.missedRisk);
+
+  if (!verdict && !rows.length) {
+    return "<div class=\"muted\">No Red Team findings.</div>";
+  }
+
+  return `
+    ${verdict ? `<div class="small-text pre-wrap">${escapeHtml(verdict)}</div>` : ""}
+    ${rows.length ? `
+      <div class="grid-auto" style="margin-top:8px;">
+        ${rows.map((row) => `
+          <div style="border:1px solid #d5d5d2;background:#f7f7f6;border-radius:2px;padding:7px 8px;">
+            <div class="small-muted"><strong>${escapeHtml(row.subjectLabel)} - ${escapeHtml(row.attributeLabel)}</strong>${row.severityIfWrong ? ` (${escapeHtml(row.severityIfWrong)})` : ""}</div>
+            ${row.threat ? `<div class="small-text"><strong>Threat:</strong> ${escapeHtml(row.threat)}</div>` : ""}
+            ${row.missedRisk ? `<div class="small-text"><strong>Missed risk:</strong> ${escapeHtml(row.missedRisk)}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    ` : ""}
+  `;
+}
+
 function renderUseCaseIntroPage(uc, dims, index) {
   const title = uc.attributes?.title || uc.rawInput || `Use case ${index + 1}`;
   const problem = useCaseProblem(uc);
@@ -585,6 +714,8 @@ function renderUseCaseSummaryPage(uc, dims, index, options = {}) {
       ${lowConfidenceBanner}
       ${section("Strategic Conclusion", `<div class="small-text">${escapeHtml(uc.finalScores?.conclusion || "No conclusion available yet.")}</div>`)}
       ${section("Run Diagnostics", diagnosticsBlock, "compact")}
+      ${section("Source Quality", sourceUniverseHtml(uc?.analysisMeta || {}), "compact")}
+      ${section("Red Team", scorecardRedTeamHtml(uc, dims), "compact")}
       <div class="dim-grid">${dimCards}</div>
     </article>
   `;
@@ -1006,6 +1137,8 @@ function renderMatrixSummaryPage(uc, options = {}) {
       ${section("Decision Question", `<div class="small-text pre-wrap">${escapeHtml(decisionQuestion)}</div>`)}
       ${section("Executive Summary", executiveBody, "compact")}
       ${section("Run Diagnostics", diagnosticsBlock, "compact")}
+      ${section("Source Quality", sourceUniverseHtml(uc?.analysisMeta || {}), "compact")}
+      ${section("Red Team", matrixRedTeamHtml(uc), "compact")}
       ${section("Matrix Overview", matrixCompactTableHtml(matrix), "compact")}
       ${section("Discovery Suggestions", discoveryBody, "compact")}
       <div class="small-text" style="margin-top:${isPdf ? "8px" : "10px"};">
@@ -1558,6 +1691,26 @@ function reportCss(mode = "html") {
       color: #4b4b48;
       text-decoration: none;
     }
+    .source-chip-status.source-status-cited {
+      border-color: rgba(28, 89, 55, 0.3);
+      color: #1c5937;
+      background: rgba(28, 89, 55, 0.08);
+    }
+    .source-chip-status.source-status-corroborating {
+      border-color: rgba(31, 78, 115, 0.28);
+      color: #1f4e73;
+      background: rgba(31, 78, 115, 0.08);
+    }
+    .source-chip-status.source-status-unverified {
+      border-color: rgba(122, 97, 26, 0.28);
+      color: #7a611a;
+      background: rgba(122, 97, 26, 0.08);
+    }
+    .source-chip-status.source-status-excluded {
+      border-color: rgba(123, 42, 42, 0.28);
+      color: #7b2a2a;
+      background: rgba(123, 42, 42, 0.08);
+    }
     .thread-list {
       display: grid;
       gap: 6px;
@@ -1934,14 +2087,15 @@ function markdownArgumentBullet(arg, fallbackLabel, discardedTag = "discarded") 
 
 function markdownSourceLine(source, index) {
   const label = `Source ${index + 1}`;
+  const status = sourceStatusLabel(normalizeSourceDisplayStatus(source?.displayStatus));
   const name = markdownEscapeInline(source?.name || "");
   const quote = markdownEscapeInline(source?.quote || "");
   const url = String(source?.url || "").trim();
   const meta = [name, quote].filter(Boolean).join(" - ");
   if (url) {
-    return `- [${label}](${url})${meta ? `: ${meta}` : ""}`;
+    return `- [${label}](${url}) [${markdownEscapeInline(status)}]${meta ? `: ${meta}` : ""}`;
   }
-  return `- ${label}${meta ? `: ${meta}` : ""}`;
+  return `- ${label} [${markdownEscapeInline(status)}]${meta ? `: ${meta}` : ""}`;
 }
 
 function markdownSourcesSection(sources = []) {
@@ -1977,6 +2131,74 @@ function markdownDiagnosticsSection(uc, outputMode = "scorecard") {
     .join("\n");
 }
 
+function markdownSourceUniverseSection(meta = {}) {
+  const summary = normalizeSourceUniverse(meta?.sourceUniverse || {});
+  if (!summary.total) return "- No source quality summary available.";
+  return [
+    `- Total sources: ${summary.total}`,
+    `- Cited: ${summary.cited}`,
+    `- Corroborating: ${summary.corroborating}`,
+    `- Unverified: ${summary.unverified}`,
+    `- Excluded marketing: ${summary.excludedMarketing}`,
+    `- Excluded stale: ${summary.excludedStale}`,
+  ].join("\n");
+}
+
+function markdownScorecardRedTeamSection(uc, dims = []) {
+  const redTeam = uc?.finalScores?.redTeam || {};
+  const verdict = markdownTextBlock(redTeam?.redTeamVerdict || "");
+  const rows = (Array.isArray(dims) ? dims : [])
+    .map((dim) => ({
+      dim,
+      entry: redTeam?.dimensions?.[dim.id] || null,
+    }))
+    .filter(({ entry }) => cleanText(entry?.threat) || cleanText(entry?.missedRisk));
+
+  if (!verdict && !rows.length) return "- No Red Team findings.";
+
+  const lines = [];
+  if (verdict) lines.push(`- Verdict: ${markdownEscapeInline(verdict)}`);
+  rows.forEach(({ dim, entry }) => {
+    const severity = markdownEscapeInline(cleanText(entry?.severityIfWrong) || "medium");
+    lines.push(`- ${markdownEscapeInline(dim.label)} (${severity})`);
+    if (cleanText(entry?.threat)) lines.push(`  - Threat: ${markdownEscapeInline(cleanText(entry.threat))}`);
+    if (cleanText(entry?.missedRisk)) lines.push(`  - Missed risk: ${markdownEscapeInline(cleanText(entry.missedRisk))}`);
+  });
+  return lines.join("\n");
+}
+
+function markdownMatrixRedTeamSection(uc) {
+  const matrix = uc?.matrix || {};
+  const redTeam = matrix?.redTeam || {};
+  const verdict = markdownTextBlock(redTeam?.redTeamVerdict || "");
+  const cells = redTeam?.cells && typeof redTeam.cells === "object" ? redTeam.cells : {};
+  const subjectLabelById = new Map((Array.isArray(matrix?.subjects) ? matrix.subjects : []).map((item) => [item.id, item.label || item.id]));
+  const attributeLabelById = new Map((Array.isArray(matrix?.attributes) ? matrix.attributes : []).map((item) => [item.id, item.label || item.id]));
+  const rows = Object.entries(cells)
+    .map(([key, entry]) => {
+      const [subjectId, attributeId] = String(key).split("::");
+      return {
+        subject: subjectLabelById.get(subjectId) || subjectId || "Unknown subject",
+        attribute: attributeLabelById.get(attributeId) || attributeId || "Unknown attribute",
+        threat: cleanText(entry?.threat),
+        missedRisk: cleanText(entry?.missedRisk),
+        severity: cleanText(entry?.severityIfWrong) || "medium",
+      };
+    })
+    .filter((row) => row.threat || row.missedRisk);
+
+  if (!verdict && !rows.length) return "- No Red Team findings.";
+
+  const lines = [];
+  if (verdict) lines.push(`- Verdict: ${markdownEscapeInline(verdict)}`);
+  rows.forEach((row) => {
+    lines.push(`- ${markdownEscapeInline(row.subject)} x ${markdownEscapeInline(row.attribute)} (${markdownEscapeInline(row.severity)})`);
+    if (row.threat) lines.push(`  - Threat: ${markdownEscapeInline(row.threat)}`);
+    if (row.missedRisk) lines.push(`  - Missed risk: ${markdownEscapeInline(row.missedRisk)}`);
+  });
+  return lines.join("\n");
+}
+
 function buildScorecardMarkdown(uc, dims = []) {
   const title = String(uc?.attributes?.title || uc?.rawInput || uc?.id || "Untitled research").trim();
   const weighted = calcWeightedScore(uc, dims);
@@ -2006,6 +2228,16 @@ function buildScorecardMarkdown(uc, dims = []) {
   lines.push("## Run Diagnostics");
   lines.push("");
   lines.push(markdownDiagnosticsSection(uc, "scorecard"));
+  lines.push("");
+
+  lines.push("## Source Quality");
+  lines.push("");
+  lines.push(markdownSourceUniverseSection(uc?.analysisMeta || {}));
+  lines.push("");
+
+  lines.push("## Red Team");
+  lines.push("");
+  lines.push(markdownScorecardRedTeamSection(uc, dims));
   lines.push("");
 
   lines.push("## Dimension Analysis");
@@ -2159,6 +2391,16 @@ function buildMatrixMarkdown(uc) {
   lines.push("## Run Diagnostics");
   lines.push("");
   lines.push(markdownDiagnosticsSection(uc, "matrix"));
+  lines.push("");
+
+  lines.push("## Source Quality");
+  lines.push("");
+  lines.push(markdownSourceUniverseSection(uc?.analysisMeta || {}));
+  lines.push("");
+
+  lines.push("## Red Team");
+  lines.push("");
+  lines.push(markdownMatrixRedTeamSection(uc));
   lines.push("");
 
   lines.push("## Subjects");

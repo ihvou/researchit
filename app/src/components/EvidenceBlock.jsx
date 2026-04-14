@@ -43,7 +43,14 @@ function renderTextWithUrlAnchors(text) {
   return parts;
 }
 
-export default function EvidenceBlock({ brief, full, sources, risks }) {
+export default function EvidenceBlock({
+  brief,
+  full,
+  sources,
+  risks,
+  sourceUniverse = null,
+  showSourceUniverse = false,
+}) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div>
@@ -63,7 +70,11 @@ export default function EvidenceBlock({ brief, full, sources, risks }) {
                   {renderTextWithUrlAnchors(full)}
                 </p>
               )}
-              <SourcesList sources={sources} />
+              <SourcesList
+                sources={sources}
+                sourceUniverse={sourceUniverse}
+                showSourceUniverse={showSourceUniverse}
+              />
               {risks && (
                 <div style={{
                   marginTop: 10, padding: "8px 12px",

@@ -61,6 +61,18 @@ const HYBRID_FLOW = [
     detail: "Resolves critique, updates score cards, and prepares final per-dimension rationale.",
   },
   {
+    key: "red_team",
+    phase: "red_team",
+    title: "Red Team stress test",
+    detail: "Builds strongest counter-case and appends explicit risk pressure against current conclusion.",
+  },
+  {
+    key: "synthesizer",
+    phase: "synthesizer",
+    title: "Independent synthesis",
+    detail: "Generates executive narrative from structured signals, confidence, and red-team findings.",
+  },
+  {
     key: "discover",
     phase: "discover",
     title: "Related research discovery",
@@ -142,6 +154,12 @@ const MATRIX_FLOW = [
     detail: "Computes derived columns only after evidence, critic, and consistency checks finish.",
   },
   {
+    key: "matrix_red_team",
+    phase: "matrix_red_team",
+    title: "Red Team stress test",
+    detail: "Constructs strongest matrix counter-case and appends per-cell risk pressure.",
+  },
+  {
     key: "matrix_synthesis",
     phase: "matrix_synthesis",
     title: "Executive synthesis",
@@ -186,6 +204,8 @@ const SCORECARD_PHASE_ALIASES = {
   critic_source_verification: "critic",
   finalizing_consistency: "finalizing",
   final_source_verification: "finalizing",
+  red_team: "red_team",
+  synthesizer: "synthesizer",
   deep_assist_collect: "deep_assist_collect",
   deep_assist_merge: "deep_assist_merge",
 };
@@ -193,6 +213,7 @@ const SCORECARD_PHASE_ALIASES = {
 const MATRIX_PHASE_ALIASES = {
   matrix_evidence: "matrix_web",
   matrix_deep_assist: "matrix_deep_assist",
+  matrix_red_team: "matrix_red_team",
 };
 
 function resolveProgressPhase(phase, outputMode) {
@@ -327,6 +348,33 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
       label: "Provider contribution",
       value: `${providerBreakdown.length} channels`,
       detail: providerBreakdown.join(" | "),
+    });
+  }
+
+  const sourceUniverse = meta?.sourceUniverse && typeof meta.sourceUniverse === "object"
+    ? meta.sourceUniverse
+    : null;
+  if (sourceUniverse && Number(sourceUniverse.total || 0) > 0) {
+    rows.push({
+      label: "Source universe",
+      value: `${Number(sourceUniverse.total || 0)} sources`,
+      detail: `cited ${Number(sourceUniverse.cited || 0)}, corroborating ${Number(sourceUniverse.corroborating || 0)}, unverified ${Number(sourceUniverse.unverified || 0)}, excluded marketing ${Number(sourceUniverse.excludedMarketing || 0)}, excluded stale ${Number(sourceUniverse.excludedStale || 0)}`,
+    });
+  }
+
+  if (meta.redTeamCallMade != null) {
+    rows.push({
+      label: "Red Team",
+      value: meta.redTeamCallMade ? "Applied" : "Not applied",
+      detail: `High severity findings: ${Number(meta.redTeamHighSeverityCount || 0)}`,
+    });
+  }
+
+  if (meta.synthesizerCallMade != null) {
+    rows.push({
+      label: "Synthesizer",
+      value: meta.synthesizerCallMade ? "Applied" : "Not applied",
+      detail: String(meta.synthesizerModel || "model not recorded"),
     });
   }
 

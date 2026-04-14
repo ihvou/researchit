@@ -291,6 +291,33 @@ async function callCriticAPI(messages, systemPrompt, maxTokens = 5000, options =
   return getRuntime().transport.callCritic(messages, systemPrompt, maxTokens, merged);
 }
 
+function withRoleModelOptionsFallback(primaryRole, fallbackRole, options = {}) {
+  const primary = withRoleModelOptions(primaryRole, {});
+  const fallback = withRoleModelOptions(fallbackRole, {});
+  const merged = { ...(options || {}) };
+  if (!merged.provider && (primary.provider || fallback.provider)) merged.provider = primary.provider || fallback.provider;
+  if (!merged.model && (primary.model || fallback.model)) merged.model = primary.model || fallback.model;
+  if (!merged.webSearchModel && (primary.webSearchModel || fallback.webSearchModel)) {
+    merged.webSearchModel = primary.webSearchModel || fallback.webSearchModel;
+  }
+  if (!merged.baseUrl && (primary.baseUrl || fallback.baseUrl)) merged.baseUrl = primary.baseUrl || fallback.baseUrl;
+  return merged;
+}
+
+function modelSignatureFromOptions(options = {}) {
+  const provider = cleanString(options?.provider) || "default";
+  const model = cleanString(options?.model) || "default";
+  return `${provider}:${model}`;
+}
+
+async function callSynthesizerAPI(messages, systemPrompt, maxTokens = 4200, options = {}) {
+  const merged = withRoleModelOptionsFallback("synthesizer", "critic", options);
+  return {
+    options: merged,
+    response: await getRuntime().transport.callAnalyst(messages, systemPrompt, maxTokens, merged),
+  };
+}
+
 function analystPrompt() {
   return getRuntime()?.prompts?.analyst || SYS_ANALYST;
 }
@@ -635,8 +662,12 @@ function normalizeSourceList(items, maxItems = 12) {
       sourceType: String(item.sourceType || "").trim().toLowerCase(),
       verificationStatus: String(item.verificationStatus || "").trim(),
       verificationNote: String(item.verificationNote || "").trim(),
+      displayStatus: String(item.displayStatus || "").trim().toLowerCase(),
     };
     if (!source.name && !source.quote && !source.url) continue;
+    if (!source.displayStatus) {
+      source.displayStatus = deriveSourceDisplayStatus(source, { staleEvidenceRatio: null });
+    }
     const key = `${source.name}|${source.quote}|${source.url}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -644,6 +675,122 @@ function normalizeSourceList(items, maxItems = 12) {
     if (out.length >= maxItems) break;
   }
   return out;
+}
+
+function extractEvidenceYearsFromSource(source = {}) {
+  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
+  const matches = String(text).match(/\b(20\d{2})\b/g);
+  if (!matches || !matches.length) return [];
+  return matches
+    .map((value) => Number(value))
+    .filter((year) => Number.isFinite(year) && year >= 2000 && year <= 2099);
+}
+
+function sourceHasOnlyStaleYears(source = {}, staleCutoff = (new Date().getFullYear() - 2)) {
+  const years = extractEvidenceYearsFromSource(source);
+  if (!years.length) return false;
+  return years.every((year) => year < staleCutoff);
+}
+
+function deriveSourceDisplayStatus(source = {}, options = {}) {
+  const verificationStatus = cleanString(source?.verificationStatus);
+  const sourceType = cleanString(source?.sourceType).toLowerCase();
+  const staleEvidenceRatio = Number(options?.staleEvidenceRatio);
+  const staleCutoff = Number.isFinite(Number(options?.staleCutoff))
+    ? Number(options.staleCutoff)
+    : (new Date().getFullYear() - 2);
+
+  if (verificationStatus === "verified_in_page") return "cited";
+  if (
+    Number.isFinite(staleEvidenceRatio)
+    && staleEvidenceRatio >= 0.6
+    && sourceHasOnlyStaleYears(source, staleCutoff)
+  ) {
+    return "excluded_stale";
+  }
+  if (sourceType === "vendor" && verificationStatus !== "verified_in_page") {
+    return "excluded_marketing";
+  }
+  if (verificationStatus === "name_only_in_page" && sourceType !== "vendor") {
+    return "corroborating";
+  }
+  if (
+    verificationStatus === "not_found_in_page"
+    || verificationStatus === "fetch_failed"
+    || verificationStatus === "invalid_url"
+  ) {
+    return "unverified";
+  }
+  if (sourceType === "independent" || sourceType === "press") {
+    return "corroborating";
+  }
+  return "unverified";
+}
+
+function annotateSourceListDisplayStatus(sources = [], options = {}) {
+  return normalizeSourceList(sources, 40).map((source) => ({
+    ...source,
+    displayStatus: deriveSourceDisplayStatus(source, options),
+  }));
+}
+
+function emptySourceUniverseSummary() {
+  return {
+    cited: 0,
+    corroborating: 0,
+    unverified: 0,
+    excludedMarketing: 0,
+    excludedStale: 0,
+    total: 0,
+  };
+}
+
+function mergeSourceUniverseCounts(target = {}, source = {}) {
+  target.cited = Number(target.cited || 0) + Number(source.cited || 0);
+  target.corroborating = Number(target.corroborating || 0) + Number(source.corroborating || 0);
+  target.unverified = Number(target.unverified || 0) + Number(source.unverified || 0);
+  target.excludedMarketing = Number(target.excludedMarketing || 0) + Number(source.excludedMarketing || 0);
+  target.excludedStale = Number(target.excludedStale || 0) + Number(source.excludedStale || 0);
+  target.total = Number(target.total || 0) + Number(source.total || 0);
+  return target;
+}
+
+function buildScorecardSourceUniverse(payload = {}, dims = []) {
+  const totals = emptySourceUniverseSummary();
+  const seen = new Set();
+  const addSource = (source = {}) => {
+    if (!source || typeof source !== "object") return;
+    const key = `${cleanString(source.name)}|${cleanString(source.quote)}|${cleanString(source.url)}`;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const status = cleanString(source.displayStatus).toLowerCase() || deriveSourceDisplayStatus(source, { staleEvidenceRatio: null });
+    if (status === "cited") totals.cited += 1;
+    else if (status === "corroborating") totals.corroborating += 1;
+    else if (status === "excluded_marketing") totals.excludedMarketing += 1;
+    else if (status === "excluded_stale") totals.excludedStale += 1;
+    else totals.unverified += 1;
+    totals.total += 1;
+  };
+
+  if (Array.isArray(payload?.sources)) {
+    annotateSourceListDisplayStatus(payload.sources).forEach(addSource);
+  }
+
+  (Array.isArray(dims) ? dims : []).forEach((dim) => {
+    const dimState = payload?.dimensions?.[dim?.id] || {};
+    const staleEvidenceRatio = Number(dimState?.staleEvidenceRatio);
+    const sources = annotateSourceListDisplayStatus(dimState?.sources, {
+      staleEvidenceRatio: Number.isFinite(staleEvidenceRatio) ? staleEvidenceRatio : null,
+    });
+    sources.forEach(addSource);
+    const supporting = Array.isArray(dimState?.arguments?.supporting) ? dimState.arguments.supporting : [];
+    const limiting = Array.isArray(dimState?.arguments?.limiting) ? dimState.arguments.limiting : [];
+    [...supporting, ...limiting].forEach((arg) => {
+      annotateSourceListDisplayStatus(arg?.sources).forEach(addSource);
+    });
+  });
+
+  return totals;
 }
 
 function mergeSourceLists(...lists) {
@@ -779,7 +926,7 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
       analysisMeta.sourceVerificationSkippedReason = "fetchSource transport is not available.";
     }
     return {
-      sources: normalizedSources,
+      sources: annotateSourceListDisplayStatus(normalizedSources),
       counters: {
         checked: 0,
         verified: 0,
@@ -859,7 +1006,7 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
   analysisMeta.sourceVerificationPartialMatch = Number(analysisMeta.sourceVerificationPartialMatch || 0) + counters.partial;
   analysisMeta.sourceVerificationNameOnly = Number(analysisMeta.sourceVerificationNameOnly || 0) + counters.nameOnly;
 
-  return { sources: out, counters };
+  return { sources: annotateSourceListDisplayStatus(out), counters };
 }
 
 function applySourceVerificationPenalty(dim = {}, counters = {}, analysisMeta = {}) {
@@ -888,10 +1035,7 @@ function applySourceVerificationPenalty(dim = {}, counters = {}, analysisMeta = 
 }
 
 function extractEvidenceYearFromSource(source = {}) {
-  const text = `${source?.quote || ""} ${source?.name || ""} ${source?.url || ""}`;
-  const matches = String(text).match(/\b(20\d{2})\b/g);
-  if (!matches || !matches.length) return null;
-  const years = matches.map((value) => Number(value)).filter((year) => year >= 2000 && year <= 2099);
+  const years = extractEvidenceYearsFromSource(source);
   if (!years.length) return null;
   return Math.max(...years);
 }
@@ -995,6 +1139,7 @@ function applyEvidenceQualityCaps(dim = {}, analysisMeta = {}) {
     vendor: vendorSources,
     press: sources.filter((source) => source.sourceType === "press").length,
   };
+  dim.sources = annotateSourceListDisplayStatus(sources, { staleEvidenceRatio: staleRatio });
   dim.confidence = nextConfidence;
 }
 
@@ -1036,12 +1181,18 @@ async function verifyScorecardSources({
         });
       }
       applyEvidenceQualityCaps(dimState, analysisMeta);
+    } else {
+      dimState.sources = annotateSourceListDisplayStatus(dimState.sources, {
+        staleEvidenceRatio: Number.isFinite(Number(dimState?.staleEvidenceRatio))
+          ? Number(dimState.staleEvidenceRatio)
+          : null,
+      });
     }
   }
 
   if (Array.isArray(payload.sources)) {
     const verifiedTop = await verifySourceListWithFetch(payload.sources, sourceFetchCache, analysisMeta);
-    payload.sources = verifiedTop.sources;
+    payload.sources = annotateSourceListDisplayStatus(verifiedTop.sources);
   }
   return payload;
 }
@@ -1203,7 +1354,8 @@ ${dims.map((d) => `- ${d.id}: ${d.label}${d?.researchHints?.queryTemplates?.leng
 Task:
 - Infer the likely niche/domain from the input.
 - Produce targeted alias/acquisition/rebrand hints (company aliases, product renames, merged entities) to improve retrieval recall.
-- For each dimension, provide 2-4 query seeds and source targets.
+- For each dimension, provide 2-4 supporting query seeds, 2-3 counterfactual/disconfirming queries, and source targets.
+- Counterfactual queries should explicitly look for failure modes, disconfirming evidence, incumbent advantages, or why the thesis may fail.
 - Keep outputs factual and concise.
 
 Return JSON only:
@@ -1211,7 +1363,7 @@ Return JSON only:
   "niche": "<short niche label>",
   "aliases": ["<alias or rebrand hint>"],
   "dimensionHints": {
-    ${dims.map((d) => `"${d.id}": {"querySeeds":["<query seed>"], "sourceTargets":["<target source type>"]}`).join(",\n    ")}
+    ${dims.map((d) => `"${d.id}": {"querySeeds":["<supporting query seed>"], "counterfactualQueries":["<disconfirming query seed>"], "sourceTargets":["<target source type>"]}`).join(",\n    ")}
   }
 }`;
 }
@@ -1225,6 +1377,7 @@ function normalizeStrategistHints(payload = {}, dims = []) {
     const raw = dimensionHintsRaw?.[dim.id] || {};
     byDim[dim.id] = {
       querySeeds: normalizeStringList(raw?.querySeeds, 4, 170),
+      counterfactualQueries: normalizeStringList(raw?.counterfactualQueries, 4, 170),
       sourceTargets: normalizeStringList(raw?.sourceTargets, 4, 170),
     };
   });
@@ -1322,6 +1475,96 @@ function selectTargetedCycleDimensions(phase1Payload, dims, limits = {}) {
     lowIds: low,
     mediumGapIds: mediumWithSpecificGap,
     budgetUnits,
+  };
+}
+
+function buildForcedTargetedSelection(phase1Payload, dims, forcedCandidateIds = [], limits = {}) {
+  const validSet = new Set((Array.isArray(dims) ? dims : []).map((dim) => dim.id));
+  const forced = [...new Set((Array.isArray(forcedCandidateIds) ? forcedCandidateIds : [])
+    .map((value) => cleanString(value))
+    .filter((value) => value && validSet.has(value)))];
+
+  const lowIds = [];
+  const mediumGapIds = [];
+  forced.forEach((dimId) => {
+    const dim = phase1Payload?.dimensions?.[dimId] || {};
+    const confidence = normalizeConfidenceLevel(dim?.confidence);
+    if (confidence === "low") lowIds.push(dimId);
+    else if (confidence === "medium" && hasSpecificMissingEvidenceGap(dim?.missingEvidence)) mediumGapIds.push(dimId);
+  });
+
+  const maxBudget = Number(limits?.deepAssistRecoveryBudget ?? limits?.targetedBudgetUnits);
+  const budgetUnits = Number.isFinite(maxBudget)
+    ? Math.max(1, Math.min(forced.length || 1, Math.round(maxBudget)))
+    : Math.min(forced.length, Math.max(1, Math.min(4, forced.length)));
+
+  return {
+    candidateIds: forced.slice(0, budgetUnits),
+    allCandidateIds: forced,
+    lowIds,
+    mediumGapIds,
+    budgetUnits,
+  };
+}
+
+function selectDeepAssistRecoveryDimensions(phase1Payload, dims, analysisMeta = {}, limits = {}) {
+  const candidates = [];
+  (Array.isArray(dims) ? dims : []).forEach((dim) => {
+    const dimState = phase1Payload?.dimensions?.[dim.id] || {};
+    const confidence = normalizeConfidenceLevel(dimState?.confidence) || "low";
+    const sourceCount = normalizeSourceList(dimState?.sources, 16).length;
+    const providerAgreement = cleanString(dimState?.providerAgreement).toLowerCase();
+    const reasons = [];
+    let pressure = 0;
+
+    if (providerAgreement === "contradict") {
+      reasons.push("provider_contradict");
+      pressure += 5;
+    }
+    if (confidence === "low") {
+      reasons.push("confidence_low");
+      pressure += 4;
+    }
+    if (sourceCount < 2) {
+      reasons.push("source_sparse");
+      pressure += sourceCount === 0 ? 3 : 2;
+    }
+    if (
+      Number(analysisMeta?.deepAssistProvidersFailed || 0) > 0
+      && confidence !== "high"
+      && !reasons.includes("provider_failure_signal")
+    ) {
+      reasons.push("provider_failure_signal");
+      pressure += 1;
+    }
+    if (!reasons.length) return;
+
+    candidates.push({
+      dimId: dim.id,
+      reasons,
+      pressure: pressure + dimensionPressureScore(dimState, dim.id, new Set(), new Set()),
+      sourceCount,
+    });
+  });
+
+  candidates.sort((a, b) => b.pressure - a.pressure || a.sourceCount - b.sourceCount);
+  const allCandidateIds = candidates.map((item) => item.dimId);
+  const maxBudget = Number(limits?.deepAssistRecoveryBudget ?? limits?.targetedBudgetUnits);
+  const budgetUnits = Number.isFinite(maxBudget)
+    ? Math.max(1, Math.min(allCandidateIds.length || 1, Math.round(maxBudget)))
+    : Math.min(allCandidateIds.length, Math.max(1, Math.min(4, allCandidateIds.length)));
+  const candidateIds = allCandidateIds.slice(0, budgetUnits);
+  return {
+    candidateIds,
+    allCandidateIds,
+    budgetUnits,
+    droppedByBudget: Math.max(0, allCandidateIds.length - candidateIds.length),
+    diagnostics: candidates.map((item) => ({
+      dimensionId: item.dimId,
+      reasons: item.reasons,
+      pressure: item.pressure,
+      sourceCount: item.sourceCount,
+    })),
   };
 }
 
@@ -1518,8 +1761,13 @@ function buildLowConfidenceQueryPlanPrompt(desc, dim, currentDim = {}, attribute
   const templateHints = normalizeStringList(researchHints?.queryTemplates, 4, 170);
   const whereHints = normalizeStringList(researchHints?.whereToLook, 4, 170);
   const strategistSeeds = normalizeStringList(strategistHint?.querySeeds, 4, 170);
+  const strategistCounterfactual = normalizeStringList(strategistHint?.counterfactualQueries, 4, 170);
   const strategistTargets = normalizeStringList(strategistHint?.sourceTargets, 4, 170);
   const aliasHints = normalizeStringList(strategistHint?.aliases, 8, 120);
+  const counterfactualLimitRaw = Number(getRuntime()?.limits?.counterfactualQueriesPerDim);
+  const counterfactualLimit = Number.isFinite(counterfactualLimitRaw)
+    ? Math.max(1, Math.min(4, Math.round(counterfactualLimitRaw)))
+    : 2;
   const setupContext = buildResearchSetupContextBlock(researchSetup);
 
   return `You are generating targeted search queries for one low-confidence scoring dimension.
@@ -1550,11 +1798,13 @@ Dimension-specific hint templates:
 
 Niche strategist hints:
 - Query seeds: ${strategistSeeds.length ? strategistSeeds.join(" | ") : "none"}
+- Counterfactual seeds: ${strategistCounterfactual.length ? strategistCounterfactual.join(" | ") : "none"}
 - Source targets: ${strategistTargets.length ? strategistTargets.join(" | ") : "none"}
 - Alias/rebrand hints: ${aliasHints.length ? aliasHints.join(" | ") : "none"}
 
 Task:
-- Produce 3 to 4 highly specific search queries to close the evidence gap.
+- Produce 3 to 4 highly specific supporting search queries to close the evidence gap.
+- Produce ${counterfactualLimit} to ${Math.min(counterfactualLimit + 1, 4)} counterfactual/disconfirming queries to challenge the current assumption.
 - Queries must target verifiable deployments, metrics, and current market facts.
 - Avoid generic queries like "AI trends".
 
@@ -1566,6 +1816,10 @@ Return ONLY this JSON:
     "<query 2>",
     "<query 3>",
     "<query 4 optional>"
+  ],
+  "counterfactualQueries": [
+    "<counterfactual query 1>",
+    "<counterfactual query 2>"
   ]
 }`;
 }
@@ -1576,9 +1830,19 @@ function normalizeLowConfidenceQueryPlan(payload, fallbackQueries = [], fallback
     ...normalizeStringList(fallbackQueries, 4, 170),
   ];
   const unique = [...new Set(queries)].slice(0, 4);
+  const counterfactualLimitRaw = Number(getRuntime()?.limits?.counterfactualQueriesPerDim);
+  const counterfactualLimit = Number.isFinite(counterfactualLimitRaw)
+    ? Math.max(1, Math.min(4, Math.round(counterfactualLimitRaw)))
+    : 2;
+  const counterfactualQueries = [...new Set(
+    normalizeStringList(payload?.counterfactualQueries, 4, 170)
+  )]
+    .filter((query) => !unique.includes(query))
+    .slice(0, counterfactualLimit);
   return {
     gap: String(payload?.gap || "").trim() || String(fallbackGap || "").trim() || "Evidence for this dimension is still weak.",
     queries: unique,
+    counterfactualQueries,
   };
 }
 
@@ -1603,16 +1867,23 @@ Current snapshot:
 Queries to run:
 ${(queryPlan?.queries || []).map((q, idx) => `${idx + 1}. ${q}`).join("\n")}
 
+Counterfactual queries to run:
+${(queryPlan?.counterfactualQueries || []).length
+  ? (queryPlan.counterfactualQueries || []).map((q, idx) => `${idx + 1}. ${q}`).join("\n")
+  : "- none"}
+
 Rules:
 - Focus on concrete facts, deployments, release changes, or benchmark signals.
 - Keep findings factual and source-linked. No scoring in this step.
 - If a query has no useful result, mark it as not useful.
+- Label each finding as "supporting" or "counterfactual" based on the query intent.
 
 Return ONLY this JSON:
 {
   "findings": [
     {
       "query": "<exact query>",
+      "evidenceType": "<supporting|counterfactual>",
       "fact": "<single concrete fact>",
       "source": {"name": "<source name>", "quote": "<max 15 words>", "url": "<url>"}
     }
@@ -1624,11 +1895,19 @@ Return ONLY this JSON:
 }
 
 function normalizeLowConfidenceSearchHarvest(payload, queryPlan) {
+  const counterfactualSet = new Set(
+    normalizeStringList(queryPlan?.counterfactualQueries, 8, 170).map((item) => item.toLowerCase())
+  );
   const findings = Array.isArray(payload?.findings)
     ? payload.findings
       .map((f) => {
         const query = String(f?.query || "").trim();
         const fact = String(f?.fact || "").trim();
+        const evidenceTypeRaw = String(f?.evidenceType || "").trim().toLowerCase();
+        const evidenceType = evidenceTypeRaw === "counterfactual"
+          || counterfactualSet.has(query.toLowerCase())
+          ? "counterfactual"
+          : "supporting";
         const source = f?.source && typeof f.source === "object"
           ? {
               name: String(f.source.name || "").trim(),
@@ -1639,6 +1918,7 @@ function normalizeLowConfidenceSearchHarvest(payload, queryPlan) {
         if (!fact || !source || (!source.name && !source.quote && !source.url)) return null;
         return {
           query: query || "",
+          evidenceType,
           fact: fact.slice(0, 260),
           source,
         };
@@ -1658,7 +1938,11 @@ function normalizeLowConfidenceSearchHarvest(payload, queryPlan) {
       .slice(0, 6)
     : [];
 
-  const fallbackCoverage = (queryPlan?.queries || []).map((q) => ({
+  const allQueries = [
+    ...normalizeStringList(queryPlan?.queries, 6, 170),
+    ...normalizeStringList(queryPlan?.counterfactualQueries, 6, 170),
+  ];
+  const fallbackCoverage = allQueries.map((q) => ({
     query: q,
     useful: findings.some((f) => f.query && f.query === q),
     note: findings.some((f) => f.query && f.query === q) ? "Returned at least one useful fact." : "No clearly useful fact captured.",
@@ -1713,6 +1997,7 @@ Rules:
 - Raise confidence only if findings materially reduce uncertainty.
 - If confidence remains low, keep score conservative and provide a precise research brief based on attempted queries.
 - Keep all text concise and plain-language.
+- Explicitly weigh supporting vs counterfactual findings; counterfactual findings should influence limiting arguments.
 
 Return ONLY this JSON:
 {
@@ -1763,6 +2048,47 @@ function normalizeLowConfidenceResearchBrief(brief, fallback = {}) {
   };
 }
 
+function mergeHarvestFindingsIntoArguments(baseArguments = {}, harvest = {}) {
+  const normalized = ensureDimensionArgumentShape({ arguments: baseArguments }, "");
+  const supporting = Array.isArray(normalized?.supporting)
+    ? [...normalized.supporting]
+    : [];
+  const limiting = Array.isArray(normalized?.limiting)
+    ? [...normalized.limiting]
+    : [];
+
+  const existing = new Set(
+    [...supporting, ...limiting]
+      .map((entry) => cleanString(entry?.claim).toLowerCase())
+      .filter(Boolean)
+  );
+
+  (Array.isArray(harvest?.findings) ? harvest.findings : []).forEach((entry, idx) => {
+    const fact = cleanString(entry?.fact);
+    if (!fact) return;
+    const key = fact.toLowerCase();
+    if (existing.has(key)) return;
+    existing.add(key);
+    const target = String(entry?.evidenceType || "").toLowerCase() === "counterfactual"
+      ? limiting
+      : supporting;
+    const idPrefix = target === limiting ? "lim-harvest" : "sup-harvest";
+    target.push({
+      id: `${idPrefix}-${idx + 1}`,
+      claim: clip(fact, 90),
+      detail: cleanString(entry?.query)
+        ? `Targeted query: ${clip(entry.query, 120)}`
+        : "Captured during targeted low-confidence recovery.",
+      sources: normalizeSourceList([entry?.source]),
+    });
+  });
+
+  return {
+    supporting: supporting.slice(0, 6),
+    limiting: limiting.slice(0, 6),
+  };
+}
+
 function normalizeLowConfidenceRescore(payload, dim, currentDim, queryPlan, harvest) {
   const score = clampScore(payload?.score, clampScore(currentDim?.score, 3));
   const confidence = normalizeConfidenceLevel(payload?.confidence) || "low";
@@ -1807,7 +2133,7 @@ function normalizeLowConfidenceRescore(payload, dim, currentDim, queryPlan, harv
     risks,
     missingEvidence,
     sources: mergeSourceLists(currentDim?.sources, payload?.sources, searchSources),
-    arguments: normalizedArgHolder,
+    arguments: mergeHarvestFindingsIntoArguments(normalizedArgHolder, harvest),
     researchBrief,
   };
 }
@@ -3749,10 +4075,15 @@ async function runLowConfidenceExtraCycle({
   debugSession,
   analysisMode,
   researchSetup = {},
+  forcedCandidateIds = [],
+  cycleLabel = "native_targeted",
 }) {
   const current = JSON.parse(JSON.stringify(phase1Payload || {}));
   current.dimensions = current.dimensions || {};
-  const selection = selectTargetedCycleDimensions(current, dims, getRuntime()?.limits || {});
+  const runtimeLimits = getRuntime()?.limits || {};
+  const selection = (Array.isArray(forcedCandidateIds) && forcedCandidateIds.length)
+    ? buildForcedTargetedSelection(current, dims, forcedCandidateIds, runtimeLimits)
+    : selectTargetedCycleDimensions(current, dims, runtimeLimits);
   const candidateIds = selection.candidateIds;
 
   analysisMeta.lowConfidenceInitialCount = selection.allCandidateIds.length;
@@ -3769,6 +4100,12 @@ async function runLowConfidenceExtraCycle({
   analysisMeta.lowConfidenceBudgetUsed = 0;
   analysisMeta.lowConfidenceDroppedByBudget = Math.max(0, selection.allCandidateIds.length - candidateIds.length);
   analysisMeta.targetedDimensionDiagnostics = [];
+  if (!Number.isFinite(Number(analysisMeta.counterfactualQueriesGenerated))) {
+    analysisMeta.counterfactualQueriesGenerated = 0;
+  }
+  if (!Number.isFinite(Number(analysisMeta.counterfactualFindingsUsed))) {
+    analysisMeta.counterfactualFindingsUsed = 0;
+  }
 
   let strategistHints = { niche: "", aliases: [], dimensionHints: {} };
   try {
@@ -3852,6 +4189,12 @@ async function runLowConfidenceExtraCycle({
       ...aliasQueries,
       ...defaultTargetedQueries(desc, dim.label, fallbackGap, attributes),
     ];
+    const fallbackCounterfactualQueries = [...new Set(normalizeStringList([
+      ...normalizeStringList(strategistForDim?.counterfactualQueries, 4, 170),
+      `${attributes?.title || desc} ${dim.label} failure cases`,
+      `${attributes?.title || desc} ${dim.label} criticism`,
+      `${attributes?.title || desc} alternatives outperforming ${dim.label}`,
+    ], 4, 170))].slice(0, Math.max(1, Number(runtimeLimits?.counterfactualQueriesPerDim || 2)));
     const fallbackQueryList = [...new Set(normalizeStringList(fallbackQueries, 6, 170))].slice(0, 4);
     const dimDiag = {
       dimensionId: dimId,
@@ -3859,7 +4202,9 @@ async function runLowConfidenceExtraCycle({
       bucket: selection.lowIds.includes(dimId) ? "low" : "medium_gap",
       confidenceBefore: normalizeConfidenceLevel(before?.confidence) || "low",
       fallbackQueries: fallbackQueryList,
+      fallbackCounterfactualQueries,
       strategistSeeds: normalizeStringList(strategistForDim?.querySeeds, 4, 170),
+      strategistCounterfactual: normalizeStringList(strategistForDim?.counterfactualQueries, 4, 170),
       sourceTargets: normalizeStringList([
         ...(strategistForDim?.sourceTargets || []),
         ...(dim?.researchHints?.whereToLook || []),
@@ -3867,7 +4212,11 @@ async function runLowConfidenceExtraCycle({
     };
     const retrievalOptions = withCapabilityModelOptions("retrieval", "analyst", { includeMeta: true });
 
-    let queryPlan = { gap: fallbackGap || "Evidence gap remains unresolved.", queries: fallbackQueryList };
+    let queryPlan = {
+      gap: fallbackGap || "Evidence gap remains unresolved.",
+      queries: fallbackQueryList,
+      counterfactualQueries: fallbackCounterfactualQueries,
+    };
     try {
       const queryPrompt = buildLowConfidenceQueryPlanPrompt(
         desc,
@@ -3912,6 +4261,12 @@ async function runLowConfidenceExtraCycle({
         ...normalizeStringList(strategistForDim?.querySeeds, 3, 170),
         ...normalizeStringList(queryPlan.queries, 4, 170),
       ])].slice(0, 4);
+      queryPlan.counterfactualQueries = [...new Set([
+        ...normalizeStringList(strategistForDim?.counterfactualQueries, 4, 170),
+        ...normalizeStringList(queryPlan.counterfactualQueries, 4, 170),
+      ])]
+        .filter((query) => !queryPlan.queries.includes(query))
+        .slice(0, Math.max(1, Number(runtimeLimits?.counterfactualQueriesPerDim || 2)));
       dimDiag.queryPlan = queryPlan;
     } catch (planErr) {
       appendAnalysisDebugEvent(debugSession, {
@@ -3922,11 +4277,21 @@ async function runLowConfidenceExtraCycle({
         extra: { dimensionId: dimId, fallbackQueries: fallbackQueryList },
       });
       queryPlan = normalizeLowConfidenceQueryPlan({}, fallbackQueryList, fallbackGap);
+      queryPlan.counterfactualQueries = fallbackCounterfactualQueries;
       dimDiag.queryPlan = queryPlan;
       dimDiag.queryPlanError = planErr?.message || String(planErr);
     }
 
-    let harvest = { findings: [], queryCoverage: queryPlan.queries.map((q) => ({ query: q, useful: false, note: "No useful fact captured." })) };
+    analysisMeta.counterfactualQueriesGenerated += Number(queryPlan?.counterfactualQueries?.length || 0);
+
+    const allRecoveryQueries = [
+      ...normalizeStringList(queryPlan?.queries, 6, 170),
+      ...normalizeStringList(queryPlan?.counterfactualQueries, 6, 170),
+    ];
+    let harvest = {
+      findings: [],
+      queryCoverage: allRecoveryQueries.map((q) => ({ query: q, useful: false, note: "No useful fact captured." })),
+    };
     try {
       const searchPrompt = buildLowConfidenceSearchHarvestPrompt(desc, dim, queryPlan, before, researchSetup);
       const searchRes = await callAnalystAPI(
@@ -4007,6 +4372,10 @@ async function runLowConfidenceExtraCycle({
       const beforeConfidence = normalizeConfidenceLevel(before?.confidence) || "low";
       const upgraded = confidenceRank(nextConfidence) > confidenceRank(beforeConfidence);
       const usefulQueryCount = (harvest?.queryCoverage || []).filter((q) => q.useful).length;
+      const counterfactualFindingCount = (harvest?.findings || [])
+        .filter((entry) => String(entry?.evidenceType || "").toLowerCase() === "counterfactual")
+        .length;
+      analysisMeta.counterfactualFindingsUsed += counterfactualFindingCount;
       const unsuccessfulQueries = (harvest?.queryCoverage || [])
         .filter((q) => !q.useful)
         .map((q) => q.query)
@@ -4033,6 +4402,7 @@ async function runLowConfidenceExtraCycle({
             upgraded: true,
             usefulQueryCount,
             attemptedQueries: queryPlan.queries,
+            counterfactualQueries: queryPlan.counterfactualQueries || [],
             unsuccessfulQueries,
             validatedAt: new Date().toISOString(),
           },
@@ -4068,6 +4438,7 @@ async function runLowConfidenceExtraCycle({
             upgraded: false,
             usefulQueryCount,
             attemptedQueries: queryPlan.queries,
+            counterfactualQueries: queryPlan.counterfactualQueries || [],
             unsuccessfulQueries,
             validatedAt: new Date().toISOString(),
           },
@@ -4077,6 +4448,7 @@ async function runLowConfidenceExtraCycle({
       }
       dimDiag.confidenceAfter = nextConfidence;
       dimDiag.usefulQueryCount = usefulQueryCount;
+      dimDiag.counterfactualFindingCount = counterfactualFindingCount;
       dimDiag.unsuccessfulQueries = unsuccessfulQueries;
       analysisMeta.targetedDimensionDiagnostics.push(dimDiag);
 
@@ -4102,7 +4474,7 @@ async function runLowConfidenceExtraCycle({
       type: "targeted_dimension_diagnostics",
       phase: "analyst_targeted",
       attempt: dimId,
-      extra: dimDiag,
+      extra: { ...dimDiag, cycleLabel },
     });
   }
 
@@ -4111,6 +4483,7 @@ async function runLowConfidenceExtraCycle({
     type: "phase_complete",
     phase: "analyst_targeted",
     attempt: "final",
+    cycleLabel,
     candidateCount: selection.allCandidateIds.length,
     budgetUnits: selection.budgetUnits,
     budgetUsed: analysisMeta.lowConfidenceBudgetUsed,
@@ -4122,6 +4495,163 @@ async function runLowConfidenceExtraCycle({
     failures: analysisMeta.lowConfidenceCycleFailures,
   });
   return normalizedFinal;
+}
+
+function buildScorecardRedTeamPrompt(desc, dims, finalResponse, researchSetup = {}) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const summary = (Array.isArray(dims) ? dims : []).map((dim) => {
+    const item = finalResponse?.dimensions?.[dim.id] || {};
+    const limiting = Array.isArray(item?.arguments?.limiting)
+      ? item.arguments.limiting.map((entry) => cleanString(entry?.claim || entry?.detail)).filter(Boolean).slice(0, 2)
+      : [];
+    return {
+      id: dim.id,
+      label: dim.label,
+      score: clampScore(item?.finalScore, clampScore(item?.score, null)),
+      confidence: normalizeConfidenceLevel(item?.confidence) || "low",
+      risks: cleanString(item?.risks),
+      limitingArguments: limiting,
+      missingEvidence: cleanString(item?.missingEvidence),
+      providerAgreement: cleanString(item?.providerAgreement),
+    };
+  });
+
+  return `You are the Red Team for a completed evidence-first scorecard analysis.
+
+Research input:
+"${desc}"
+
+Run context:
+${setupContext}
+
+Current structured output:
+${JSON.stringify({
+    conclusion: cleanString(finalResponse?.conclusion),
+    dimensions: summary,
+  }, null, 2)}
+
+Task:
+- Construct the strongest credible case for why this conclusion could be wrong.
+- Focus on structural market risks, failure modes, incumbent/adversary response, and catastrophic assumption errors.
+- Do not revise scores. Add risk context only.
+- Keep each threat concise and specific.
+
+Return JSON only:
+{
+  "redTeamVerdict": "<1-2 sentence overall counter-case>",
+  "dimensions": {
+    ${(Array.isArray(dims) ? dims : []).map((dim) => `"${dim.id}": {"threat":"<strongest counter-argument>", "missedRisk":"<risk not already explicit>", "severityIfWrong":"<high|medium|low>"}`).join(",\n    ")}
+  }
+}`;
+}
+
+function normalizeScorecardRedTeamPayload(raw = {}, dims = []) {
+  const entries = {};
+  (Array.isArray(dims) ? dims : []).forEach((dim) => {
+    const item = raw?.dimensions?.[dim.id] || {};
+    const severityRaw = cleanString(item?.severityIfWrong).toLowerCase();
+    const severityIfWrong = severityRaw === "high" || severityRaw === "medium" || severityRaw === "low"
+      ? severityRaw
+      : "medium";
+    const threat = cleanString(item?.threat);
+    const missedRisk = cleanString(item?.missedRisk);
+    if (!threat && !missedRisk) return;
+    entries[dim.id] = {
+      threat,
+      missedRisk,
+      severityIfWrong,
+    };
+  });
+  return {
+    redTeamVerdict: cleanString(raw?.redTeamVerdict),
+    dimensions: entries,
+  };
+}
+
+function applyScorecardRedTeam(finalResponse = {}, dims = [], raw = {}) {
+  const normalized = normalizeScorecardRedTeamPayload(raw, dims);
+  const output = finalResponse && typeof finalResponse === "object" ? { ...finalResponse } : {};
+  output.dimensions = output.dimensions && typeof output.dimensions === "object" ? { ...output.dimensions } : {};
+  output.redTeam = normalized;
+
+  let highSeverityCount = 0;
+  (Array.isArray(dims) ? dims : []).forEach((dim) => {
+    const red = normalized?.dimensions?.[dim.id];
+    if (!red) return;
+    if (red.severityIfWrong === "high") highSeverityCount += 1;
+    const dimState = output.dimensions?.[dim.id];
+    if (!dimState || typeof dimState !== "object") return;
+    const redRiskLine = [cleanString(red.threat), cleanString(red.missedRisk)]
+      .filter(Boolean)
+      .join(" ");
+    if (!redRiskLine) return;
+    const existingRisks = cleanString(dimState.risks);
+    const addition = `Red Team (${red.severityIfWrong}): ${redRiskLine}`;
+    dimState.risks = [existingRisks, addition].filter(Boolean).join(" ").trim();
+  });
+  return { output, highSeverityCount };
+}
+
+function buildScorecardSynthesizerPrompt(desc, dims, finalResponse = {}, analysisMeta = {}, researchSetup = {}) {
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const compactDimensions = (Array.isArray(dims) ? dims : []).map((dim) => {
+    const item = finalResponse?.dimensions?.[dim.id] || {};
+    const limiting = Array.isArray(item?.arguments?.limiting)
+      ? item.arguments.limiting.map((entry) => cleanString(entry?.claim || entry?.detail)).filter(Boolean).slice(0, 2)
+      : [];
+    return {
+      id: dim.id,
+      label: dim.label,
+      score: clampScore(item?.finalScore, clampScore(item?.score, null)),
+      confidence: normalizeConfidenceLevel(item?.confidence) || "low",
+      confidenceReason: cleanString(item?.confidenceReason),
+      limitingArguments: limiting,
+      risks: cleanString(item?.risks),
+      providerAgreement: cleanString(item?.providerAgreement || ""),
+    };
+  });
+
+  return `You are an independent synthesizer for a completed strategic research scorecard.
+
+Research input:
+"${desc}"
+
+Run context:
+${setupContext}
+
+Structured scoring state (no raw source prose):
+${JSON.stringify({
+    weightedScore: finalResponse?.weightedScore || null,
+    conclusion: cleanString(finalResponse?.conclusion),
+    providerSignals: analysisMeta?.providerContributions || {},
+    redTeam: finalResponse?.redTeam || {},
+    dimensions: compactDimensions,
+  }, null, 2)}
+
+Task:
+- Write a neutral executive synthesis grounded ONLY in the structured signals above.
+- Avoid rewriting analyst prose.
+- Include the strongest dissent case.
+
+Return JSON only:
+{
+  "executiveSummary": "<3-5 sentence synthesis>",
+  "decisionImplication": "<what this means for the decision right now>",
+  "keyUncertainties": ["<uncertainty 1>", "<uncertainty 2>"],
+  "dissent": "<strongest case against the current conclusion>"
+}`;
+}
+
+function normalizeScorecardSynthesizerPayload(raw = {}) {
+  const keyUncertainties = Array.isArray(raw?.keyUncertainties)
+    ? raw.keyUncertainties.map((entry) => cleanString(entry)).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    executiveSummary: cleanString(raw?.executiveSummary),
+    decisionImplication: cleanString(raw?.decisionImplication),
+    keyUncertainties,
+    dissent: cleanString(raw?.dissent),
+  };
 }
 
 async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
@@ -4138,6 +4668,8 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     analyst: options?.prompts?.analyst || SYS_ANALYST,
     critic: options?.prompts?.critic || SYS_CRITIC,
     analystResponse: options?.prompts?.analystResponse || SYS_ANALYST_RESPONSE,
+    redTeam: options?.prompts?.redTeam || SYS_CRITIC,
+    synthesizer: options?.prompts?.synthesizer || SYS_ANALYST_RESPONSE,
   };
   const tokenLimits = {
     phase1Evidence: options?.limits?.tokenLimits?.phase1Evidence || 10000,
@@ -4196,6 +4728,16 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     targetedRetrievalNiche: "",
     targetedRetrievalAliases: [],
     targetedDimensionDiagnostics: [],
+    counterfactualQueriesGenerated: 0,
+    counterfactualFindingsUsed: 0,
+    deepAssistRecoveryTriggered: false,
+    deepAssistRecoveryCandidates: 0,
+    deepAssistRecoveryBudgetUnits: 0,
+    deepAssistRecoveryDroppedByBudget: 0,
+    deepAssistRecoveryUpgraded: 0,
+    deepAssistRecoveryValidatedLow: 0,
+    deepAssistRecoveryFailed: false,
+    deepAssistRecoveryDiagnostics: [],
     sourceVerificationChecked: 0,
     sourceVerificationVerified: 0,
     sourceVerificationNotFound: 0,
@@ -4242,6 +4784,11 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     verificationConfidenceCaps: 0,
     urlCoverageConfidenceCaps: 0,
     zeroSourceConfidenceCaps: 0,
+    sourceUniverse: emptySourceUniverseSummary(),
+    redTeamCallMade: false,
+    redTeamHighSeverityCount: 0,
+    synthesizerCallMade: false,
+    synthesizerModel: "",
     providerContributions: {},
     decisionContext: researchSetup.decisionContext,
     userRoleContext: researchSetup.userRoleContext,
@@ -4268,49 +4815,103 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     p1Base.attributes = normalizeAttributesShape(p1Base?.attributes, desc, framingFields);
     let p1 = p1Base;
 
-    try {
-      p1 = await runLowConfidenceExtraCycle({
-        desc,
+    if (evidenceMode === "deep-assist") {
+      const deepAssistRecoverySelection = selectDeepAssistRecoveryDimensions(
+        p1Base,
         dims,
-        phase1Payload: p1Base,
-        updateUC,
-        id,
         analysisMeta,
-        debugSession,
-        analysisMode,
-        researchSetup,
-      });
-    } catch (lowConfErr) {
-      appendAnalysisDebugEvent(debugSession, {
-        type: "low_conf_cycle_failed",
-        phase: "analyst_targeted",
-        attempt: "final",
-        error: lowConfErr.message || String(lowConfErr),
-      });
-      p1 = p1Base;
-    }
-    if (analysisMeta.lowConfidenceInitialCount > 0 && analysisMeta.lowConfidenceUpgradedCount === 0) {
+        getRuntime()?.limits || {}
+      );
+      analysisMeta.deepAssistRecoveryCandidates = deepAssistRecoverySelection.allCandidateIds.length;
+      analysisMeta.deepAssistRecoveryBudgetUnits = deepAssistRecoverySelection.budgetUnits;
+      analysisMeta.deepAssistRecoveryDroppedByBudget = deepAssistRecoverySelection.droppedByBudget;
+      analysisMeta.deepAssistRecoveryDiagnostics = deepAssistRecoverySelection.diagnostics;
+      analysisMeta.deepAssistRecoveryUpgraded = 0;
+      analysisMeta.deepAssistRecoveryValidatedLow = 0;
+      analysisMeta.deepAssistRecoveryTriggered = deepAssistRecoverySelection.candidateIds.length > 0;
+
+      if (deepAssistRecoverySelection.candidateIds.length) {
+        try {
+          p1 = await runLowConfidenceExtraCycle({
+            desc,
+            dims,
+            phase1Payload: p1Base,
+            updateUC,
+            id,
+            analysisMeta,
+            debugSession,
+            analysisMode,
+            researchSetup,
+            forcedCandidateIds: deepAssistRecoverySelection.candidateIds,
+            cycleLabel: "deep_assist_recovery",
+          });
+          analysisMeta.deepAssistRecoveryUpgraded = Number(analysisMeta.lowConfidenceUpgradedCount || 0);
+          analysisMeta.deepAssistRecoveryValidatedLow = Number(analysisMeta.lowConfidenceValidatedLowCount || 0);
+        } catch (lowConfErr) {
+          appendAnalysisDebugEvent(debugSession, {
+            type: "low_conf_cycle_failed",
+            phase: "analyst_targeted",
+            attempt: "deep_assist_recovery",
+            error: lowConfErr.message || String(lowConfErr),
+          });
+          analysisMeta.deepAssistRecoveryFailed = true;
+          p1 = p1Base;
+        }
+      } else {
+        appendAnalysisDebugEvent(debugSession, {
+          type: "phase_complete",
+          phase: "analyst_targeted",
+          attempt: "deep_assist_recovery_skipped",
+          note: "All Deep Assist dimensions met agreement/confidence/source thresholds.",
+        });
+      }
+    } else {
       try {
-        analysisMeta.lowConfidenceRefinementAttempted = true;
         p1 = await runLowConfidenceExtraCycle({
           desc,
           dims,
-          phase1Payload: p1,
+          phase1Payload: p1Base,
           updateUC,
           id,
           analysisMeta,
           debugSession,
           analysisMode,
           researchSetup,
+          cycleLabel: "native_targeted",
         });
-      } catch (lowConfRetryErr) {
-        analysisMeta.lowConfidenceRefinementFailed = true;
+      } catch (lowConfErr) {
         appendAnalysisDebugEvent(debugSession, {
-          type: "low_conf_refinement_failed",
+          type: "low_conf_cycle_failed",
           phase: "analyst_targeted",
-          attempt: "refinement",
-          error: lowConfRetryErr.message || String(lowConfRetryErr),
+          attempt: "final",
+          error: lowConfErr.message || String(lowConfErr),
         });
+        p1 = p1Base;
+      }
+      if (analysisMeta.lowConfidenceInitialCount > 0 && analysisMeta.lowConfidenceUpgradedCount === 0) {
+        try {
+          analysisMeta.lowConfidenceRefinementAttempted = true;
+          p1 = await runLowConfidenceExtraCycle({
+            desc,
+            dims,
+            phase1Payload: p1,
+            updateUC,
+            id,
+            analysisMeta,
+            debugSession,
+            analysisMode,
+            researchSetup,
+            cycleLabel: "native_targeted_refinement",
+          });
+        } catch (lowConfRetryErr) {
+          analysisMeta.lowConfidenceRefinementFailed = true;
+          appendAnalysisDebugEvent(debugSession, {
+            type: "low_conf_refinement_failed",
+            phase: "analyst_targeted",
+            attempt: "refinement",
+            error: lowConfRetryErr.message || String(lowConfRetryErr),
+          });
+        }
       }
     }
     p1.attributes = normalizeAttributesShape(p1?.attributes, desc, framingFields);
@@ -4899,6 +5500,93 @@ STRICT JSON RULES:
       });
     }
 
+    try {
+      updateUC(id, (u) => ({
+        ...u,
+        phase: "red_team",
+        finalScores: finalResponse,
+        analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+      }));
+      const redTeamPrompt = buildScorecardRedTeamPrompt(desc, dims, finalResponse, researchSetup);
+      const redTeamRes = await callCriticAPI(
+        [{ role: "user", content: redTeamPrompt }],
+        prompts.redTeam,
+        Math.max(2200, Math.min(4200, tokenLimits.critic)),
+        { liveSearch: false, includeMeta: true }
+      );
+      absorbCriticMeta(analysisMeta, redTeamRes.meta);
+      const redTeamParsed = parseWithDiagnostics(redTeamRes.text, {
+        phase: "red_team",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: redTeamPrompt,
+      }, debugSession);
+      const redTeamApplied = applyScorecardRedTeam(finalResponse, dims, redTeamParsed);
+      finalResponse = redTeamApplied.output;
+      analysisMeta.redTeamCallMade = true;
+      analysisMeta.redTeamHighSeverityCount = Number(redTeamApplied.highSeverityCount || 0);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "red_team_applied",
+        phase: "red_team",
+        attempt: "final",
+        highSeverityCount: analysisMeta.redTeamHighSeverityCount,
+      });
+    } catch (redTeamErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "red_team_failed",
+        phase: "red_team",
+        attempt: "final",
+        error: redTeamErr?.message || String(redTeamErr),
+      });
+    }
+
+    try {
+      updateUC(id, (u) => ({
+        ...u,
+        phase: "synthesizer",
+        finalScores: finalResponse,
+        analysisMeta: { ...(u.analysisMeta || {}), ...analysisMeta },
+      }));
+      const synthesizerPrompt = buildScorecardSynthesizerPrompt(desc, dims, finalResponse, analysisMeta, researchSetup);
+      const synthCall = await callSynthesizerAPI(
+        [{ role: "user", content: synthesizerPrompt }],
+        prompts.synthesizer,
+        Math.max(2200, Math.min(4200, tokenLimits.phase3Response)),
+        { liveSearch: false, includeMeta: true }
+      );
+      analysisMeta.synthesizerCallMade = true;
+      analysisMeta.synthesizerModel = modelSignatureFromOptions(synthCall.options);
+      absorbAnalystMeta(analysisMeta, synthCall.response?.meta);
+      const synthParsed = parseWithDiagnostics(synthCall.response?.text || synthCall.response, {
+        phase: "synthesizer",
+        attempt: "full",
+        useCaseId: id,
+        analysisMode,
+        prompt: synthesizerPrompt,
+      }, debugSession);
+      const synthesis = normalizeScorecardSynthesizerPayload(synthParsed);
+      finalResponse.executiveSummary = synthesis;
+      if (synthesis?.decisionImplication) {
+        finalResponse.conclusion = synthesis.decisionImplication;
+      }
+      appendAnalysisDebugEvent(debugSession, {
+        type: "synthesizer_applied",
+        phase: "synthesizer",
+        attempt: "final",
+        model: analysisMeta.synthesizerModel,
+      });
+    } catch (synthErr) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "synthesizer_failed",
+        phase: "synthesizer",
+        attempt: "final",
+        error: synthErr?.message || String(synthErr),
+      });
+    }
+
+    analysisMeta.sourceUniverse = buildScorecardSourceUniverse(finalResponse, dims);
+
     appendAnalysisDebugEvent(debugSession, {
       type: "phase_complete",
       phase: "finalizing",
@@ -5176,6 +5864,16 @@ function createInitialUseCaseState(input) {
       targetedRetrievalNiche: "",
       targetedRetrievalAliases: [],
       targetedDimensionDiagnostics: [],
+      counterfactualQueriesGenerated: 0,
+      counterfactualFindingsUsed: 0,
+      deepAssistRecoveryTriggered: false,
+      deepAssistRecoveryCandidates: 0,
+      deepAssistRecoveryBudgetUnits: 0,
+      deepAssistRecoveryDroppedByBudget: 0,
+      deepAssistRecoveryUpgraded: 0,
+      deepAssistRecoveryValidatedLow: 0,
+      deepAssistRecoveryFailed: false,
+      deepAssistRecoveryDiagnostics: [],
       sourceVerificationChecked: 0,
       sourceVerificationVerified: 0,
       sourceVerificationNotFound: 0,
@@ -5222,6 +5920,11 @@ function createInitialUseCaseState(input) {
       verificationConfidenceCaps: 0,
       urlCoverageConfidenceCaps: 0,
       zeroSourceConfidenceCaps: 0,
+      sourceUniverse: emptySourceUniverseSummary(),
+      redTeamCallMade: false,
+      redTeamHighSeverityCount: 0,
+      synthesizerCallMade: false,
+      synthesizerModel: "",
       providerContributions: {},
       decisionContext: researchSetup.decisionContext,
       userRoleContext: researchSetup.userRoleContext,

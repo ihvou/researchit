@@ -6,10 +6,67 @@ import ConfidenceBadge from "./ConfidenceBadge";
 import ArgumentList from "./ArgumentList";
 import ResearchBriefBlock from "./ResearchBriefBlock";
 
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
+function severityTone(value) {
+  const severity = cleanText(value).toLowerCase();
+  if (severity === "high") return "#7b2a2a";
+  if (severity === "medium") return "#7a611a";
+  return "#4b4b48";
+}
+
 export default function DimensionsTab({ uc, dims }) {
+  const dimensionList = Array.isArray(dims) ? dims : [];
+  const redTeam = uc?.finalScores?.redTeam || {};
+  const redTeamDimensions = redTeam?.dimensions && typeof redTeam.dimensions === "object" ? redTeam.dimensions : {};
+  const redTeamRows = dimensionList
+    .map((dim) => ({
+      dim,
+      entry: redTeamDimensions?.[dim.id] || null,
+    }))
+    .filter(({ entry }) => cleanText(entry?.threat) || cleanText(entry?.missedRisk));
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {dims.map(d => {
+      {(cleanText(redTeam?.redTeamVerdict) || redTeamRows.length) ? (
+        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            Red Team
+          </div>
+          {cleanText(redTeam?.redTeamVerdict) ? (
+            <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.6 }}>
+              {redTeam.redTeamVerdict}
+            </div>
+          ) : null}
+          {redTeamRows.length ? (
+            <div style={{ display: "grid", gap: 6 }}>
+              {redTeamRows.map(({ dim, entry }) => (
+                <div key={`red-team-${dim.id}`} style={{ border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, padding: "7px 9px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-text)" }}>{dim.label}</span>
+                    <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: severityTone(entry?.severityIfWrong), border: "1px solid var(--ck-line)", padding: "1px 5px" }}>
+                      {cleanText(entry?.severityIfWrong) || "medium"}
+                    </span>
+                  </div>
+                  {cleanText(entry?.threat) ? (
+                    <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+                      <strong style={{ color: "var(--ck-text)" }}>Threat:</strong> {entry.threat}
+                    </div>
+                  ) : null}
+                  {cleanText(entry?.missedRisk) ? (
+                    <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+                      <strong style={{ color: "var(--ck-text)" }}>Missed risk:</strong> {entry.missedRisk}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {dimensionList.map((d, idx) => {
         const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
         const initData = view.initial;
         const revised = view.effectiveScore != null && initData?.score != null && view.effectiveScore !== initData.score;
@@ -54,6 +111,8 @@ export default function DimensionsTab({ uc, dims }) {
               full={view.full}
               sources={view.sources}
               risks={view.risks}
+              sourceUniverse={uc?.analysisMeta?.sourceUniverse}
+              showSourceUniverse={idx === 0}
             />
           </div>
         );
