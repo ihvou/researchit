@@ -88,7 +88,9 @@ Scorecard pipeline (quality-first):
 5. Critic audit pass
 6. Analyst final response pass
 7. Consistency check pass + decision/confidence/polarity post-guards
-8. Discovery generation + candidate pre-validation
+8. Red Team pass (strongest counter-case, risk-only)
+9. Synthesizer pass (independent executive synthesis from structured signals)
+10. Discovery generation + candidate pre-validation
 
 Matrix pipeline:
 1. Plan + input resolution (decision question, subject set)
@@ -98,9 +100,14 @@ Matrix pipeline:
 5. Targeted low-confidence cell recovery
 6. Critic matrix audit
 7. Analyst response (defend or concede contested cells)
-8. Matrix summary (+ optional matrix discovery suggestions)
+8. Cross-subject consistency audit
+9. Derived attributes (optional)
+10. Red Team matrix pass (risk-only)
+11. Synthesizer matrix pass
+12. Matrix summary (+ optional matrix discovery suggestions)
 
 Source verification runs after source-producing phases in both scorecard and matrix flows. Cited URLs are checked with `fetchSource`; unverified claims can reduce confidence.
+Each source is also classified into a UI/export taxonomy: `cited`, `corroborating`, `unverified`, `excluded_marketing`, `excluded_stale`, with aggregate counts in `analysisMeta.sourceUniverse`.
 Run diagnostics are captured in `analysisMeta` and surfaced in Progress UI + exports (HTML/PDF/Markdown).
 
 Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals. Matrix follow-ups are supported at cell level (`subjectId` × `attributeId`) in addition to scorecard dimension threads.
@@ -209,7 +216,9 @@ Default system prompts live in:
     analyst: "...",
     critic: "...",
     analystResponse: "...",
-    followUp: "..."
+    followUp: "...",
+    redTeam: "...",      // optional
+    synthesizer: "..."   // optional
   },
 
   models: {
@@ -225,6 +234,10 @@ Default system prompts live in:
       webSearchModel: "claude-sonnet-4-20250514", // optional
       baseUrl: "https://api.anthropic.com" // optional
     },
+    synthesizer: {
+      provider: "openai",
+      model: "gpt-5.4-mini" // optional; falls back to critic model if omitted
+    },
     retrieval: {
       provider: "gemini",
       model: "gemini-2.5-flash",
@@ -234,6 +247,8 @@ Default system prompts live in:
 
   limits: {
     maxSourcesPerDim: 14,
+    targetedBudgetUnits: 8,
+    counterfactualQueriesPerDim: 2,
     discoveryMaxCandidates: 5,
     matrixCoverageSLA: {
       minSourcesPerCell: 2,

@@ -105,7 +105,7 @@ Transport (dependency-injected callFn)
   ↓
 App's callFn → fetch("/api/analyst" | "/api/critic" | "/api/fetch-source")
   ↓
-Serverless route (`analyst` / `critic`) → engine's callOpenAI() → OpenAI API
+Serverless route (`analyst` / `critic`) → provider router (OpenAI / Anthropic / Gemini / OpenAI-compatible)
   ↓
 Results flow back through callbacks.onProgress → React state → UI
 ```
@@ -126,14 +126,16 @@ Workspace state sync → /api/account/researches (load/upsert/delete)
 
 ## Analysis Pipeline
 
-### Scorecard (8 phases, evidence-mode aware)
+### Scorecard (phase graph, evidence-mode aware)
 1. **Phase 1 evidence collection**
    - Native: analyst baseline + analyst web pass + reconcile
    - Deep Assist: multi-provider deep collection + merge + provider agreement synthesis
 2. **Targeted low-confidence cycle** — query plan → web harvest → re-score for weak dimensions
-5. **Critic audit** — independent critical review of all findings
-6. **Analyst final response** — address critic challenges with evidence
-7. **Consistency check** — cross-dimension coherence validation + decision/confidence/polarity post-guards
+3. **Critic audit** — independent critical review of all findings
+4. **Analyst final response** — address critic challenges with evidence
+5. **Consistency check** — cross-dimension coherence validation + decision/confidence/polarity post-guards
+6. **Red Team pass** — strongest counter-case + missed-risk pressure (risk context only; no score mutation)
+7. **Synthesizer pass** — model-independent executive summary from structured signals
 8. **Discovery generation** — related opportunities + candidate pre-validation
 
 ### Matrix (evidence-mode aware)
@@ -141,13 +143,26 @@ Workspace state sync → /api/account/researches (load/upsert/delete)
 2. **Phase 1 evidence collection**
    - Native: baseline matrix pass + web matrix pass + reconcile
    - Deep Assist: multi-provider matrix collection + merge + provider agreement synthesis
-5. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
-6. **Critic matrix audit** — flag weak/contradictory cells
-7. **Analyst response** — defend or concede each contested cell
-8. **Summary** — finalize matrix outputs (executive synthesis + optional discovery suggestions)
+3. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
+4. **Critic matrix audit** — flag weak/contradictory cells
+5. **Analyst response** — defend or concede each contested cell
+6. **Cross-subject consistency audit** — detect contradictions and apply conservative confidence adjustments
+7. **Derived attributes (optional)** — computed columns after core evidence phases
+8. **Red Team pass** — per-cell counter-case and missed-risk pressure (risk context only)
+9. **Synthesizer pass** — independent matrix executive synthesis
+10. **Summary/discovery** — subject summaries, cross-matrix notes, and optional missing-coverage discovery
 
-### Source verification
-After source-producing passes, cited URLs are checked via `fetchSource`. Sources are tagged `verified_in_page`, `not_found_in_page`, or `fetch_failed`. Confidence can be downgraded when verification coverage is weak.
+### Source verification and taxonomy
+After source-producing passes, cited URLs are checked via `fetchSource`. Raw verification signals include `verified_in_page`, `not_found_in_page`, `fetch_failed`, `invalid_url`, and `name_only_in_page`.
+
+Engine derives user-facing source taxonomy:
+- `cited`
+- `corroborating`
+- `unverified`
+- `excluded_marketing`
+- `excluded_stale`
+
+Aggregated source-quality totals are emitted as `analysisMeta.sourceUniverse` and consumed by UI/exports.
 
 ### Run diagnostics surface
 Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, stale-evidence ratio, provider contribution, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
@@ -203,15 +218,17 @@ Supports both:
   subjects: { label, inputPrompt, examples, minCount, maxCount },
   attributes: [{ id, label, brief, derived? }],
 
-  relatedDiscovery,      // boolean — enables phase 8
+  relatedDiscovery,      // boolean — enables discovery phase
 
   prompts: {             // optional overrides; engine has generic defaults
-    analyst, critic, analystResponse, followUp
+    analyst, critic, analystResponse, followUp, redTeam, synthesizer
   },
 
   models: {
     analyst: { provider, model, webSearchModel?, baseUrl? },
-    critic:  { provider, model, webSearchModel?, baseUrl? }
+    critic:  { provider, model, webSearchModel?, baseUrl? },
+    synthesizer: { provider, model, webSearchModel?, baseUrl? }, // optional; falls back to critic
+    retrieval: { provider, model, webSearchModel?, baseUrl? }    // optional capability override
   },
 
   deepAssist: {
@@ -225,6 +242,8 @@ Supports both:
 
   limits: {
     maxSourcesPerDim,
+    targetedBudgetUnits,               // optional low-confidence budget
+    counterfactualQueriesPerDim,       // default 2
     discoveryMaxCandidates,
     matrixCoverageSLA: {
       minSourcesPerCell, minSubjectEvidenceCoverage, maxUnresolvedCellsRatio, maxUnresolvedCells?

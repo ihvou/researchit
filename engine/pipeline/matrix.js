@@ -2658,11 +2658,26 @@ Return JSON only:
 function buildMatrixRedTeamPrompt({ rawInput, decisionQuestion, matrix, maxCells = 24, researchSetup = {} }) {
   const setupContext = buildResearchSetupContextBlock(researchSetup);
   const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const providerAgreementPriority = (cell) => {
+    const agreement = cleanText(cell?.providerAgreement).toLowerCase();
+    if (agreement === "contradict") return 0;
+    if (agreement === "mixed") return 1;
+    if (agreement === "support") return 2;
+    if (agreement === "none") return 3;
+    return 4;
+  };
+  const stableCellKey = (cell) => [
+    cleanText(cell?.subjectId).toLowerCase(),
+    cleanText(cell?.attributeId).toLowerCase(),
+    cleanText(cell?.value).toLowerCase(),
+  ].join("::");
   const prioritized = [...cells]
     .sort((a, b) => {
-      const rankDelta = confidenceRank(normalizeConfidence(a?.confidence)) - confidenceRank(normalizeConfidence(b?.confidence));
-      if (rankDelta !== 0) return rankDelta;
-      return cleanText(b?.providerAgreement).toLowerCase() === "contradict" ? 1 : 0;
+      const confidenceDelta = confidenceRank(normalizeConfidence(a?.confidence)) - confidenceRank(normalizeConfidence(b?.confidence));
+      if (confidenceDelta !== 0) return confidenceDelta;
+      const agreementDelta = providerAgreementPriority(a) - providerAgreementPriority(b);
+      if (agreementDelta !== 0) return agreementDelta;
+      return stableCellKey(a).localeCompare(stableCellKey(b));
     })
     .slice(0, Math.max(1, maxCells))
     .map((cell) => ({
