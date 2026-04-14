@@ -46,7 +46,7 @@ It consumes the engine package via `"@researchit/engine": "file:../engine"`.
 ### engine/
 `engine/` owns research behavior and core contracts:
 - pipelines (`engine/pipeline/analysis.js`, `engine/pipeline/followUp.js`)
-- provider adapter (`engine/providers/openai.js`)
+- base OpenAI adapter (`engine/providers/openai.js`)
 - transport abstraction (`engine/lib/transport.js`)
 - scoring, rubric, confidence, serialization, debug primitives (`engine/lib/*`)
 - default dimensions and prompts (`engine/configs/*`, `engine/prompts/*`)
@@ -69,8 +69,10 @@ flowchart LR
   C["ResearchConfig (configs/*.js)"] --> E
   E --> T["Transport (engine/lib/transport.js)"]
   T --> A["Serverless API (app/api/*)"]
-  A --> P["OpenAI Provider Adapter (engine/providers/openai.js)"]
-  P --> O["OpenAI APIs (Responses + Chat Completions)"]
+  A --> R["Provider Router (OpenAI / Anthropic / Gemini)"]
+  R --> O["OpenAI APIs"]
+  R --> N["Anthropic Messages API"]
+  R --> G["Gemini API (grounded search)"]
   T --> F["Source Fetch Route (/api/fetch-source)"]
   E --> D["Progress + Debug Events"]
   D --> UI
@@ -218,10 +220,15 @@ Default system prompts live in:
       baseUrl: "https://api.openai.com"  // optional
     },
     critic: {
-      provider: "openai",
-      model: "gpt-5.4",
-      webSearchModel: "gpt-5.4",        // optional
-      baseUrl: "https://api.openai.com" // optional
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      webSearchModel: "claude-sonnet-4-20250514", // optional
+      baseUrl: "https://api.anthropic.com" // optional
+    },
+    retrieval: {
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      webSearchModel: "gemini-2.5-flash"
     }
   },
 
@@ -288,7 +295,7 @@ OPENAI_API_KEY=sk-...
 
 Optional provider/model/key overrides (env-first):
 ```bash
-RESEARCHIT_PROVIDER=openai                  # or openai_compatible
+RESEARCHIT_PROVIDER=openai                  # or anthropic / gemini / openai_compatible
 RESEARCHIT_API_KEY=...                      # global provider key override
 RESEARCHIT_BASE_URL=https://api.openai.com # or your OpenAI-compatible endpoint
 
@@ -298,11 +305,15 @@ RESEARCHIT_ANALYST_MODEL=gpt-5.4-mini
 RESEARCHIT_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
 RESEARCHIT_ANALYST_BASE_URL=https://api.openai.com
 
-RESEARCHIT_CRITIC_PROVIDER=openai
+RESEARCHIT_CRITIC_PROVIDER=anthropic
 RESEARCHIT_CRITIC_API_KEY=...
-RESEARCHIT_CRITIC_MODEL=gpt-5.4
-RESEARCHIT_CRITIC_WEBSEARCH_MODEL=gpt-5.4
-RESEARCHIT_CRITIC_BASE_URL=https://api.openai.com
+RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-20250514
+RESEARCHIT_CRITIC_WEBSEARCH_MODEL=claude-sonnet-4-20250514
+RESEARCHIT_CRITIC_BASE_URL=https://api.anthropic.com
+
+# Provider-specific keys (recommended for quality-first routing)
+ANTHROPIC_API_KEY=...
+GEMINI_API_KEY=...
 ```
 
 OpenAI-prefixed aliases are also supported for compatibility:
@@ -347,6 +358,17 @@ UPSTASH_REDIS_REST_TOKEN=...
 ```
 
 Without KV env vars, account data falls back to in-memory storage in local/dev only; production auth/account APIs fail closed until KV is configured.
+
+Default routing behavior:
+- Native scorecard/matrix:
+  - Analyst synthesis/scoring -> OpenAI (default model)
+  - Retrieval/live-search-heavy phases -> Gemini (with grounded search where available), fallback mesh enabled
+  - Critic -> Anthropic (default model), fallback mesh enabled
+- Deep Assist:
+  - ChatGPT lane -> OpenAI
+  - Claude lane -> Anthropic
+  - Gemini lane -> Gemini
+  - Provider outputs are merged, then shared critic/verification/scoring layers run.
 
 Resolution precedence for provider/model/base URL is:
 1. Role-specific `RESEARCHIT_*` env vars

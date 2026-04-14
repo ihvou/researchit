@@ -1,8 +1,8 @@
-import { callOpenAI } from "@researchit/engine";
 import {
   resolveRoleProviderCandidates,
   missingApiKeyError,
 } from "./providerConfig.js";
+import { callProviderModel } from "./providerCalls.js";
 
 const CRITIC_DEFAULT_MODEL = "gpt-5.4";
 
@@ -43,7 +43,8 @@ export default async function handler(req, res) {
   for (let idx = 0; idx < candidates.length; idx += 1) {
     const resolved = candidates[idx];
     try {
-      const result = await callOpenAI({
+      const result = await callProviderModel({
+        providerId: resolved.providerId,
         apiKey: resolved.apiKey,
         model: resolved.model,
         webSearchModel: resolved.webSearchModel,
@@ -57,7 +58,7 @@ export default async function handler(req, res) {
         ...result,
         meta: {
           ...(result?.meta || {}),
-          providerId: resolved.providerId,
+          providerId: result?.meta?.providerId || resolved.providerId,
           providerFallbackUsed: idx > 0,
           providerAttemptCount: idx + 1,
         },

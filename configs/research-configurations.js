@@ -7,14 +7,20 @@ import {
 
 const SHARED_MODELS = {
   analyst: {
+    provider: "openai",
     model: "gpt-5.4-mini",
     webSearchModel: "gpt-5.4-mini",
   },
   critic: {
-    model: "gpt-5.4",
-    webSearchModel: "gpt-5.4",
+    provider: "anthropic",
+    model: "claude-sonnet-4-20250514",
+    webSearchModel: "claude-sonnet-4-20250514",
   },
-  retrieval: {},
+  retrieval: {
+    provider: "gemini",
+    model: "gemini-2.5-flash",
+    webSearchModel: "gemini-2.5-flash",
+  },
 };
 
 const SHARED_DEEP_ASSIST = {
@@ -34,16 +40,16 @@ const SHARED_DEEP_ASSIST = {
     },
     claude: {
       analyst: {
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        webSearchModel: "gpt-5.4-mini",
+        provider: "anthropic",
+        model: "claude-sonnet-4-20250514",
+        webSearchModel: "claude-sonnet-4-20250514",
       },
     },
     gemini: {
       analyst: {
-        provider: "openai",
-        model: "gpt-4.1",
-        webSearchModel: "gpt-4.1",
+        provider: "gemini",
+        model: "gemini-2.5-pro",
+        webSearchModel: "gemini-2.5-pro",
       },
     },
   },

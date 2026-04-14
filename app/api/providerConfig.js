@@ -1,5 +1,6 @@
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_PROVIDER_PREFERENCE = {
   analyst: ["openai", "anthropic", "gemini"],
   critic: ["anthropic", "openai", "gemini"],
@@ -18,10 +19,6 @@ function normalizeProvider(value) {
   if (raw === "gemini" || raw === "google") return "gemini";
   if (raw === "openai-compatible" || raw === "openai_compatible") return "openai_compatible";
   return "openai_compatible";
-}
-
-function normalizeProviderForTransport(provider) {
-  return provider === "openai" ? "openai" : "openai_compatible";
 }
 
 function rolePrefix(role) {
@@ -129,6 +126,7 @@ function resolveWebSearchModel(role, provider, requestedWebSearchModel, resolved
 
 function resolveProviderDefaultBaseUrl(provider) {
   if (provider === "openai") return OPENAI_BASE_URL;
+  if (provider === "anthropic") return ANTHROPIC_BASE_URL;
   if (provider === "gemini") return GEMINI_OPENAI_COMPAT_BASE_URL;
   return "";
 }
@@ -178,7 +176,7 @@ export function resolveRoleProviderCandidates({
       const baseUrl = resolveBaseUrl(role, provider, requestedBaseUrl);
       return {
         providerId: provider,
-        provider: normalizeProviderForTransport(provider),
+        provider,
         model,
         webSearchModel: resolveWebSearchModel(role, provider, requestedWebSearchModel, model),
         baseUrl,
@@ -211,7 +209,7 @@ export function resolveRoleProviderConfig({
   const model = resolveModel(role, fallbackProvider, requestedModel, defaultModel);
   return {
     providerId: fallbackProvider,
-    provider: normalizeProviderForTransport(fallbackProvider),
+    provider: fallbackProvider,
     model,
     webSearchModel: resolveWebSearchModel(role, fallbackProvider, requestedWebSearchModel, model),
     baseUrl: resolveBaseUrl(role, fallbackProvider, requestedBaseUrl),

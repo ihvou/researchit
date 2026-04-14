@@ -59,6 +59,129 @@ function markDegraded(analysisMeta = {}, reasonCode = "quality_guard", detail = 
   if (!already) analysisMeta.degradedReasons.push(entry);
 }
 
+function withStepTimeout(stepLabel, timeoutMs, work) {
+  const limit = Number(timeoutMs);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return Promise.resolve().then(work);
+  }
+  let timer = null;
+  return Promise.race([
+    Promise.resolve().then(work),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`${stepLabel} timed out after ${Math.round(limit)}ms`);
+        err.code = "STEP_TIMEOUT";
+        err.retryable = false;
+        reject(err);
+      }, limit);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function classifyDeepAssistGuardrailFailure(err) {
+  const message = cleanString(err?.message || err);
+  const lower = message.toLowerCase();
+  if (
+    err?.code === "TIMEOUT"
+    || err?.code === "STEP_TIMEOUT"
+    || lower.includes("timed out")
+    || lower.includes("timeout")
+  ) {
+    return {
+      code: "deep_assist_step_timeout",
+      detail: message || "Deep Assist provider step timed out.",
+    };
+  }
+  if (
+    Number(err?.attempts || 0) > 1
+    || /\(attempt\s+\d+\/\d+\)/i.test(message)
+    || lower.includes("rate limit")
+    || lower.includes("retry")
+  ) {
+    return {
+      code: "deep_assist_retry_exhausted",
+      detail: message || "Deep Assist provider retries were exhausted.",
+    };
+  }
+  if (
+    lower.includes("json parse")
+    || lower.includes("valid json")
+    || lower.includes("unexpected token")
+    || lower.includes("unexpected non-whitespace")
+  ) {
+    return {
+      code: "deep_assist_parse_failed",
+      detail: message || "Deep Assist provider response parse failed.",
+    };
+  }
+  return {
+    code: "deep_assist_provider_failed",
+    detail: message || "Deep Assist provider step failed.",
+  };
+}
+
+function trackSafetyGuardrail(analysisMeta, failure, providerId = "") {
+  if (!analysisMeta || typeof analysisMeta !== "object") return;
+  const normalizedFailure = failure && typeof failure === "object" ? failure : {};
+  const code = cleanString(normalizedFailure.code) || "deep_assist_provider_failed";
+  const detail = cleanString(normalizedFailure.detail);
+  const provider = cleanString(providerId);
+  const guardrails = analysisMeta.safetyGuardrails && typeof analysisMeta.safetyGuardrails === "object"
+    ? analysisMeta.safetyGuardrails
+    : {
+      triggered: false,
+      totalEvents: 0,
+      timeoutEvents: 0,
+      retryExhaustedEvents: 0,
+      parseFailureEvents: 0,
+      providerFailureEvents: 0,
+      events: [],
+    };
+  guardrails.triggered = true;
+  guardrails.totalEvents += 1;
+  if (code === "deep_assist_step_timeout") guardrails.timeoutEvents += 1;
+  else if (code === "deep_assist_retry_exhausted") guardrails.retryExhaustedEvents += 1;
+  else if (code === "deep_assist_parse_failed") guardrails.parseFailureEvents += 1;
+  else guardrails.providerFailureEvents += 1;
+  guardrails.events = Array.isArray(guardrails.events) ? guardrails.events : [];
+  const nextEvent = { code, providerId: provider, detail };
+  const duplicate = guardrails.events.some((event) => (
+    event?.code === nextEvent.code
+    && event?.providerId === nextEvent.providerId
+    && event?.detail === nextEvent.detail
+  ));
+  if (!duplicate) {
+    guardrails.events.push(nextEvent);
+    if (guardrails.events.length > 30) guardrails.events = guardrails.events.slice(-30);
+  }
+  analysisMeta.safetyGuardrails = guardrails;
+}
+
+function setCompletionState(analysisMeta = {}, runStatus = "failed", failureCode = "analysis_failed", failureDetail = "") {
+  ensureDegradedMeta(analysisMeta);
+  if (runStatus !== "complete") {
+    if (failureCode) {
+      markDegraded(
+        analysisMeta,
+        failureCode,
+        cleanString(failureDetail) || "Analysis did not reach a completed terminal state."
+      );
+    }
+    analysisMeta.completionState = "failed";
+  } else if (analysisMeta.qualityGrade === "degraded" || (analysisMeta.degradedReasons || []).length) {
+    analysisMeta.completionState = "complete_with_gaps";
+  } else {
+    analysisMeta.completionState = "complete";
+  }
+  analysisMeta.terminalReasonCodes = [...new Set(
+    (Array.isArray(analysisMeta.degradedReasons) ? analysisMeta.degradedReasons : [])
+      .map((item) => cleanString(item?.code))
+      .filter(Boolean)
+  )];
+}
+
 function normalizeDeepAssistOptions(raw = {}) {
   const input = raw && typeof raw === "object" ? raw : {};
   const providers = Array.isArray(input.providers)
@@ -3451,6 +3574,10 @@ async function runDeepAssistPhase1(
       const label = deepAssistProviderLabel(providerId);
       const passLabel = `deep_assist_${providerId}`;
       const requestOptions = resolveDeepAssistProviderRequestOptions(providerId, "analyst", deepAssistOptions);
+      const stepTimeoutMs = Math.max(
+        40000,
+        (Number(requestOptions?.timeoutMs) || deepAssistOptions.maxWaitMs || 300000) * 2 + 15000
+      );
       const startedAt = Date.now();
       const providerMeta = {
         liveSearchUsed: false,
@@ -3458,30 +3585,34 @@ async function runDeepAssistPhase1(
         liveSearchFallbackReason: null,
       };
       try {
-        const payload = await runAnalystPass({
-          evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
+        const payload = await withStepTimeout(
+          `${label} deep assist provider step`,
+          stepTimeoutMs,
+          () => runAnalystPass({
+            evidencePromptBuilder: (condensed) => buildPhase1EvidencePrompt(desc, dims, {
+              liveSearch: true,
+              condensed,
+              inputSpec,
+              framingFields,
+              researchSetup,
+            }),
+            scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
+              condensed,
+              passLabel: `${label} deep assist pass`,
+              framingFields,
+              researchSetup,
+            }),
+            dims,
+            analysisMeta: providerMeta,
+            debugContext,
+            debugSession,
             liveSearch: true,
-            condensed,
-            inputSpec,
-            framingFields,
-            researchSetup,
-          }),
-          scoringPromptBuilder: (evidence, condensed) => buildPhase1ScoringPrompt(desc, dims, evidence, {
-            condensed,
-            passLabel: `${label} deep assist pass`,
-            framingFields,
-            researchSetup,
-          }),
-          dims,
-          analysisMeta: providerMeta,
-          debugContext,
-          debugSession,
-          liveSearch: true,
-          evidenceMaxTokens,
-          scoringMaxTokens,
-          passLabel,
-          requestOptions,
-        });
+            evidenceMaxTokens,
+            scoringMaxTokens,
+            passLabel,
+            requestOptions,
+          })
+        );
         const durationMs = Math.max(0, Date.now() - startedAt);
         absorbAnalystMeta(analysisMeta, providerMeta);
         const webSearchCalls = Number(providerMeta.webSearchCalls || 0);
@@ -3503,11 +3634,14 @@ async function runDeepAssistPhase1(
       } catch (err) {
         const durationMs = Math.max(0, Date.now() - startedAt);
         absorbAnalystMeta(analysisMeta, providerMeta);
+        const failure = classifyDeepAssistGuardrailFailure(err);
+        trackSafetyGuardrail(analysisMeta, failure, providerId);
         appendAnalysisDebugEvent(debugSession, {
           type: "deep_assist_provider_failed",
           phase: "deep_assist_collect",
           attempt: providerId,
           durationMs,
+          reasonCode: failure.code,
           error: err?.message || String(err),
         });
         return {
@@ -3517,6 +3651,7 @@ async function runDeepAssistPhase1(
           durationMs,
           webSearchCalls: Number(providerMeta.webSearchCalls || 0),
           error: err?.message || String(err),
+          failureCode: failure.code,
           payload: null,
         };
       }
@@ -3540,6 +3675,28 @@ async function runDeepAssistPhase1(
     status: run.status,
     webSearchCalls: run.webSearchCalls,
   }));
+
+  const failedRuns = providerRuns.filter((run) => run.status !== "ok");
+  if (failedRuns.length > 0) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_provider_partial_failure",
+      `${failedRuns.length}/${providerRuns.length} Deep Assist provider passes failed.`
+    );
+    const failureCounts = failedRuns.reduce((acc, run) => {
+      const key = cleanString(run.failureCode) || "deep_assist_provider_failed";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    Object.entries(failureCounts).forEach(([code, count]) => {
+      if (!count) return;
+      markDegraded(
+        analysisMeta,
+        code,
+        `${count} Deep Assist provider failure(s) matched ${code}.`
+      );
+    });
+  }
 
   const successfulRuns = providerRuns.filter((run) => run.status === "ok" && run.payload);
   if (!successfulRuns.length) {
@@ -4062,6 +4219,17 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     hybridReconcileRetryDiagnostics: null,
     qualityGrade: "standard",
     degradedReasons: [],
+    safetyGuardrails: {
+      triggered: false,
+      totalEvents: 0,
+      timeoutEvents: 0,
+      retryExhaustedEvents: 0,
+      parseFailureEvents: 0,
+      providerFailureEvents: 0,
+      events: [],
+    },
+    completionState: "running",
+    terminalReasonCodes: [],
     deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
     deepAssistProvidersSucceeded: 0,
     deepAssistProvidersFailed: 0,
@@ -4897,6 +5065,7 @@ STRICT JSON RULES:
         { provider: "discovery", webSearchCalls: Number(analysisMeta.discoveryWebSearchCalls || 0) },
       ],
     };
+    setCompletionState(analysisMeta, "complete");
 
     updateUC(id, (u) => ({
       ...u,
@@ -4910,6 +5079,12 @@ STRICT JSON RULES:
     runStatus = "complete";
   } catch (err) {
     runError = err;
+    setCompletionState(
+      analysisMeta,
+      "failed",
+      "scorecard_pipeline_failed",
+      err?.message || String(err)
+    );
     appendAnalysisDebugEvent(debugSession, {
       type: "analysis_error",
       phase: "analysis",
@@ -5024,6 +5199,17 @@ function createInitialUseCaseState(input) {
       hybridReconcileRetryDiagnostics: null,
       qualityGrade: "standard",
       degradedReasons: [],
+      safetyGuardrails: {
+        triggered: false,
+        totalEvents: 0,
+        timeoutEvents: 0,
+        retryExhaustedEvents: 0,
+        parseFailureEvents: 0,
+        providerFailureEvents: 0,
+        events: [],
+      },
+      completionState: "running",
+      terminalReasonCodes: [],
       deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
       deepAssistProvidersSucceeded: 0,
       deepAssistProvidersFailed: 0,

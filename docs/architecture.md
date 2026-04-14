@@ -35,7 +35,7 @@ researchit/
 | Directory | Contents |
 |-----------|----------|
 | `pipeline/` | `analysis.js` (8-phase analysis), `followUp.js` (intent-classified follow-up) |
-| `providers/` | `openai.js` — provider adapter (message building, response parsing, web search, fallback chain) |
+| `providers/` | `openai.js` — base OpenAI adapter primitives used by host-side provider routing |
 | `lib/` | Pure utility modules: transport, scoring, confidence, rubric, arguments, dimensionView, followUpIntent, researchBrief, serialize, debug, json |
 | `prompts/` | `defaults.js` — generic default system prompts (overridable via ResearchConfig) |
 | `configs/` | `researchit-dimensions.js` — shipped default dimension set |
@@ -67,7 +67,7 @@ resolveMatrixResearchInput(input, config, callbacks, options)
 **Constraints:**
 - Imports engine only via `@researchit/engine` (resolved as `file:../engine`).
 - All LLM calls go through the engine's transport abstraction — app provides the `callFn` implementation.
-- `analyst.js` / `critic.js` are thin wrappers around engine's `callOpenAI`; `providerConfig.js` and `fetch-source.js` handle host-only concerns.
+- `analyst.js` / `critic.js` are thin wrappers around host-side provider routing (`providerCalls.js` + `providerConfig.js`); `fetch-source.js` remains host-only sanitization.
 - UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
 - Auth/session and account storage are host concerns implemented in `app/api/*`; engine remains unaware of user identity.
 - Production auth/account routes fail closed when required env config is missing (`RESEARCHIT_AUTH_SECRET`, `RESEARCHIT_PUBLIC_URL`, and KV REST credentials).

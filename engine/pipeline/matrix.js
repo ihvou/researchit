@@ -102,6 +102,129 @@ function markDegraded(analysisMeta = {}, reasonCode = "quality_guard", detail = 
   if (!exists) analysisMeta.degradedReasons.push(entry);
 }
 
+function withStepTimeout(stepLabel, timeoutMs, work) {
+  const limit = Number(timeoutMs);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return Promise.resolve().then(work);
+  }
+  let timer = null;
+  return Promise.race([
+    Promise.resolve().then(work),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`${stepLabel} timed out after ${Math.round(limit)}ms`);
+        err.code = "STEP_TIMEOUT";
+        err.retryable = false;
+        reject(err);
+      }, limit);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function classifyDeepAssistGuardrailFailure(err) {
+  const message = cleanText(err?.message || err);
+  const lower = message.toLowerCase();
+  if (
+    err?.code === "TIMEOUT"
+    || err?.code === "STEP_TIMEOUT"
+    || lower.includes("timed out")
+    || lower.includes("timeout")
+  ) {
+    return {
+      code: "deep_assist_step_timeout",
+      detail: message || "Deep Assist provider step timed out.",
+    };
+  }
+  if (
+    Number(err?.attempts || 0) > 1
+    || /\(attempt\s+\d+\/\d+\)/i.test(message)
+    || lower.includes("rate limit")
+    || lower.includes("retry")
+  ) {
+    return {
+      code: "deep_assist_retry_exhausted",
+      detail: message || "Deep Assist provider retries were exhausted.",
+    };
+  }
+  if (
+    lower.includes("json parse")
+    || lower.includes("valid json")
+    || lower.includes("unexpected token")
+    || lower.includes("unexpected non-whitespace")
+  ) {
+    return {
+      code: "deep_assist_parse_failed",
+      detail: message || "Deep Assist provider response parse failed.",
+    };
+  }
+  return {
+    code: "deep_assist_provider_failed",
+    detail: message || "Deep Assist provider step failed.",
+  };
+}
+
+function trackSafetyGuardrail(analysisMeta, failure, providerId = "") {
+  if (!analysisMeta || typeof analysisMeta !== "object") return;
+  const normalizedFailure = failure && typeof failure === "object" ? failure : {};
+  const code = cleanText(normalizedFailure.code) || "deep_assist_provider_failed";
+  const detail = cleanText(normalizedFailure.detail);
+  const provider = cleanText(providerId);
+  const guardrails = analysisMeta.safetyGuardrails && typeof analysisMeta.safetyGuardrails === "object"
+    ? analysisMeta.safetyGuardrails
+    : {
+      triggered: false,
+      totalEvents: 0,
+      timeoutEvents: 0,
+      retryExhaustedEvents: 0,
+      parseFailureEvents: 0,
+      providerFailureEvents: 0,
+      events: [],
+    };
+  guardrails.triggered = true;
+  guardrails.totalEvents += 1;
+  if (code === "deep_assist_step_timeout") guardrails.timeoutEvents += 1;
+  else if (code === "deep_assist_retry_exhausted") guardrails.retryExhaustedEvents += 1;
+  else if (code === "deep_assist_parse_failed") guardrails.parseFailureEvents += 1;
+  else guardrails.providerFailureEvents += 1;
+  guardrails.events = Array.isArray(guardrails.events) ? guardrails.events : [];
+  const nextEvent = { code, providerId: provider, detail };
+  const duplicate = guardrails.events.some((event) => (
+    event?.code === nextEvent.code
+    && event?.providerId === nextEvent.providerId
+    && event?.detail === nextEvent.detail
+  ));
+  if (!duplicate) {
+    guardrails.events.push(nextEvent);
+    if (guardrails.events.length > 30) guardrails.events = guardrails.events.slice(-30);
+  }
+  analysisMeta.safetyGuardrails = guardrails;
+}
+
+function setCompletionState(analysisMeta = {}, runStatus = "failed", failureCode = "analysis_failed", failureDetail = "") {
+  ensureDegradedMeta(analysisMeta);
+  if (runStatus !== "complete") {
+    if (failureCode) {
+      markDegraded(
+        analysisMeta,
+        failureCode,
+        cleanText(failureDetail) || "Analysis did not reach a completed terminal state."
+      );
+    }
+    analysisMeta.completionState = "failed";
+  } else if (analysisMeta.qualityGrade === "degraded" || (analysisMeta.degradedReasons || []).length) {
+    analysisMeta.completionState = "complete_with_gaps";
+  } else {
+    analysisMeta.completionState = "complete";
+  }
+  analysisMeta.terminalReasonCodes = [...new Set(
+    (Array.isArray(analysisMeta.degradedReasons) ? analysisMeta.degradedReasons : [])
+      .map((item) => cleanText(item?.code))
+      .filter(Boolean)
+  )];
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -582,6 +705,17 @@ function createInitialState(input) {
       matrixCoverageSLA: null,
       qualityGrade: "standard",
       degradedReasons: [],
+      safetyGuardrails: {
+        triggered: false,
+        totalEvents: 0,
+        timeoutEvents: 0,
+        retryExhaustedEvents: 0,
+        parseFailureEvents: 0,
+        providerFailureEvents: 0,
+        events: [],
+      },
+      completionState: "running",
+      terminalReasonCodes: [],
       deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssist.providers.length : 0,
       deepAssistProvidersSucceeded: 0,
       deepAssistProvidersFailed: 0,
@@ -2008,6 +2142,7 @@ async function runMatrixDeepAssistEnrichment({
   researchSetup = {},
 }) {
   const deepAssist = normalizeDeepAssistOptions(state?.options?.deepAssist || {});
+  const stepTimeoutMs = Math.max(40000, Number(deepAssist?.maxWaitMs || 300000) + 15000);
   const providerRuns = await Promise.all(
     deepAssist.providers.map(async (providerId) => {
       const label = deepAssistProviderLabel(providerId);
@@ -2022,15 +2157,19 @@ async function runMatrixDeepAssistEnrichment({
           liveSearch: true,
           researchSetup,
         });
-        const response = await transport.callAnalyst(
-          [{ role: "user", content: prompt }],
-          analystPrompt,
-          Number(tokenLimits?.phase1Evidence) || 10000,
-          {
-            ...resolveDeepAssistProviderRequestOptions(config, providerId, "analyst", deepAssist),
-            liveSearch: true,
-            includeMeta: true,
-          }
+        const response = await withStepTimeout(
+          `${label} deep assist matrix provider step`,
+          stepTimeoutMs,
+          () => transport.callAnalyst(
+            [{ role: "user", content: prompt }],
+            analystPrompt,
+            Number(tokenLimits?.phase1Evidence) || 10000,
+            {
+              ...resolveDeepAssistProviderRequestOptions(config, providerId, "analyst", deepAssist),
+              liveSearch: true,
+              includeMeta: true,
+            }
+          )
         );
         const responseMeta = response?.meta && typeof response.meta === "object" ? response.meta : null;
         const parsed = extractJson(response?.text || response, {});
@@ -2054,10 +2193,13 @@ async function runMatrixDeepAssistEnrichment({
           meta: responseMeta,
         };
       } catch (err) {
+        const failure = classifyDeepAssistGuardrailFailure(err);
+        trackSafetyGuardrail(analysisMeta, failure, providerId);
         appendAnalysisDebugEvent(debugSession, {
           type: "deep_assist_provider_failed",
           phase: "matrix_deep_assist",
           attempt: providerId,
+          reasonCode: failure.code,
           error: err?.message || String(err),
         });
         return {
@@ -2067,6 +2209,7 @@ async function runMatrixDeepAssistEnrichment({
           durationMs: Math.max(0, Date.now() - startedAt),
           webSearchCalls: 0,
           error: err?.message || String(err),
+          failureCode: failure.code,
           matrix: null,
           meta: null,
         };
@@ -2097,6 +2240,28 @@ async function runMatrixDeepAssistEnrichment({
     status: run.status,
     webSearchCalls: run.webSearchCalls,
   }));
+
+  const failedRuns = providerRuns.filter((run) => run.status !== "ok");
+  if (failedRuns.length > 0) {
+    markDegraded(
+      analysisMeta,
+      "deep_assist_provider_partial_failure",
+      `${failedRuns.length}/${providerRuns.length} Deep Assist provider passes failed.`
+    );
+    const failureCounts = failedRuns.reduce((acc, run) => {
+      const key = cleanText(run.failureCode) || "deep_assist_provider_failed";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    Object.entries(failureCounts).forEach(([code, count]) => {
+      if (!count) return;
+      markDegraded(
+        analysisMeta,
+        code,
+        `${count} Deep Assist provider failure(s) matched ${code}.`
+      );
+    });
+  }
 
   const successful = providerRuns.filter((run) => run.status === "ok" && run.matrix);
   if (!successful.length) {
@@ -2525,6 +2690,21 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     userRoleContext: researchSetup.userRoleContext,
     qualityGrade: state.analysisMeta?.qualityGrade || "standard",
     degradedReasons: Array.isArray(state.analysisMeta?.degradedReasons) ? state.analysisMeta.degradedReasons : [],
+    safetyGuardrails: state.analysisMeta?.safetyGuardrails && typeof state.analysisMeta.safetyGuardrails === "object"
+      ? state.analysisMeta.safetyGuardrails
+      : {
+        triggered: false,
+        totalEvents: 0,
+        timeoutEvents: 0,
+        retryExhaustedEvents: 0,
+        parseFailureEvents: 0,
+        providerFailureEvents: 0,
+        events: [],
+      },
+    completionState: cleanText(state.analysisMeta?.completionState) || "running",
+    terminalReasonCodes: Array.isArray(state.analysisMeta?.terminalReasonCodes)
+      ? state.analysisMeta.terminalReasonCodes.map((item) => cleanText(item)).filter(Boolean)
+      : [],
     deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssistOptions.providers.length : Number(state.analysisMeta?.deepAssistProvidersRequested || 0),
   };
   const sourceFetchCache = new Map();
@@ -3405,6 +3585,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         { provider: "discovery", webSearchCalls: Number(state.analysisMeta.discoveryWebSearchCalls || 0) },
       ],
     };
+    setCompletionState(state.analysisMeta, "complete");
 
     if (relatedDiscovery) {
       update("matrix_discover", {});
@@ -3476,6 +3657,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     runStatus = "complete";
   } catch (err) {
     runError = err;
+    setCompletionState(
+      state.analysisMeta,
+      "failed",
+      "matrix_pipeline_failed",
+      err?.message || String(err)
+    );
     update("error", {
       status: "error",
       errorMsg: err?.message || "Matrix analysis failed.",
