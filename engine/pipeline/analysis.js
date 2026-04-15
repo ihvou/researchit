@@ -29,6 +29,19 @@ function normalizeResearchSetupContext(raw = {}) {
   };
 }
 
+function normalizeStrictQuality(value) {
+  const raw = cleanString(value).toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+}
+
+function failIfStrictQuality(strictQuality, message, code = "STRICT_QUALITY_ABORT") {
+  if (!strictQuality) return;
+  const err = new Error(cleanString(message) || "Strict quality mode aborted the run.");
+  err.code = code;
+  err.retryable = false;
+  throw err;
+}
+
 function buildResearchSetupContextBlock(researchSetup = {}) {
   const context = normalizeResearchSetupContext(researchSetup);
   const lines = [
@@ -4656,6 +4669,7 @@ function normalizeScorecardSynthesizerPayload(raw = {}) {
 
 async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
   const evidenceMode = normalizeEvidenceMode(options?.evidenceMode);
+  const strictQuality = normalizeStrictQuality(options?.strictQuality || options?.quality?.strictFailFast);
   const analysisMode = evidenceMode === "deep-assist" ? "deep-assist" : "hybrid";
   const criticLiveSearch = true;
   const downloadDebugLog = !!options.downloadDebugLog;
@@ -4697,6 +4711,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
   const analysisMeta = {
     analysisMode,
     evidenceMode,
+    strictQuality,
     liveSearchRequested: true,
     liveSearchUsed: false,
     webSearchCalls: 0,
@@ -4886,6 +4901,11 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
           attempt: "final",
           error: lowConfErr.message || String(lowConfErr),
         });
+        failIfStrictQuality(
+          strictQuality,
+          `Strict quality mode: low-confidence recovery failed. ${lowConfErr?.message || String(lowConfErr)}`,
+          "STRICT_LOW_CONF_CYCLE_FAILED"
+        );
         p1 = p1Base;
       }
       if (analysisMeta.lowConfidenceInitialCount > 0 && analysisMeta.lowConfidenceUpgradedCount === 0) {
@@ -4911,6 +4931,11 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
             attempt: "refinement",
             error: lowConfRetryErr.message || String(lowConfRetryErr),
           });
+          failIfStrictQuality(
+            strictQuality,
+            `Strict quality mode: low-confidence refinement failed. ${lowConfRetryErr?.message || String(lowConfRetryErr)}`,
+            "STRICT_LOW_CONF_REFINEMENT_FAILED"
+          );
         }
       }
     }
@@ -4932,6 +4957,11 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
         attempt: "phase1",
         error: verificationErr.message || String(verificationErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: analyst source verification failed. ${verificationErr?.message || String(verificationErr)}`,
+        "STRICT_SOURCE_VERIFICATION_FAILED"
+      );
     }
 
     appendAnalysisDebugEvent(debugSession, {
@@ -5122,6 +5152,11 @@ STRICT AUDIT PROTOCOL:
         attempt: "phase2",
         error: verificationErr.message || String(verificationErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: critic source verification failed. ${verificationErr?.message || String(verificationErr)}`,
+        "STRICT_SOURCE_VERIFICATION_FAILED"
+      );
     }
 
     debate.push({ phase: "critique", content: p2 });
@@ -5433,6 +5468,11 @@ STRICT JSON RULES:
         attempt: "final",
         error: consistencyErr.message || String(consistencyErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: consistency check failed. ${consistencyErr?.message || String(consistencyErr)}`,
+        "STRICT_CONSISTENCY_FAILED"
+      );
     }
     try {
       const coherencePrompt = buildCrossDimensionCoherencePrompt(desc, dims, finalResponse, researchSetup);
@@ -5478,6 +5518,11 @@ STRICT JSON RULES:
         attempt: "final",
         error: coherenceErr?.message || String(coherenceErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: cross-dimension coherence failed. ${coherenceErr?.message || String(coherenceErr)}`,
+        "STRICT_COHERENCE_FAILED"
+      );
     }
     finalResponse = finalResponse && typeof finalResponse === "object" ? finalResponse : {};
     finalResponse.attributes = normalizeAttributesShape(finalResponse?.attributes, desc, framingFields);
@@ -5498,6 +5543,11 @@ STRICT JSON RULES:
         attempt: "phase3",
         error: verificationErr.message || String(verificationErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: final source verification failed. ${verificationErr?.message || String(verificationErr)}`,
+        "STRICT_SOURCE_VERIFICATION_FAILED"
+      );
     }
 
     try {
@@ -5539,6 +5589,11 @@ STRICT JSON RULES:
         attempt: "final",
         error: redTeamErr?.message || String(redTeamErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: red-team pass failed. ${redTeamErr?.message || String(redTeamErr)}`,
+        "STRICT_RED_TEAM_FAILED"
+      );
     }
 
     try {
@@ -5583,6 +5638,11 @@ STRICT JSON RULES:
         attempt: "final",
         error: synthErr?.message || String(synthErr),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: synthesizer pass failed. ${synthErr?.message || String(synthErr)}`,
+        "STRICT_SYNTHESIZER_FAILED"
+      );
     }
 
     analysisMeta.sourceUniverse = buildScorecardSourceUniverse(finalResponse, dims);
@@ -5728,6 +5788,11 @@ STRICT JSON RULES:
           attempt: "final",
           error: discover.error,
         });
+        failIfStrictQuality(
+          strictQuality,
+          `Strict quality mode: discovery pass failed. ${discover.error}`,
+          "STRICT_DISCOVERY_FAILED"
+        );
       }
     } else {
       appendAnalysisDebugEvent(debugSession, {
@@ -5813,6 +5878,7 @@ function createInitialUseCaseState(input) {
     throw new Error("runAnalysis requires input.id and input.description.");
   }
   const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const strictQuality = normalizeStrictQuality(input?.options?.strictQuality || input?.options?.quality?.strictFailFast);
   const deepAssist = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
   const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
 
@@ -5835,6 +5901,7 @@ function createInitialUseCaseState(input) {
     analysisMeta: {
       analysisMode: evidenceMode === "deep-assist" ? "deep-assist" : "hybrid",
       evidenceMode,
+      strictQuality,
       liveSearchRequested: true,
       liveSearchUsed: false,
       webSearchCalls: 0,

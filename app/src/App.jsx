@@ -507,6 +507,7 @@ export default function App({
   async function runNewAnalysis(descInput, origin = null, configOverride = null, matrixSubjects = [], researchSetup = null) {
     const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
+    const strictQuality = true;
 
     const selectedConfig = configOverride || activeConfig;
     const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
@@ -558,6 +559,7 @@ export default function App({
           ? (normalizedEvidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
           : (normalizedEvidenceMode === "deep-assist" ? "deep-assist" : INTERNAL_ANALYSIS_MODE),
         evidenceMode: normalizedEvidenceMode,
+        strictQuality,
         liveSearchRequested: true,
         liveSearchUsed: false,
         webSearchCalls: 0,
@@ -610,6 +612,7 @@ export default function App({
         researchSetup: normalizedSetup,
         evidenceMode: normalizedEvidenceMode,
         deepAssist: normalizedEvidenceMode === "deep-assist" ? deepAssistRunOptions : null,
+        strictQuality,
         initialState: stampedBlankUC,
       });
     } catch (err) {

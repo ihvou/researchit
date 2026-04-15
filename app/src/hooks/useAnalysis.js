@@ -78,6 +78,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
           researchSetup: options?.researchSetup || null,
           evidenceMode: options?.evidenceMode || "native",
           deepAssist: options?.deepAssist || null,
+          strictQuality: !!options?.strictQuality,
         },
       },
       config,

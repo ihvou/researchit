@@ -80,6 +80,19 @@ function normalizeDeepAssistOptions(raw = {}) {
   };
 }
 
+function normalizeStrictQuality(value) {
+  const raw = cleanText(value).toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+}
+
+function failIfStrictQuality(strictQuality, message, code = "STRICT_QUALITY_ABORT") {
+  if (!strictQuality) return;
+  const err = new Error(cleanText(message) || "Strict quality mode aborted the run.");
+  err.code = code;
+  err.retryable = false;
+  throw err;
+}
+
 function deepAssistProviderLabel(providerId) {
   const key = cleanText(providerId).toLowerCase();
   if (key === "chatgpt") return "ChatGPT";
@@ -3127,6 +3140,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     throw new Error("runAnalysis requires callbacks.transport with callAnalyst and callCritic.");
   }
   const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const strictQuality = normalizeStrictQuality(input?.options?.strictQuality || config?.quality?.strictFailFast);
   const deepAssistOptions = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
   const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
 
@@ -3142,6 +3156,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     ...(state.analysisMeta || {}),
     analysisMode: evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix",
     evidenceMode,
+    strictQuality,
     decisionContext: researchSetup.decisionContext,
     userRoleContext: researchSetup.userRoleContext,
     qualityGrade: state.analysisMeta?.qualityGrade || "standard",
@@ -3923,6 +3938,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
                 attempt: diag.cellKey,
                 error: cleanText(recoveryErr?.message || "deep_assist_recovery_failed"),
               });
+              failIfStrictQuality(
+                strictQuality,
+                `Strict quality mode: matrix deep-assist recovery failed for ${diag.cellKey}. ${cleanText(recoveryErr?.message || "deep_assist_recovery_failed")}`,
+                "STRICT_MATRIX_DEEP_ASSIST_RECOVERY_FAILED"
+              );
             }
           }
 
@@ -3940,6 +3960,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           attempt: "final",
           error: note,
         });
+        failIfStrictQuality(
+          strictQuality,
+          `Strict quality mode: matrix deep-assist enrichment failed. ${note}`,
+          "STRICT_MATRIX_DEEP_ASSIST_FAILED"
+        );
       }
     }
 
@@ -4137,6 +4162,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         attempt: "final",
         error: note,
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: matrix consistency audit failed. ${note}`,
+        "STRICT_MATRIX_CONSISTENCY_FAILED"
+      );
     }
 
     if (derivedAttributes.length) {
@@ -4200,6 +4230,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           attempt: "final",
           error: note,
         });
+        failIfStrictQuality(
+          strictQuality,
+          `Strict quality mode: matrix derived attribute generation failed. ${note}`,
+          "STRICT_MATRIX_DERIVED_FAILED"
+        );
       }
     }
 
@@ -4244,6 +4279,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         attempt: "final",
         error: cleanText(redTeamErr?.message || "matrix_red_team_failed"),
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: matrix red-team pass failed. ${cleanText(redTeamErr?.message || "matrix_red_team_failed")}`,
+        "STRICT_MATRIX_RED_TEAM_FAILED"
+      );
     }
 
     update("matrix_synthesis", {
@@ -4297,6 +4337,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         attempt: "final",
         error: note,
       });
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: matrix executive synthesis failed. ${note}`,
+        "STRICT_MATRIX_SYNTHESIS_FAILED"
+      );
       resolvedMatrix.executiveSummary = resolvedMatrix.executiveSummary || {
         decisionAnswer: "",
         closestThreats: "",
@@ -4333,6 +4378,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         state.analysisMeta,
         "matrix_coverage_sla_failed",
         coverageSlaResult.failureReason || "Matrix coverage requirements were not met."
+      );
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: matrix coverage SLA failed. ${coverageSlaResult.failureReason || "Matrix coverage requirements were not met."}`,
+        "STRICT_MATRIX_COVERAGE_SLA_FAILED"
       );
     }
 
@@ -4386,6 +4436,11 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           phase: "matrix_discover",
           note: state.analysisMeta.discoveryFailureReason,
         });
+        failIfStrictQuality(
+          strictQuality,
+          `Strict quality mode: matrix discovery failed. ${state.analysisMeta.discoveryFailureReason}`,
+          "STRICT_MATRIX_DISCOVERY_FAILED"
+        );
       }
 
       state.analysisMeta.generatedDiscoverCandidatesCount = Number(discovery.suggestedSubjects.length + discovery.suggestedAttributes.length);

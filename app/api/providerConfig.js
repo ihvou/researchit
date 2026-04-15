@@ -33,6 +33,36 @@ function providerPrefix(provider) {
   return String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
 }
 
+function detectModelFamily(model) {
+  const raw = pickNonEmptyString(model).toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("claude")) return "anthropic";
+  if (raw.includes("gemini") || raw.startsWith("models/")) return "gemini";
+  if (raw.includes("gpt") || /^o[1-9]/.test(raw) || raw.includes("chatgpt")) return "openai";
+  return "";
+}
+
+function isModelCompatibleWithProvider(provider, model) {
+  const family = detectModelFamily(model);
+  if (!family) return true;
+  const normalized = normalizeProvider(provider);
+  if (normalized === "openai_compatible") return true;
+  return family === normalized;
+}
+
+function providerDefaultModel(role, provider, fallbackModel = "") {
+  const roleKey = String(role || "").trim().toLowerCase();
+  if (provider === "anthropic") {
+    if (roleKey === "retrieval") return "claude-sonnet-4-20250514";
+    return "claude-sonnet-4-20250514";
+  }
+  if (provider === "gemini") {
+    if (roleKey === "retrieval") return "gemini-2.5-flash";
+    return "gemini-2.5-pro";
+  }
+  return pickNonEmptyString(fallbackModel) || "gpt-5.4-mini";
+}
+
 function parseProviderList(value) {
   return String(value || "")
     .split(/[,;|]/g)
@@ -124,6 +154,30 @@ function resolveWebSearchModel(role, provider, requestedWebSearchModel, resolved
   );
 }
 
+function resolveProviderSpecificModel(role, provider, defaultModel) {
+  const roleKey = rolePrefix(role);
+  const providerKey = providerPrefix(provider);
+  return (
+    envValue(`RESEARCHIT_${roleKey}_${providerKey}_MODEL`)
+    || envValue(`RESEARCHIT_${providerKey}_MODEL`)
+    || envValue(`${providerKey}_${roleKey}_MODEL`)
+    || envValue(`${providerKey}_MODEL`)
+    || providerDefaultModel(role, provider, defaultModel)
+  );
+}
+
+function resolveProviderSpecificWebSearchModel(role, provider, resolvedModel) {
+  const roleKey = rolePrefix(role);
+  const providerKey = providerPrefix(provider);
+  return (
+    envValue(`RESEARCHIT_${roleKey}_${providerKey}_WEBSEARCH_MODEL`)
+    || envValue(`RESEARCHIT_${providerKey}_WEBSEARCH_MODEL`)
+    || envValue(`${providerKey}_${roleKey}_WEBSEARCH_MODEL`)
+    || envValue(`${providerKey}_WEBSEARCH_MODEL`)
+    || resolvedModel
+  );
+}
+
 function resolveProviderDefaultBaseUrl(provider) {
   if (provider === "openai") return OPENAI_BASE_URL;
   if (provider === "anthropic") return ANTHROPIC_BASE_URL;
@@ -167,18 +221,42 @@ export function resolveRoleProviderCandidates({
   liveSearch = false,
 }) {
   const providerOrder = resolveProviderOrder(role, requestedProvider, liveSearch);
+  const requestedProviders = parseProviderList(requestedProvider);
+  const primaryRequestedProvider = requestedProviders[0] || "";
   const candidates = providerOrder
     .map((providerId) => {
       const provider = normalizeProvider(providerId);
       const apiKey = resolveApiKey(role, provider);
-      const model = resolveModel(role, provider, requestedModel, defaultModel);
+      const allowRequestedOverrides = !primaryRequestedProvider || primaryRequestedProvider === provider;
+      let model = resolveModel(
+        role,
+        provider,
+        allowRequestedOverrides ? requestedModel : "",
+        defaultModel
+      );
+      if (!isModelCompatibleWithProvider(provider, model)) {
+        model = resolveProviderSpecificModel(role, provider, defaultModel);
+      }
       if (!apiKey || !model) return null;
-      const baseUrl = resolveBaseUrl(role, provider, requestedBaseUrl);
+      const baseUrl = resolveBaseUrl(
+        role,
+        provider,
+        allowRequestedOverrides ? requestedBaseUrl : ""
+      );
+      let webSearchModel = resolveWebSearchModel(
+        role,
+        provider,
+        allowRequestedOverrides ? requestedWebSearchModel : "",
+        model
+      );
+      if (!isModelCompatibleWithProvider(provider, webSearchModel)) {
+        webSearchModel = resolveProviderSpecificWebSearchModel(role, provider, model);
+      }
       return {
         providerId: provider,
         provider,
         model,
-        webSearchModel: resolveWebSearchModel(role, provider, requestedWebSearchModel, model),
+        webSearchModel,
         baseUrl,
         apiKey,
       };
