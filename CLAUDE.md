@@ -104,5 +104,6 @@ Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, fall
 - `README.md` — Project vision, repository structure, and pipeline overview
 - `TASKS.md` — Active task backlog with priorities
 - `docs/architecture.md` — System architecture overview
+- `docs/pipeline-architecture.md` — Detailed pipeline flow diagrams with request/response shapes
 - `docs/benchmark-manual-v1.md` — Manual benchmark protocol
 - `docs/ui-kit.md` — UI component conventions

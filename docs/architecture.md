@@ -1,6 +1,6 @@
 # ResearchIt — Architecture
 
-This document captures the architectural principles and module boundaries of the ResearchIt monorepo. All future changes should respect these constraints.
+This document captures the architectural principles and module boundaries of the ResearchIt monorepo. All future changes should respect these constraints. For detailed step-by-step pipeline flow with request/response shapes, see [pipeline-architecture.md](pipeline-architecture.md).
 
 ---
 

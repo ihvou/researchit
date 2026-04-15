@@ -80,6 +80,8 @@ flowchart LR
 
 ## Analysis Pipeline
 
+For detailed step-by-step pipeline flow with request/response shapes and diagrams, see [docs/pipeline-architecture.md](docs/pipeline-architecture.md).
+
 Scorecard pipeline (quality-first):
 1. Analyst baseline pass (memory-only)
 2. Analyst web pass (live-search assisted)
