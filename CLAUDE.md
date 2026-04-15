@@ -66,8 +66,8 @@ Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, fall
 
 ## Key Docs
 
+- `README.md` — Project vision, repository structure, and pipeline overview
 - `TASKS.md` — Active task backlog with priorities
 - `docs/architecture.md` — System architecture overview
-- `docs/spec-deep-assist.md` — Deep Research ×3 specification
 - `docs/benchmark-manual-v1.md` — Manual benchmark protocol
 - `docs/ui-kit.md` — UI component conventions
