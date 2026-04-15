@@ -45,7 +45,7 @@ Degraded output is acceptable only when explicitly labeled and when hard abort c
 
 ## Required Engineering Behavior
 
-- Prefer recover-or-fail over silent fallback.
+- Prefer recover-or-fail over silent degradation. No automatic provider/model failover in quality-critical flows.
 - Preserve evidence content; do not drop valid model output due to schema mapping drift.
 - Enforce actor model/provider routing correctness in strict/test runs.
 - Track and expose diagnostics needed to explain quality outcomes.

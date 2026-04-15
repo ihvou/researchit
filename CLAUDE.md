@@ -38,7 +38,7 @@ configs/
 - **Two output modes**: Scorecard (per-dimension scores) and Matrix (subject × attribute grid)
 - **Two evidence modes**: "Verified Research" (native hybrid) and "Deep Research ×3" (3 external providers cross-validated)
 - **Transport is injected**: engine never calls APIs directly; `app/api/` routes resolve providers
-- **Provider routing**: providerConfig.js resolves role → provider → model via env vars with fallback chain
+- **Provider routing**: providerConfig.js resolves role → provider → model via strict precedence; routes are pinned and fail-fast (no automatic provider/model failover)
 - **ACTIVE_RUNTIME global** in analysis.js — mutable state, unsafe for concurrent runs (flagged as ENG-02)
 
 For full architecture see `docs/architecture.md`; for high-level pipeline overview see `README.md` § Analysis Pipeline.
@@ -85,13 +85,13 @@ Default roles (in configs/research-configurations.js):
 - **Retrieval**: Gemini gemini-2.5-flash
 - **Deep Research ×3 providers**: ChatGPT (gpt-5.4), Claude (claude-sonnet-4), Gemini (gemini-2.5-pro)
 
-Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, falling back through a chain. See providerConfig.js.
+Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, using strict precedence order (no silent route failover). See providerConfig.js.
 
 ## Code Conventions
 
 - `cleanString()` in analysis.js, `cleanText()` in matrix.js — same function, different names (ENG-01 tech debt)
 - Normalize everything: confidence levels, source lists, arguments, scores — defensive throughout
-- Every LLM response is parsed with `parseWithDiagnostics` / `extractJson` + fallback handling
+- Every LLM response is parsed with `parseWithDiagnostics` / `extractJson` + retry-or-fail guardrail handling
 - `analysisMeta` object tracks all diagnostics, counters, and provenance for the run
 - Source verification: fetch URL → check quote in page → assign verificationStatus → derive displayStatus (UX-02)
 

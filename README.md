@@ -400,8 +400,9 @@ Without KV env vars, account data falls back to in-memory storage in local/dev o
 Default routing behavior:
 - Native scorecard/matrix:
   - Analyst synthesis/scoring -> OpenAI (default model)
-  - Retrieval/live-search-heavy phases -> Gemini (with grounded search where available), fallback mesh enabled
-  - Critic -> Anthropic (default model), fallback mesh enabled
+  - Retrieval/live-search-heavy phases -> Gemini (with grounded search where available)
+  - Critic -> Anthropic (default model)
+  - Provider/model routes are pinned; no automatic provider/model failover. Route mismatch or unavailable route fails fast.
 - Deep Assist:
   - ChatGPT lane -> OpenAI
   - Claude lane -> Anthropic
