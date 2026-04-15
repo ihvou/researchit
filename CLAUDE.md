@@ -2,6 +2,8 @@
 
 Config-driven AI research engine. Turns questions into weighted scorecards or comparison matrices with evidence, confidence, critic debate, and source verification.
 
+Quality goal: beat individual mainstream LLM outputs on quality, completeness, accuracy, and decision-readiness for high-stakes decisions.
+
 ## Commands
 
 ```bash
@@ -104,6 +106,7 @@ Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, fall
 - `README.md` — Project vision, repository structure, and pipeline overview
 - `TASKS.md` — Active task backlog with priorities
 - `docs/architecture.md` — System architecture overview
+- `docs/quality-bar.md` — Non-negotiable quality objective and no-silent-failure policy
 - `docs/pipeline-architecture.md` — Detailed pipeline flow diagrams with request/response shapes
 - `docs/benchmark-manual-v1.md` — Manual benchmark protocol
 - `docs/ui-kit.md` — UI component conventions

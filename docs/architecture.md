@@ -2,6 +2,8 @@
 
 This document captures the architectural principles and module boundaries of the ResearchIt monorepo. All future changes should respect these constraints. For detailed step-by-step pipeline flow with request/response shapes, see [pipeline-architecture.md](pipeline-architecture.md).
 
+Quality objective and release priority are defined in [quality-bar.md](quality-bar.md). If architecture tradeoffs conflict, the quality bar wins.
+
 ---
 
 ## Core Idea

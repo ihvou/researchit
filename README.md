@@ -9,6 +9,9 @@ The core idea is simple: most AI tools generate fluent reports, but strategic de
 - follow-up challenge threads,
 - exportable, reproducible artifacts.
 
+Quality bar:
+- [docs/quality-bar.md](docs/quality-bar.md)
+
 ## Idea
 
 ResearchIt is built for decisions like:
@@ -122,6 +125,7 @@ Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `ad
 - data flow and pipeline phases
 - `ResearchConfig` contract
 - invariants that must stay true during future changes
+- quality objective and non-silent-failure policy in [docs/quality-bar.md](docs/quality-bar.md)
 
 Read it before refactors or cross-module changes:
 - [docs/architecture.md](docs/architecture.md)
