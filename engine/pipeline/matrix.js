@@ -637,6 +637,30 @@ function extractDecisionQuestion(text = "") {
   return clip(picked, 220);
 }
 
+function deriveMatrixTitleFromInput(rawInput = "", subjects = []) {
+  const normalizedInput = cleanText(rawInput)
+    .replace(/^(product concept|research brief|context)\s*:\s*/i, "")
+    .trim();
+  const decisionLike = extractDecisionQuestion(normalizedInput);
+  const sourceText = cleanText(decisionLike || normalizedInput);
+  const words = sourceText.split(/\s+/).filter(Boolean);
+  let title = words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "");
+
+  if (!title) {
+    const labels = (Array.isArray(subjects) ? subjects : [])
+      .map((subject) => cleanText(subject?.label || subject))
+      .filter(Boolean)
+      .slice(0, 2);
+    if (labels.length >= 2) {
+      title = `Matrix research: ${labels[0]} vs ${labels[1]}`;
+    } else if (labels.length === 1) {
+      title = `Matrix research: ${labels[0]}`;
+    }
+  }
+
+  return clip(title || "Matrix research", 100);
+}
+
 function buildMatrixAttributes({
   rawInput = "",
   decisionQuestion = "",
@@ -645,6 +669,7 @@ function buildMatrixAttributes({
 } = {}) {
   const normalizedInput = cleanText(rawInput);
   const resolvedDecision = cleanText(researchSetup?.decisionContext) || cleanText(decisionQuestion) || extractDecisionQuestion(normalizedInput);
+  const derivedTitle = deriveMatrixTitleFromInput(normalizedInput, subjects);
   const subjectLabels = (Array.isArray(subjects) ? subjects : [])
     .map((subject) => cleanText(subject?.label || subject))
     .filter(Boolean)
@@ -654,7 +679,7 @@ function buildMatrixAttributes({
   if (subjectLabels.length) scopeParts.push(`Subjects: ${subjectLabels.join(", ")}`);
   if (roleContext) scopeParts.push(`Role/context: ${roleContext}`);
   return {
-    title: resolvedDecision || extractDecisionQuestion(normalizedInput) || clip(normalizedInput, 120) || "Matrix research",
+    title: derivedTitle,
     expandedDescription: resolvedDecision
       ? `Decision focus: ${resolvedDecision}`
       : "",

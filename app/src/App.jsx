@@ -112,10 +112,7 @@ function normalizeAssumptions(values) {
 function resolveResearchTitle(uc = {}, isMatrixMode = false) {
   const explicit = String(uc?.attributes?.title || "").trim();
   if (explicit) return explicit;
-  if (isMatrixMode) {
-    const decision = String(uc?.matrix?.decisionQuestion || uc?.researchSetup?.decisionContext || uc?.analysisMeta?.decisionContext || "").trim();
-    if (decision) return decision;
-  }
+  if (isMatrixMode && String(uc?.matrix?.decisionQuestion || "").trim()) return String(uc.matrix.decisionQuestion).trim();
   return String(uc?.rawInput || "").trim() || "Untitled research";
 }
 
