@@ -507,9 +507,13 @@ export default function App({
   async function runNewAnalysis(descInput, origin = null, configOverride = null, matrixSubjects = [], researchSetup = null) {
     const desc = String(descInput || "").trim();
     if (!desc || globalAnalyzing) return;
-    const strictQuality = true;
 
     const selectedConfig = configOverride || activeConfig;
+    const strictQuality = (() => {
+      if (typeof selectedConfig?.quality?.strictFailFast === "boolean") return selectedConfig.quality.strictFailFast;
+      const envDefault = String(import.meta.env.VITE_RESEARCHIT_STRICT_QUALITY_DEFAULT || "").trim().toLowerCase();
+      return envDefault === "true" || envDefault === "1" || envDefault === "yes" || envDefault === "on";
+    })();
     const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
     const normalizedSetup = normalizeResearchSetup(researchSetup || setupByConfig[selectedConfig.id] || {});
     const normalizedEvidenceMode = String(evidenceMode || "").trim().toLowerCase() === "deep-assist"

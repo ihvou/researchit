@@ -20,6 +20,8 @@ function severityTone(value) {
 export default function DimensionsTab({ uc, dims }) {
   const dimensionList = Array.isArray(dims) ? dims : [];
   const redTeam = uc?.finalScores?.redTeam || {};
+  const sourceUniverse = uc?.analysisMeta?.sourceUniverse || {};
+  const sourceUniverseTotal = Number(sourceUniverse?.total || 0);
   const redTeamDimensions = redTeam?.dimensions && typeof redTeam.dimensions === "object" ? redTeam.dimensions : {};
   const redTeamRows = dimensionList
     .map((dim) => ({
@@ -66,7 +68,22 @@ export default function DimensionsTab({ uc, dims }) {
           ) : null}
         </div>
       ) : null}
-      {dimensionList.map((d, idx) => {
+      {sourceUniverseTotal > 0 ? (
+        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            Source Universe
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+            <span>Cited {Number(sourceUniverse?.cited || 0)}</span>
+            <span>Corroborating {Number(sourceUniverse?.corroborating || 0)}</span>
+            <span>Unverified {Number(sourceUniverse?.unverified || 0)}</span>
+            <span>Excluded marketing {Number(sourceUniverse?.excludedMarketing || 0)}</span>
+            <span>Excluded stale {Number(sourceUniverse?.excludedStale || 0)}</span>
+            <span>Total {sourceUniverseTotal}</span>
+          </div>
+        </div>
+      ) : null}
+      {dimensionList.map((d) => {
         const view = getDimensionView(uc, d.id, { dimLabel: d.label, dim: d });
         const initData = view.initial;
         const revised = view.effectiveScore != null && initData?.score != null && view.effectiveScore !== initData.score;
@@ -111,8 +128,8 @@ export default function DimensionsTab({ uc, dims }) {
               full={view.full}
               sources={view.sources}
               risks={view.risks}
-              sourceUniverse={uc?.analysisMeta?.sourceUniverse}
-              showSourceUniverse={idx === 0}
+              sourceUniverse={sourceUniverse}
+              showSourceUniverse={false}
             />
           </div>
         );

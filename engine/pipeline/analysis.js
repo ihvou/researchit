@@ -8,7 +8,7 @@ import {
   appendAnalysisDebugEvent,
   finalizeAnalysisDebugSession,
 } from "../lib/debug.js";
-import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE } from "../prompts/defaults.js";
+import { SYS_ANALYST, SYS_CRITIC, SYS_ANALYST_RESPONSE, SYS_RED_TEAM } from "../prompts/defaults.js";
 
 let ACTIVE_RUNTIME = null;
 const DEFAULT_DEEP_ASSIST_PROVIDERS = ["chatgpt", "claude", "gemini"];
@@ -325,9 +325,15 @@ function modelSignatureFromOptions(options = {}) {
 
 async function callSynthesizerAPI(messages, systemPrompt, maxTokens = 4200, options = {}) {
   const merged = withRoleModelOptionsFallback("synthesizer", "critic", options);
+  const transport = getRuntime().transport;
+  const callSynth = typeof transport?.callSynthesizer === "function"
+    ? transport.callSynthesizer.bind(transport)
+    : (typeof transport?.callCritic === "function"
+      ? transport.callCritic.bind(transport)
+      : transport.callAnalyst.bind(transport));
   return {
     options: merged,
-    response: await getRuntime().transport.callAnalyst(messages, systemPrompt, maxTokens, merged),
+    response: await callSynth(messages, systemPrompt, maxTokens, merged),
   };
 }
 
@@ -4682,7 +4688,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     analyst: options?.prompts?.analyst || SYS_ANALYST,
     critic: options?.prompts?.critic || SYS_CRITIC,
     analystResponse: options?.prompts?.analystResponse || SYS_ANALYST_RESPONSE,
-    redTeam: options?.prompts?.redTeam || SYS_CRITIC,
+    redTeam: options?.prompts?.redTeam || SYS_RED_TEAM,
     synthesizer: options?.prompts?.synthesizer || SYS_ANALYST_RESPONSE,
   };
   const tokenLimits = {
@@ -5623,6 +5629,9 @@ STRICT JSON RULES:
       const synthesis = normalizeScorecardSynthesizerPayload(synthParsed);
       finalResponse.executiveSummary = synthesis;
       if (synthesis?.decisionImplication) {
+        if (!cleanString(finalResponse.originalConclusion)) {
+          finalResponse.originalConclusion = cleanString(finalResponse.conclusion);
+        }
         finalResponse.conclusion = synthesis.decisionImplication;
       }
       appendAnalysisDebugEvent(debugSession, {

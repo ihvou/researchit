@@ -4,6 +4,7 @@ const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_PROVIDER_PREFERENCE = {
   analyst: ["openai", "anthropic", "gemini"],
   critic: ["anthropic", "openai", "gemini"],
+  synthesizer: ["anthropic", "openai", "gemini"],
   retrieval: ["gemini", "openai", "anthropic"],
 };
 

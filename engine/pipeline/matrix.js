@@ -25,6 +25,16 @@ Rules:
 - Return ONLY valid JSON using the exact schema.
 `;
 
+const MATRIX_RED_TEAM_PROMPT = `You are an adversarial Red Team for a completed comparison matrix.
+
+Rules:
+- Stress-test conclusions by constructing strongest credible counter-cases.
+- Prioritize structural threats, hidden downside, and disconfirming evidence.
+- Flag where confidence appears higher than evidence quality.
+- Do not rewrite scores; add risk context only.
+- Return ONLY valid JSON using the exact schema.
+`;
+
 const MATRIX_DISCOVERY_PROMPT = `You are suggesting additive completeness checks for a finished comparison matrix.
 
 Rules:
@@ -4257,7 +4267,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       });
       const redTeamRes = await transport.callCritic(
         [{ role: "user", content: redTeamPrompt }],
-        cleanText(config?.prompts?.redTeam) || criticPrompt,
+        cleanText(config?.prompts?.redTeam) || MATRIX_RED_TEAM_PROMPT,
         Math.max(2800, Math.min(4600, responseTokens)),
         {
           ...roleOptions(config, "critic"),
@@ -4304,7 +4314,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         researchSetup,
       });
       const synthOptions = roleOptionsWithFallback(config, "synthesizer", "critic");
-      const synthesisRes = await transport.callAnalyst(
+      const synthCaller = typeof transport.callSynthesizer === "function"
+        ? transport.callSynthesizer.bind(transport)
+        : (typeof transport.callCritic === "function"
+          ? transport.callCritic.bind(transport)
+          : transport.callAnalyst.bind(transport));
+      const synthesisRes = await synthCaller(
         [{ role: "user", content: synthesisPrompt }],
         cleanText(config?.prompts?.synthesizer) || cleanText(config?.prompts?.analystResponse) || MATRIX_ANALYST_PROMPT,
         Math.max(2800, Math.min(4600, responseTokens)),

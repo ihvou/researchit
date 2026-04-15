@@ -22,6 +22,14 @@ const DEFAULT_POLICY_BY_ROLE = {
     backoffFactor: 2,
     retryableStatus: DEFAULT_RETRYABLE_STATUS,
   },
+  synthesizer: {
+    timeoutMs: 120000,
+    maxRetries: 2,
+    initialBackoffMs: 300,
+    maxBackoffMs: 2500,
+    backoffFactor: 2,
+    retryableStatus: DEFAULT_RETRYABLE_STATUS,
+  },
   fetchSource: {
     timeoutMs: 12000,
     maxRetries: 1,
@@ -236,6 +244,27 @@ export function createTransport(callFn, transportOptions = {}) {
       const policy = resolvePolicy("critic", transportOptions, options);
       return callWithRetry({
         role: "critic",
+        payload,
+        includeMeta: !!options.includeMeta,
+        callFn,
+        policy,
+      });
+    },
+
+    async callSynthesizer(messages, systemPrompt, maxTokens = 5000, options = {}) {
+      const payload = {
+        messages,
+        systemPrompt,
+        maxTokens,
+        liveSearch: !!options.liveSearch,
+        provider: typeof options.provider === "string" ? options.provider : undefined,
+        model: typeof options.model === "string" ? options.model : undefined,
+        webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
+        baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
+      };
+      const policy = resolvePolicy("synthesizer", transportOptions, options);
+      return callWithRetry({
+        role: "synthesizer",
         payload,
         includeMeta: !!options.includeMeta,
         callFn,
