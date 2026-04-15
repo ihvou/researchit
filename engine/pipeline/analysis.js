@@ -3920,6 +3920,7 @@ async function runDeepAssistPhase1(
   analysisMeta,
   debugSession,
   tokenLimits = {},
+  strictQuality = true,
   {
     inputSpec = {},
     framingFields = [],
@@ -4068,6 +4069,15 @@ async function runDeepAssistPhase1(
         `${count} Deep Assist provider failure(s) matched ${code}.`
       );
     });
+    failIfStrictQuality(
+      strictQuality,
+      `Deep Assist provider failures detected (${failedRuns.length}/${providerRuns.length}). Aborting run.`,
+      "STRICT_DEEP_ASSIST_PROVIDER_PARTIAL_FAILURE"
+    );
+    const err = new Error(`Deep Assist provider failures detected (${failedRuns.length}/${providerRuns.length}).`);
+    err.code = "DEEP_ASSIST_PROVIDER_PARTIAL_FAILURE";
+    err.retryable = false;
+    throw err;
   }
 
   const successfulRuns = providerRuns.filter((run) => run.status === "ok" && run.payload);
@@ -4075,20 +4085,17 @@ async function runDeepAssistPhase1(
     markDegraded(
       analysisMeta,
       "deep_assist_no_provider_success",
-      "All Deep Assist providers failed. Falling back to native hybrid evidence flow."
+      "All Deep Assist providers failed."
     );
-    appendAnalysisDebugEvent(debugSession, {
-      type: "deep_assist_fallback_native",
-      phase: "deep_assist_collect",
-      attempt: "fallback",
-      note: "No provider succeeded. Falling back to native hybrid phase 1.",
-    });
-    return runHybridPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
-      inputSpec,
-      framingFields,
-      researchSetup,
-      allowDegraded: true,
-    });
+    failIfStrictQuality(
+      strictQuality,
+      "Deep Assist failed: no provider succeeded.",
+      "STRICT_DEEP_ASSIST_NO_PROVIDER_SUCCESS"
+    );
+    const err = new Error("Deep Assist failed: no provider succeeded.");
+    err.code = "DEEP_ASSIST_NO_PROVIDER_SUCCESS";
+    err.retryable = false;
+    throw err;
   }
 
   if (successfulRuns.length < deepAssistOptions.minProviders) {
@@ -4097,6 +4104,15 @@ async function runDeepAssistPhase1(
       "deep_assist_min_provider_not_met",
       `Deep Assist succeeded with ${successfulRuns.length}/${deepAssistOptions.minProviders} required providers.`
     );
+    failIfStrictQuality(
+      strictQuality,
+      `Deep Assist minimum providers not met (${successfulRuns.length}/${deepAssistOptions.minProviders}).`,
+      "STRICT_DEEP_ASSIST_MIN_PROVIDER_NOT_MET"
+    );
+    const err = new Error(`Deep Assist minimum providers not met (${successfulRuns.length}/${deepAssistOptions.minProviders}).`);
+    err.code = "DEEP_ASSIST_MIN_PROVIDER_NOT_MET";
+    err.retryable = false;
+    throw err;
   }
 
   updateUC(id, (u) => ({ ...u, phase: "deep_assist_merge" }));
@@ -4848,7 +4864,7 @@ async function runAnalysisLegacy(desc, dims, updateUC, id, options = {}) {
     // Phase 1: Analyst
     updateUC(id, (u) => ({ ...u, phase: evidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline" }));
     const p1Base = evidenceMode === "deep-assist"
-      ? await runDeepAssistPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, {
+      ? await runDeepAssistPhase1(desc, dims, updateUC, id, analysisMeta, debugSession, tokenLimits, strictQuality, {
           inputSpec,
           framingFields,
           deepAssist,

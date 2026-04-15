@@ -61,6 +61,66 @@ function buildRuntimeConfig(baseConfig, dims) {
   };
 }
 
+function normalizeProviderName(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw === "openai") return "openai";
+  if (raw === "anthropic") return "anthropic";
+  if (raw === "gemini" || raw === "google") return "gemini";
+  return raw;
+}
+
+function detectModelFamily(modelName) {
+  const raw = String(modelName || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("claude")) return "anthropic";
+  if (raw.includes("gemini") || raw.startsWith("models/")) return "gemini";
+  if (raw.includes("gpt") || raw.includes("chatgpt") || /^o[1-9]/.test(raw)) return "openai";
+  return "";
+}
+
+function validatePinnedModelRoutes(config = {}, evidenceMode = "native") {
+  const problems = [];
+  const models = config?.models && typeof config.models === "object" ? config.models : {};
+  const roleKeys = ["analyst", "critic", "retrieval", "synthesizer"];
+  roleKeys.forEach((role) => {
+    const cfg = models?.[role] && typeof models[role] === "object" ? models[role] : null;
+    if (!cfg) return;
+    const provider = normalizeProviderName(cfg.provider);
+    const checkModel = (modelName, fieldLabel) => {
+      const family = detectModelFamily(modelName);
+      if (!family || !provider) return;
+      if (family !== provider) {
+        problems.push(`${role}.${fieldLabel} (${modelName}) is incompatible with provider ${provider}.`);
+      }
+    };
+    checkModel(cfg.model, "model");
+    checkModel(cfg.webSearchModel, "webSearchModel");
+  });
+
+  if (String(evidenceMode || "").toLowerCase() === "deep-assist") {
+    const providers = config?.deepAssist?.providers && typeof config.deepAssist.providers === "object"
+      ? config.deepAssist.providers
+      : {};
+    Object.entries(providers).forEach(([providerId, providerCfg]) => {
+      const analystCfg = providerCfg?.analyst && typeof providerCfg.analyst === "object"
+        ? providerCfg.analyst
+        : providerCfg;
+      if (!analystCfg || typeof analystCfg !== "object") return;
+      const provider = normalizeProviderName(analystCfg.provider || providerId);
+      const family = detectModelFamily(analystCfg.model);
+      const webFamily = detectModelFamily(analystCfg.webSearchModel || analystCfg.model);
+      if (family && provider && family !== provider) {
+        problems.push(`deepAssist.${providerId}.analyst.model (${analystCfg.model}) is incompatible with provider ${provider}.`);
+      }
+      if (webFamily && provider && webFamily !== provider) {
+        problems.push(`deepAssist.${providerId}.analyst.webSearchModel (${analystCfg.webSearchModel || analystCfg.model}) is incompatible with provider ${provider}.`);
+      }
+    });
+  }
+
+  return problems;
+}
+
 function parseSubjectsInput(text) {
   const values = String(text || "")
     .split(/[,\n]/g)
@@ -540,6 +600,8 @@ export default function App({
     const strictQuality = (() => {
       if (typeof selectedConfig?.quality?.strictFailFast === "boolean") return selectedConfig.quality.strictFailFast;
       const envDefault = String(import.meta.env.VITE_RESEARCHIT_STRICT_QUALITY_DEFAULT || "").trim().toLowerCase();
+      if (!envDefault) return true;
+      if (envDefault === "false" || envDefault === "0" || envDefault === "no" || envDefault === "off") return false;
       return envDefault === "true" || envDefault === "1" || envDefault === "yes" || envDefault === "on";
     })();
     const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
@@ -560,6 +622,11 @@ export default function App({
       ? (dimsByConfig[selectedConfig.id] || selectedConfig.dimensions)
       : [];
     const runtimeConfig = buildRuntimeConfig(selectedConfig, selectedDims);
+    const routeProblems = validatePinnedModelRoutes(runtimeConfig, normalizedEvidenceMode);
+    if (routeProblems.length) {
+      window.alert(`Model routing preflight failed:\n${routeProblems.join("\n")}`);
+      return;
+    }
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const initialPhase = selectedMode === "matrix"
@@ -655,7 +722,14 @@ export default function App({
       });
     } catch (err) {
       console.error("Analysis error:", err);
-      updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: err.message }));
+      const errorMessage = String(err?.message || "Analysis failed.");
+      updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: errorMessage }));
+      const shouldDownloadDebug = window.confirm(
+        `Research run failed.\n\n${errorMessage}\n\nDownload debug log now?`
+      );
+      if (shouldDownloadDebug) {
+        downloadDebugLogsBundle();
+      }
     }
     setGlobalAnalyzing(false);
   }

@@ -230,30 +230,26 @@ export function resolveRoleProviderCandidates({
       const provider = normalizeProvider(providerId);
       const apiKey = resolveApiKey(role, provider);
       const allowRequestedOverrides = !primaryRequestedProvider || primaryRequestedProvider === provider;
-      let model = resolveModel(
+      const model = resolveModel(
         role,
         provider,
         allowRequestedOverrides ? requestedModel : "",
         defaultModel
       );
-      if (!isModelCompatibleWithProvider(provider, model)) {
-        model = resolveProviderSpecificModel(role, provider, defaultModel);
-      }
       if (!apiKey || !model) return null;
+      if (!isModelCompatibleWithProvider(provider, model)) return null;
       const baseUrl = resolveBaseUrl(
         role,
         provider,
         allowRequestedOverrides ? requestedBaseUrl : ""
       );
-      let webSearchModel = resolveWebSearchModel(
+      const webSearchModel = resolveWebSearchModel(
         role,
         provider,
         allowRequestedOverrides ? requestedWebSearchModel : "",
         model
       );
-      if (!isModelCompatibleWithProvider(provider, webSearchModel)) {
-        webSearchModel = resolveProviderSpecificWebSearchModel(role, provider, model);
-      }
+      if (!isModelCompatibleWithProvider(provider, webSearchModel)) return null;
       return {
         providerId: provider,
         provider,

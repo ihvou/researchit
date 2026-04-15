@@ -790,14 +790,40 @@ function fuzzyLookupId(raw, labelMap = new Map()) {
   return best.score >= 0.45 ? best.id : "";
 }
 
-function matchSubjectId(raw, subjectsByLabel) {
-  const key = cleanText(raw).toLowerCase();
-  return subjectsByLabel.get(key) || fuzzyLookupId(key, subjectsByLabel) || "";
+function parsePositiveIndex(raw) {
+  const text = cleanText(raw).toLowerCase();
+  if (!text) return null;
+  const match = text.match(/^#?\s*(\d{1,4})$/);
+  if (!match) return null;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n;
 }
 
-function matchAttributeId(raw, attributesByLabel) {
+function matchSubjectId(raw, subjectsByLabel, subjectsByIndex = new Map(), diagnostics = null) {
   const key = cleanText(raw).toLowerCase();
-  return attributesByLabel.get(key) || fuzzyLookupId(key, attributesByLabel) || "";
+  if (!key) return "";
+  const direct = subjectsByLabel.get(key);
+  if (direct) return direct;
+  const index = parsePositiveIndex(raw);
+  if (Number.isFinite(index) && subjectsByIndex?.has?.(index)) {
+    if (diagnostics && typeof diagnostics === "object") diagnostics.numericSubjectIdCoercions += 1;
+    return subjectsByIndex.get(index);
+  }
+  return fuzzyLookupId(key, subjectsByLabel) || "";
+}
+
+function matchAttributeId(raw, attributesByLabel, attributesByIndex = new Map(), diagnostics = null) {
+  const key = cleanText(raw).toLowerCase();
+  if (!key) return "";
+  const direct = attributesByLabel.get(key);
+  if (direct) return direct;
+  const index = parsePositiveIndex(raw);
+  if (Number.isFinite(index) && attributesByIndex?.has?.(index)) {
+    if (diagnostics && typeof diagnostics === "object") diagnostics.numericAttributeIdCoercions += 1;
+    return attributesByIndex.get(index);
+  }
+  return fuzzyLookupId(key, attributesByLabel) || "";
 }
 
 function roleOptions(config, role) {
@@ -1056,6 +1082,9 @@ function createInitialState(input) {
       zeroSourceConfidenceCaps: 0,
       highConfidenceCorroborationCaps: 0,
       sourceUniverse: emptySourceUniverseSummary(),
+      matrixChunking: {},
+      matrixNormalization: {},
+      matrixEarlyCoverageGate: null,
       redTeamCallMade: false,
       redTeamHighSeverityCount: 0,
       synthesizerCallMade: false,
@@ -1091,18 +1120,44 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
   const subjectSummariesRaw = Array.isArray(raw?.subjectSummaries) ? raw.subjectSummaries : [];
 
   const subjectsByLabel = new Map(subjects.map((s) => [s.label.toLowerCase(), s.id]));
+  const subjectsByIndex = new Map(subjects.map((s, idx) => [idx + 1, s.id]));
   const attributesByLabel = new Map();
+  const attributesByIndex = new Map(attributes.map((attr, idx) => [idx + 1, attr.id]));
   attributes.forEach((attr) => {
     attributesByLabel.set(attr.id.toLowerCase(), attr.id);
     attributesByLabel.set(attr.label.toLowerCase(), attr.id);
   });
+  const diagnostics = {
+    expectedCells: subjects.length * attributes.length,
+    rawCells: cellsRaw.length,
+    mappedCells: 0,
+    placeholderCellsAdded: 0,
+    droppedUnknownSubject: 0,
+    droppedUnknownAttribute: 0,
+    duplicateCellOverwrites: 0,
+    numericSubjectIdCoercions: 0,
+    numericAttributeIdCoercions: 0,
+  };
 
   const cellMap = new Map();
   for (const cell of cellsRaw) {
-    const subjectId = matchSubjectId(cell?.subjectId || cell?.subject || cell?.row, subjectsByLabel);
-    const attributeId = matchAttributeId(cell?.attributeId || cell?.attribute || cell?.column, attributesByLabel);
+    const subjectId = matchSubjectId(
+      cell?.subjectId || cell?.subject || cell?.row,
+      subjectsByLabel,
+      subjectsByIndex,
+      diagnostics
+    );
+    const attributeId = matchAttributeId(
+      cell?.attributeId || cell?.attribute || cell?.column,
+      attributesByLabel,
+      attributesByIndex,
+      diagnostics
+    );
+    if (!subjectId) diagnostics.droppedUnknownSubject += 1;
+    if (!attributeId) diagnostics.droppedUnknownAttribute += 1;
     if (!subjectId || !attributeId) continue;
     const key = buildCellKey(subjectId, attributeId);
+    if (cellMap.has(key)) diagnostics.duplicateCellOverwrites += 1;
     cellMap.set(key, {
       subjectId,
       attributeId,
@@ -1132,6 +1187,7 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
         : [],
     });
   }
+  diagnostics.mappedCells = cellMap.size;
 
   const cells = [];
   for (const subject of subjects) {
@@ -1158,13 +1214,19 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
           providerAgreement: "none",
           providerSignals: [],
         });
+        diagnostics.placeholderCellsAdded += 1;
       }
     }
   }
 
   const summaryMap = new Map();
   subjectSummariesRaw.forEach((entry) => {
-    const subjectId = matchSubjectId(entry?.subjectId || entry?.subject || entry?.label, subjectsByLabel);
+    const subjectId = matchSubjectId(
+      entry?.subjectId || entry?.subject || entry?.label,
+      subjectsByLabel,
+      subjectsByIndex,
+      diagnostics
+    );
     if (!subjectId) return;
     summaryMap.set(subjectId, cleanText(entry?.summary || entry?.value));
   });
@@ -1189,13 +1251,16 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
           providerAgreementHighlights: cleanText(raw.executiveSummary.providerAgreementHighlights),
         }
       : null,
+    normalization: diagnostics,
   };
 }
 
 function normalizeAnalystResponses(raw = {}, subjects = [], attributes = []) {
   const responsesRaw = Array.isArray(raw?.responses) ? raw.responses : [];
   const subjectsByLabel = new Map(subjects.map((s) => [s.label.toLowerCase(), s.id]));
+  const subjectsByIndex = new Map(subjects.map((s, idx) => [idx + 1, s.id]));
   const attributesByLabel = new Map();
+  const attributesByIndex = new Map(attributes.map((attr, idx) => [idx + 1, attr.id]));
   attributes.forEach((attr) => {
     attributesByLabel.set(attr.id.toLowerCase(), attr.id);
     attributesByLabel.set(attr.label.toLowerCase(), attr.id);
@@ -1203,8 +1268,8 @@ function normalizeAnalystResponses(raw = {}, subjects = [], attributes = []) {
 
   const out = [];
   for (const entry of responsesRaw) {
-    const subjectId = matchSubjectId(entry?.subjectId || entry?.subject || entry?.row, subjectsByLabel);
-    const attributeId = matchAttributeId(entry?.attributeId || entry?.attribute || entry?.column, attributesByLabel);
+    const subjectId = matchSubjectId(entry?.subjectId || entry?.subject || entry?.row, subjectsByLabel, subjectsByIndex);
+    const attributeId = matchAttributeId(entry?.attributeId || entry?.attribute || entry?.column, attributesByLabel, attributesByIndex);
     if (!subjectId || !attributeId) continue;
 
     const rawDecision = cleanText(entry?.decision || "").toLowerCase();
@@ -1229,7 +1294,9 @@ function normalizeAnalystResponses(raw = {}, subjects = [], attributes = []) {
 function normalizeCriticFlags(raw = {}, subjects = [], attributes = []) {
   const flagsRaw = Array.isArray(raw?.flags) ? raw.flags : [];
   const subjectsByLabel = new Map(subjects.map((s) => [s.label.toLowerCase(), s.id]));
+  const subjectsByIndex = new Map(subjects.map((s, idx) => [idx + 1, s.id]));
   const attributesByLabel = new Map();
+  const attributesByIndex = new Map(attributes.map((attr, idx) => [idx + 1, attr.id]));
   attributes.forEach((attr) => {
     attributesByLabel.set(attr.id.toLowerCase(), attr.id);
     attributesByLabel.set(attr.label.toLowerCase(), attr.id);
@@ -1237,8 +1304,8 @@ function normalizeCriticFlags(raw = {}, subjects = [], attributes = []) {
 
   const out = [];
   for (const flag of flagsRaw) {
-    const subjectId = matchSubjectId(flag?.subjectId || flag?.subject || flag?.row, subjectsByLabel);
-    const attributeId = matchAttributeId(flag?.attributeId || flag?.attribute || flag?.column, attributesByLabel);
+    const subjectId = matchSubjectId(flag?.subjectId || flag?.subject || flag?.row, subjectsByLabel, subjectsByIndex);
+    const attributeId = matchAttributeId(flag?.attributeId || flag?.attribute || flag?.column, attributesByLabel, attributesByIndex);
     if (!subjectId || !attributeId) continue;
     out.push({
       subjectId,
@@ -1401,6 +1468,83 @@ function evaluateMatrixCoverageSla(matrix = {}, subjects = [], attributes = [], 
       subjects: subjectDiagnostics,
     },
   };
+}
+
+function evaluateMatrixEarlyCatastrophicCoverage(matrix = {}, subjects = [], attributes = [], config = {}) {
+  const slaResult = evaluateMatrixCoverageSla(matrix, subjects, attributes, config);
+  const diagnostics = slaResult?.diagnostics && typeof slaResult.diagnostics === "object"
+    ? slaResult.diagnostics
+    : {};
+  const subjectDiagnostics = Array.isArray(diagnostics?.subjects) ? diagnostics.subjects : [];
+  const thresholdRaw = Number(config?.limits?.matrixCatastrophicCoverageThreshold);
+  const threshold = Number.isFinite(thresholdRaw)
+    ? Math.min(0.9, Math.max(0.05, thresholdRaw))
+    : 0.3;
+  const unresolvedRatio = Number(diagnostics?.unresolvedRatio || 0);
+  const evidenceSatisfiedCells = Number(diagnostics?.evidenceSatisfiedCells || 0);
+  const allSubjectsBelowThreshold = subjectDiagnostics.length > 0
+    && subjectDiagnostics.every((entry) => Number(entry?.evidenceCoverage || 0) < threshold);
+  const shouldAbort = evidenceSatisfiedCells === 0
+    || allSubjectsBelowThreshold
+    || unresolvedRatio >= 0.85;
+
+  let reason = "";
+  if (shouldAbort) {
+    if (evidenceSatisfiedCells === 0) {
+      reason = "Coverage collapsed: no cells met minimum evidence requirements after targeted recovery.";
+    } else if (allSubjectsBelowThreshold) {
+      reason = `Coverage collapsed: every subject remained below ${(threshold * 100).toFixed(0)}% evidence coverage after targeted recovery.`;
+    } else {
+      reason = `Coverage collapsed: unresolved cell ratio ${(unresolvedRatio * 100).toFixed(0)}% is catastrophically high.`;
+    }
+  }
+
+  return {
+    shouldAbort,
+    reason,
+    diagnostics: {
+      threshold,
+      coverageSla: diagnostics,
+    },
+  };
+}
+
+function enforceMatrixChunkCompleteness(matrix = {}, phase = "", analysisMeta = {}, debugSession = null) {
+  const normalization = matrix?.normalization && typeof matrix.normalization === "object"
+    ? matrix.normalization
+    : {};
+  const placeholderCellsAdded = Number(normalization?.placeholderCellsAdded || 0);
+  const expectedCells = Number(normalization?.expectedCells || 0);
+  const mappedCells = Number(normalization?.mappedCells || 0);
+  const droppedUnknownSubject = Number(normalization?.droppedUnknownSubject || 0);
+  const droppedUnknownAttribute = Number(normalization?.droppedUnknownAttribute || 0);
+  const hardFailure = placeholderCellsAdded > 0 || (expectedCells > 0 && mappedCells < expectedCells);
+  if (!hardFailure) return;
+
+  const reason = [
+    `matrix completeness guard failed at ${cleanText(phase) || "unknown_phase"}.`,
+    placeholderCellsAdded > 0 ? `missing cells synthesized: ${placeholderCellsAdded}` : "",
+    expectedCells > 0 && mappedCells < expectedCells ? `mapped cells ${mappedCells}/${expectedCells}` : "",
+    droppedUnknownSubject > 0 ? `dropped unknown subject mappings: ${droppedUnknownSubject}` : "",
+    droppedUnknownAttribute > 0 ? `dropped unknown attribute mappings: ${droppedUnknownAttribute}` : "",
+  ].filter(Boolean).join(" ");
+  markDegraded(analysisMeta, "matrix_completeness_guard_failed", reason);
+  if (analysisMeta && typeof analysisMeta === "object") {
+    analysisMeta.matrixNormalization = {
+      ...(analysisMeta.matrixNormalization || {}),
+      [cleanText(phase) || "unknown_phase"]: normalization,
+    };
+  }
+  appendAnalysisDebugEvent(debugSession, {
+    type: "matrix_completeness_guard_failed",
+    phase,
+    note: reason,
+    diagnostics: normalization,
+  });
+  const err = new Error(reason);
+  err.code = "MATRIX_COMPLETENESS_GUARD_FAILED";
+  err.retryable = false;
+  throw err;
 }
 
 function resolveMatrixDecisionGradeGate(config = {}) {
@@ -2036,10 +2180,14 @@ ${passLabel}
 ${liveSearchBlock}
 
 Subjects:
-${subjects.map((subject, idx) => `${idx + 1}. ${subject.label}`).join("\n")}
+${subjects.map((subject, idx) => `${idx + 1}. ${subject.id}: ${subject.label}`).join("\n")}
 
 Attributes:
 ${attributes.map((attr) => `- ${attr.id}: ${attr.label}${attr.brief ? ` - ${attr.brief}` : ""}`).join("\n")}
+
+Hard ID rule:
+- Use exact subjectId and attributeId identifiers shown above.
+- Never output positional row/column numbers as IDs.
 
 Return JSON only:
 {
@@ -2106,7 +2254,7 @@ Run context:
 ${setupContext}
 
 Subjects:
-${subjects.map((subject, idx) => `${idx + 1}. ${subject.label}`).join("\n")}
+${subjects.map((subject, idx) => `${idx + 1}. ${subject.id}: ${subject.label}`).join("\n")}
 
 Attributes:
 ${attributes.map((attr) => `- ${attr.id}: ${attr.label}`).join("\n")}
@@ -2126,6 +2274,142 @@ Rules:
 ${qualityGuardBlock}
 
 Return JSON only with the same schema as analyst pass.`;
+}
+
+function splitIntoChunks(items = [], chunkSize = 1) {
+  const list = Array.isArray(items) ? items : [];
+  const size = Math.max(1, Number(chunkSize) || 1);
+  const out = [];
+  for (let idx = 0; idx < list.length; idx += size) {
+    out.push(list.slice(idx, idx + size));
+  }
+  return out.length ? out : [[]];
+}
+
+function resolveMatrixChunkSize(subjects = [], attributes = [], limits = {}) {
+  const subjectCount = Math.max(1, Array.isArray(subjects) ? subjects.length : 0);
+  const attributeCount = Math.max(1, Array.isArray(attributes) ? attributes.length : 0);
+  const rawMaxCells = Number(limits?.matrixChunkMaxCells);
+  const maxCells = Number.isFinite(rawMaxCells)
+    ? Math.max(attributeCount, Math.round(rawMaxCells))
+    : Math.max(attributeCount, 32);
+  const byCells = Math.max(1, Math.floor(maxCells / attributeCount));
+  return Math.min(subjectCount, byCells);
+}
+
+function sliceMatrixBySubjects(matrix = {}, subjectIds = new Set()) {
+  const allowed = subjectIds instanceof Set ? subjectIds : new Set(subjectIds || []);
+  return {
+    ...matrix,
+    cells: (Array.isArray(matrix?.cells) ? matrix.cells : []).filter((cell) => allowed.has(cell?.subjectId)),
+    subjectSummaries: (Array.isArray(matrix?.subjectSummaries) ? matrix.subjectSummaries : [])
+      .filter((entry) => allowed.has(entry?.subjectId)),
+  };
+}
+
+function combineMatrixChunkPayloads(chunks = []) {
+  const cellMap = new Map();
+  const summaryMap = new Map();
+  const summaries = [];
+  (Array.isArray(chunks) ? chunks : []).forEach((entry) => {
+    const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : {};
+    const cells = Array.isArray(payload?.cells) ? payload.cells : [];
+    const subjectSummaries = Array.isArray(payload?.subjectSummaries) ? payload.subjectSummaries : [];
+    cells.forEach((cell) => {
+      const key = `${cleanText(cell?.subjectId || cell?.subject || cell?.row)}::${cleanText(cell?.attributeId || cell?.attribute || cell?.column)}`;
+      if (!key || key === "::") return;
+      cellMap.set(key, cell);
+    });
+    subjectSummaries.forEach((summary) => {
+      const key = cleanText(summary?.subjectId || summary?.subject || summary?.label).toLowerCase();
+      if (!key) return;
+      summaryMap.set(key, summary);
+    });
+    if (cleanText(payload?.crossMatrixSummary || payload?.summary)) {
+      summaries.push(cleanText(payload?.crossMatrixSummary || payload?.summary));
+    }
+  });
+
+  return {
+    cells: [...cellMap.values()],
+    subjectSummaries: [...summaryMap.values()],
+    crossMatrixSummary: summaries.join(" ").trim(),
+  };
+}
+
+async function runChunkedAnalystMatrixPass({
+  transport,
+  analystPrompt,
+  requestOptions = {},
+  rawInput = "",
+  decisionQuestion = "",
+  subjects = [],
+  attributes = [],
+  passLabel = "",
+  phase = "",
+  liveSearch = false,
+  tokenLimit = 8000,
+  limits = {},
+  debugSession = null,
+  analysisMeta = {},
+  researchSetup = {},
+  buildPromptForChunk = null,
+}) {
+  const chunkSize = resolveMatrixChunkSize(subjects, attributes, limits);
+  const chunks = splitIntoChunks(subjects, chunkSize);
+  const chunkPayloads = [];
+
+  for (let idx = 0; idx < chunks.length; idx += 1) {
+    const chunkSubjects = chunks[idx];
+    const prompt = typeof buildPromptForChunk === "function"
+      ? buildPromptForChunk(chunkSubjects, idx)
+      : buildMatrixEvidencePrompt({
+        rawInput,
+        decisionQuestion,
+        subjects: chunkSubjects,
+        attributes,
+        passLabel: `${passLabel} (chunk ${idx + 1}/${chunks.length})`,
+        liveSearch,
+        researchSetup,
+      });
+    const res = await transport.callAnalyst(
+      [{ role: "user", content: prompt }],
+      analystPrompt,
+      tokenLimit,
+      {
+        ...(requestOptions || {}),
+        liveSearch,
+        includeMeta: true,
+      }
+    );
+    if (analysisMeta && typeof analysisMeta === "object") {
+      Object.assign(analysisMeta, mergeMeta(analysisMeta, res?.meta, "analyst"));
+    }
+    const parsed = extractJson(res?.text || res, {}, {
+      phase,
+      attempt: `chunk_${idx + 1}/${chunks.length}`,
+      prompt,
+      debugSession,
+    });
+    chunkPayloads.push({
+      chunkIndex: idx,
+      subjectIds: chunkSubjects.map((item) => item.id),
+      payload: parsed,
+    });
+  }
+
+  const combinedPayload = combineMatrixChunkPayloads(chunkPayloads);
+  const matrix = normalizeAnalystMatrix(combinedPayload, subjects, attributes);
+  matrix.chunking = {
+    enabled: chunks.length > 1,
+    chunkCount: chunks.length,
+    chunkSize,
+    expectedCells: subjects.length * attributes.length,
+    rawCells: Number(matrix?.normalization?.rawCells || 0),
+    mappedCells: Number(matrix?.normalization?.mappedCells || 0),
+    placeholderCellsAdded: Number(matrix?.normalization?.placeholderCellsAdded || 0),
+  };
+  return matrix;
 }
 
 function buildLowConfidenceQueryPrompt({
@@ -2437,12 +2721,14 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
       if (confidence === "medium" && sourceCount < 2) return true;
       return false;
     });
+  const sortedCandidates = [...candidates]
+    .sort((a, b) => b._pressure - a._pressure || normalizeSourceList(a.sources).length - normalizeSourceList(b.sources).length);
 
   const maxBudget = Number(limits?.matrixTargetedBudgetCells);
   let budgetCells = 0;
   let strategy = "adaptive";
   if (Number.isFinite(maxBudget)) {
-    budgetCells = Math.max(1, Math.min(candidates.length || 1, Math.round(maxBudget)));
+    budgetCells = Math.max(1, Math.min(sortedCandidates.length || 1, Math.round(maxBudget)));
     strategy = "fixed";
   } else {
     const adaptiveRatioRaw = Number(limits?.matrixAdaptiveTargetedRatio);
@@ -2454,28 +2740,60 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
       ? Math.max(1, Math.round(adaptiveFloorRaw))
       : 12;
     const adaptiveCapRaw = Number(limits?.matrixAdaptiveTargetedMax);
-    const adaptiveCap = Number.isFinite(adaptiveCapRaw)
+    const adaptiveCapBase = Number.isFinite(adaptiveCapRaw)
       ? Math.max(1, Math.round(adaptiveCapRaw))
       : 36;
-    const adaptiveByRatio = Math.ceil(candidates.length * adaptiveRatio);
+    const adaptiveCap = Math.max(adaptiveCapBase, Math.ceil(sortedCandidates.length * 0.8));
+    const adaptiveByRatio = Math.ceil(sortedCandidates.length * adaptiveRatio);
     const adaptiveTarget = Math.min(
-      candidates.length,
-      Math.max(Math.min(adaptiveFloor, candidates.length), Math.min(adaptiveCap, adaptiveByRatio))
+      sortedCandidates.length,
+      Math.max(Math.min(adaptiveFloor, sortedCandidates.length), Math.min(adaptiveCap, adaptiveByRatio))
     );
     budgetCells = adaptiveTarget;
   }
 
-  const buckets = new Map();
-  candidates
-    .sort((a, b) => b._pressure - a._pressure || normalizeSourceList(a.sources).length - normalizeSourceList(b.sources).length)
-    .forEach((cell) => {
-      const key = cleanText(cell.subjectId) || "__none__";
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(cell);
-    });
-
-  const bucketKeys = [...buckets.keys()];
   const selected = [];
+  const selectedKeys = new Set();
+  const pushSelected = (cell) => {
+    if (!cell) return false;
+    const key = buildCellKey(cell.subjectId, cell.attributeId);
+    if (!key || selectedKeys.has(key) || selected.length >= budgetCells) return false;
+    selected.push(cell);
+    selectedKeys.add(key);
+    return true;
+  };
+
+  const byAttribute = new Map();
+  sortedCandidates.forEach((cell) => {
+    const key = cleanText(cell.attributeId) || "__none__";
+    if (!byAttribute.has(key)) byAttribute.set(key, []);
+    byAttribute.get(key).push(cell);
+  });
+  const attributeKeys = [...byAttribute.keys()];
+
+  attributeKeys.forEach((attrId) => {
+    const zeroEvidenceCell = (byAttribute.get(attrId) || []).find((cell) => (
+      normalizeSourceList(cell.sources).length === 0 || hasExplicitFailureReason(cell)
+    ));
+    pushSelected(zeroEvidenceCell);
+  });
+
+  attributeKeys.forEach((attrId) => {
+    if (selected.length >= budgetCells) return;
+    const alreadyCovered = selected.some((cell) => cleanText(cell.attributeId) === attrId);
+    if (alreadyCovered) return;
+    const topCandidate = (byAttribute.get(attrId) || [])[0];
+    pushSelected(topCandidate);
+  });
+
+  const remaining = sortedCandidates.filter((cell) => !selectedKeys.has(buildCellKey(cell.subjectId, cell.attributeId)));
+  const buckets = new Map();
+  remaining.forEach((cell) => {
+    const key = cleanText(cell.subjectId) || "__none__";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(cell);
+  });
+  const bucketKeys = [...buckets.keys()];
   let cursor = 0;
   while (selected.length < budgetCells && bucketKeys.length) {
     let picked = false;
@@ -2484,19 +2802,20 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
       const queue = buckets.get(key) || [];
       const next = queue.shift();
       if (!next) continue;
-      selected.push(next);
-      cursor = (cursor + i + 1) % bucketKeys.length;
-      picked = true;
-      break;
+      if (pushSelected(next)) {
+        cursor = (cursor + i + 1) % bucketKeys.length;
+        picked = true;
+        break;
+      }
     }
     if (!picked) break;
   }
 
   return {
     selected,
-    allCount: candidates.length,
+    allCount: sortedCandidates.length,
     budgetCells,
-    droppedByBudget: Math.max(0, candidates.length - selected.length),
+    droppedByBudget: Math.max(0, sortedCandidates.length - selected.length),
     strategy,
   };
 }
@@ -2539,12 +2858,48 @@ function selectDeepAssistRecoveryCells(cells = [], limits = {}, derivedAttribute
     .filter((cell) => Array.isArray(cell._reasons) && cell._reasons.length > 0)
     .sort((a, b) => b._pressure - a._pressure || normalizeSourceList(a.sources).length - normalizeSourceList(b.sources).length);
 
-  const defaultBudget = Math.max(1, Math.min(6, candidates.length));
   const budgetRaw = Number(limits?.deepAssistRecoveryBudgetCells ?? limits?.matrixTargetedBudgetCells);
-  const budgetCells = Number.isFinite(budgetRaw)
-    ? Math.max(1, Math.min(candidates.length || 1, Math.round(budgetRaw)))
-    : defaultBudget;
-  const selected = candidates.slice(0, budgetCells);
+  let budgetCells = 0;
+  if (Number.isFinite(budgetRaw)) {
+    budgetCells = Math.max(1, Math.min(candidates.length || 1, Math.round(budgetRaw)));
+  } else {
+    const ratioRaw = Number(limits?.deepAssistRecoveryRatio ?? limits?.matrixAdaptiveTargetedRatio);
+    const ratio = Number.isFinite(ratioRaw) ? Math.min(1, Math.max(0.2, ratioRaw)) : 0.6;
+    const floorRaw = Number(limits?.deepAssistRecoveryFloor ?? limits?.matrixAdaptiveTargetedFloor);
+    const floor = Number.isFinite(floorRaw) ? Math.max(1, Math.round(floorRaw)) : 8;
+    const capRaw = Number(limits?.deepAssistRecoveryMax ?? limits?.matrixAdaptiveTargetedMax);
+    const capBase = Number.isFinite(capRaw) ? Math.max(1, Math.round(capRaw)) : 36;
+    const cap = Math.max(capBase, Math.ceil(candidates.length * 0.8));
+    budgetCells = Math.min(
+      candidates.length,
+      Math.max(Math.min(floor, candidates.length), Math.min(cap, Math.ceil(candidates.length * ratio)))
+    );
+  }
+
+  const selected = [];
+  const selectedKeys = new Set();
+  const pushSelected = (cell) => {
+    if (!cell) return false;
+    const key = buildCellKey(cell.subjectId, cell.attributeId);
+    if (!key || selectedKeys.has(key) || selected.length >= budgetCells) return false;
+    selected.push(cell);
+    selectedKeys.add(key);
+    return true;
+  };
+
+  const byAttribute = new Map();
+  candidates.forEach((cell) => {
+    const key = cleanText(cell.attributeId) || "__none__";
+    if (!byAttribute.has(key)) byAttribute.set(key, []);
+    byAttribute.get(key).push(cell);
+  });
+  [...byAttribute.keys()].forEach((attrId) => {
+    const first = (byAttribute.get(attrId) || [])[0];
+    pushSelected(first);
+  });
+  candidates.forEach((cell) => {
+    pushSelected(cell);
+  });
   return {
     selected,
     allCount: candidates.length,
@@ -2914,6 +3269,7 @@ async function runMatrixDeepAssistEnrichment({
   transport,
   debugSession,
   analysisMeta,
+  strictQuality = true,
   rawInput,
   decisionQuestion,
   subjects,
@@ -2961,6 +3317,10 @@ async function runMatrixDeepAssistEnrichment({
           debugSession,
         });
         const matrix = normalizeAnalystMatrix(parsed, subjects, attributes);
+        const missingCells = Number(matrix?.normalization?.placeholderCellsAdded || 0);
+        if (missingCells > 0) {
+          throw new Error(`${label} deep assist output missed ${missingCells} matrix cells after normalization.`);
+        }
         const durationMs = Math.max(0, Date.now() - startedAt);
         const webSearchCalls = Number(responseMeta?.webSearchCalls || 0);
         appendAnalysisDebugEvent(debugSession, {
@@ -3048,6 +3408,15 @@ async function runMatrixDeepAssistEnrichment({
         `${count} Deep Assist provider failure(s) matched ${code}.`
       );
     });
+    failIfStrictQuality(
+      strictQuality,
+      `Matrix Deep Assist provider failures detected (${failedRuns.length}/${providerRuns.length}). Aborting run.`,
+      "STRICT_MATRIX_DEEP_ASSIST_PROVIDER_PARTIAL_FAILURE"
+    );
+    const err = new Error(`Matrix Deep Assist provider failures detected (${failedRuns.length}/${providerRuns.length}).`);
+    err.code = "MATRIX_DEEP_ASSIST_PROVIDER_PARTIAL_FAILURE";
+    err.retryable = false;
+    throw err;
   }
 
   const successful = providerRuns.filter((run) => run.status === "ok" && run.matrix);
@@ -3055,9 +3424,17 @@ async function runMatrixDeepAssistEnrichment({
     markDegraded(
       analysisMeta,
       "deep_assist_no_provider_success",
-      "All Deep Assist providers failed in matrix enrichment; continuing with native matrix evidence."
+      "All Deep Assist providers failed in matrix enrichment."
     );
-    return baseMatrix;
+    failIfStrictQuality(
+      strictQuality,
+      "Matrix Deep Assist failed: no provider succeeded.",
+      "STRICT_MATRIX_DEEP_ASSIST_NO_PROVIDER_SUCCESS"
+    );
+    const err = new Error("Matrix Deep Assist failed: no provider succeeded.");
+    err.code = "MATRIX_DEEP_ASSIST_NO_PROVIDER_SUCCESS";
+    err.retryable = false;
+    throw err;
   }
   if (successful.length < deepAssist.minProviders) {
     markDegraded(
@@ -3065,6 +3442,15 @@ async function runMatrixDeepAssistEnrichment({
       "deep_assist_min_provider_not_met",
       `Matrix deep assist succeeded with ${successful.length}/${deepAssist.minProviders} required providers.`
     );
+    failIfStrictQuality(
+      strictQuality,
+      `Matrix Deep Assist minimum providers not met (${successful.length}/${deepAssist.minProviders}).`,
+      "STRICT_MATRIX_DEEP_ASSIST_MIN_PROVIDER_NOT_MET"
+    );
+    const err = new Error(`Matrix Deep Assist minimum providers not met (${successful.length}/${deepAssist.minProviders}).`);
+    err.code = "MATRIX_DEEP_ASSIST_MIN_PROVIDER_NOT_MET";
+    err.retryable = false;
+    throw err;
   }
 
   const merged = mergeDeepAssistMatrix(baseMatrix, providerRuns);
@@ -3449,6 +3835,60 @@ function mergeSubjectEntries(primary = [], secondary = [], subjectsSpec = {}, op
   return out.slice(0, maxCount);
 }
 
+function labelsLikelyDuplicate(a = "", b = "") {
+  const labelA = cleanText(a).toLowerCase();
+  const labelB = cleanText(b).toLowerCase();
+  if (!labelA || !labelB) return false;
+  if (normalizeSubjectMatchKey(labelA) === normalizeSubjectMatchKey(labelB)) return true;
+  const overlap = tokenOverlapScore(labelA, labelB);
+  if (overlap >= 0.72) return true;
+  if (labelA.includes(labelB) || labelB.includes(labelA)) return true;
+  return false;
+}
+
+function dedupeSubjectEntries(entries = []) {
+  const out = [];
+  const mergedAliases = [];
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    const label = cleanText(entry?.label || entry);
+    if (!label) return;
+    const existingIdx = out.findIndex((candidate) => labelsLikelyDuplicate(candidate.label, label));
+    if (existingIdx < 0) {
+      out.push({
+        id: cleanText(entry?.id) || toId(label, `subject-${out.length + 1}`),
+        label,
+      });
+      return;
+    }
+
+    const existing = out[existingIdx];
+    const existingTokenCount = tokenSet(existing.label).size;
+    const incomingTokenCount = tokenSet(label).size;
+    const shouldReplaceLabel = incomingTokenCount > existingTokenCount;
+    if (shouldReplaceLabel) {
+      out[existingIdx] = {
+        ...existing,
+        label,
+      };
+    }
+    mergedAliases.push({
+      from: label,
+      into: out[existingIdx].label,
+    });
+  });
+  return { subjects: out, mergedAliases };
+}
+
+function containsMatchingSubjectLabel(label = "", entries = []) {
+  const needle = cleanText(label);
+  if (!needle) return false;
+  return (Array.isArray(entries) ? entries : []).some((entry) => {
+    const candidate = cleanText(entry?.label || entry);
+    if (!candidate) return false;
+    return labelsLikelyDuplicate(needle, candidate);
+  });
+}
+
 export async function resolveMatrixResearchInput(input, config, callbacks = {}, options = {}) {
   const desc = cleanText(input?.description || input?.rawInput);
   if (!desc) throw new Error("Matrix input description is required.");
@@ -3463,7 +3903,7 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     subjectsSpec,
     { strict: false, preserveAll: true }
   );
-  const requiredSubjects = mergeSubjectEntries(
+  const requiredMerged = mergeSubjectEntries(
     explicitSubjects,
     requiredFromPrompt,
     subjectsSpec,
@@ -3472,6 +3912,8 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
       maxCountOverride: Math.max(specMaxCount, explicitSubjects.length, requiredFromPrompt.length),
     }
   );
+  const requiredCanonicalized = dedupeSubjectEntries(requiredMerged);
+  const requiredSubjects = requiredCanonicalized.subjects;
   const runMaxCount = Math.max(specMaxCount, requiredSubjects.length);
   const extractedLabels = extractSubjectsFromUnifiedPrompt(desc);
   const extractedSubjects = normalizeSubjectList(
@@ -3479,18 +3921,19 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     subjectsSpec,
     { strict: false, maxCountOverride: runMaxCount }
   );
-  const mergedLocal = mergeSubjectEntries(explicitSubjects, extractedSubjects, subjectsSpec, {
+  const mergedLocalRaw = mergeSubjectEntries(explicitSubjects, extractedSubjects, subjectsSpec, {
     required: requiredSubjects,
     maxCountOverride: runMaxCount,
   });
+  const mergedLocalCanonicalized = dedupeSubjectEntries(mergedLocalRaw);
+  const mergedLocal = mergedLocalCanonicalized.subjects;
   const decisionQuestion = extractDecisionQuestion(desc);
 
   const findMissingRequired = (items = []) => {
-    const itemSet = new Set((Array.isArray(items) ? items : []).map((entry) => normalizeSubjectMatchKey(entry?.label || entry)));
     return requiredSubjects
       .map((entry) => cleanText(entry?.label))
       .filter(Boolean)
-      .filter((label) => !itemSet.has(normalizeSubjectMatchKey(label)));
+      .filter((label) => !containsMatchingSubjectLabel(label, items));
   };
   const ensureRequiredPresent = (items = []) => {
     const missing = findMissingRequired(items);
@@ -3513,6 +3956,9 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
       usedSubjectDiscovery: false,
       requiresConfirmation: false,
       discoveryMeta: null,
+      subjectCanonicalization: {
+        mergedAliases: mergedLocalCanonicalized.mergedAliases,
+      },
     };
   }
 
@@ -3539,17 +3985,24 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     modelOptions
   );
 
-  const parsed = extractJson(response?.text || response, {});
+  const parsed = extractJson(response?.text || response, {}, {
+    phase: "matrix_subject_discovery",
+    attempt: "initial",
+    prompt,
+    debugSession: options?.debugSession || null,
+  });
   const discovery = normalizeSubjectDiscoveryResult(parsed, subjectsSpec);
   const discoveredSubjects = discovery.normalizedSubjects;
   if (discoveredSubjects.length < minCount) {
     throw new Error(`Subject discovery returned fewer than ${minCount} viable subjects. Please provide subjects explicitly.`);
   }
 
-  const finalSubjects = mergeSubjectEntries(mergedLocal, discoveredSubjects, subjectsSpec, {
+  const finalSubjectsRaw = mergeSubjectEntries(mergedLocal, discoveredSubjects, subjectsSpec, {
     required: requiredSubjects,
     maxCountOverride: runMaxCount,
   });
+  const finalCanonicalized = dedupeSubjectEntries(finalSubjectsRaw);
+  const finalSubjects = finalCanonicalized.subjects;
   if (finalSubjects.length < minCount) {
     throw new Error(`Please confirm at least ${minCount} subjects before running matrix analysis.`);
   }
@@ -3568,6 +4021,9 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     usedSubjectDiscovery: true,
     requiresConfirmation: requireConfirmation,
     discoveryMeta: response?.meta || null,
+    subjectCanonicalization: {
+      mergedAliases: [...(mergedLocalCanonicalized.mergedAliases || []), ...(finalCanonicalized.mergedAliases || [])],
+    },
   };
 }
 
@@ -3806,6 +4262,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     sourceUniverse: state.analysisMeta?.sourceUniverse && typeof state.analysisMeta.sourceUniverse === "object"
       ? state.analysisMeta.sourceUniverse
       : emptySourceUniverseSummary(),
+    matrixChunking: state.analysisMeta?.matrixChunking && typeof state.analysisMeta.matrixChunking === "object"
+      ? state.analysisMeta.matrixChunking
+      : {},
+    matrixNormalization: state.analysisMeta?.matrixNormalization && typeof state.analysisMeta.matrixNormalization === "object"
+      ? state.analysisMeta.matrixNormalization
+      : {},
+    matrixEarlyCoverageGate: state.analysisMeta?.matrixEarlyCoverageGate && typeof state.analysisMeta.matrixEarlyCoverageGate === "object"
+      ? state.analysisMeta.matrixEarlyCoverageGate
+      : null,
     redTeamCallMade: !!state.analysisMeta?.redTeamCallMade,
     redTeamHighSeverityCount: Number(state.analysisMeta?.redTeamHighSeverityCount || 0),
     synthesizerCallMade: !!state.analysisMeta?.synthesizerCallMade,
@@ -3853,12 +4318,18 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
   const criticPrompt = cleanText(config?.prompts?.matrixCritic) || MATRIX_CRITIC_PROMPT;
 
   try {
-    const resolvedInput = await resolveMatrixResearchInput(input, config, { transport }, { requireConfirmation: false });
+    const resolvedInput = await resolveMatrixResearchInput(
+      input,
+      config,
+      { transport },
+      { requireConfirmation: false, debugSession }
+    );
 
     state.analysisMeta.subjectDiscoveryRequested = true;
     state.analysisMeta.subjectDiscoverySuggestedCount = resolvedInput?.discovery?.normalizedSubjects?.length || 0;
     state.analysisMeta.requiredSubjectsRequested = Number((resolvedInput?.requiredSubjects || []).length || 0);
     state.analysisMeta.requiredSubjectsMissing = Number((resolvedInput?.missingRequiredSubjects || []).length || 0);
+    state.analysisMeta.subjectCanonicalization = resolvedInput?.subjectCanonicalization || { mergedAliases: [] };
     state.analysisMeta = mergeMeta(state.analysisMeta, resolvedInput?.discoveryMeta, "subject_discovery");
 
     const subjects = resolvedInput.subjects;
@@ -3898,39 +4369,39 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           localSubjects: resolvedInput.localSubjects || [],
           requiredSubjects: resolvedInput.requiredSubjects || [],
           missingRequiredSubjects: resolvedInput.missingRequiredSubjects || [],
+          subjectCanonicalization: resolvedInput?.subjectCanonicalization || { mergedAliases: [] },
           notes: resolvedInput?.discovery?.notes || "",
         },
       },
     });
 
     update("matrix_baseline", {});
-    const baselinePrompt = buildMatrixEvidencePrompt({
+    const baselineMatrix = await runChunkedAnalystMatrixPass({
+      transport,
+      analystPrompt,
+      requestOptions: roleOptions(config, "analyst"),
       rawInput: state.rawInput,
       decisionQuestion,
       subjects,
       attributes,
       passLabel: "baseline memory-only pass",
+      phase: "matrix_baseline",
       liveSearch: false,
+      tokenLimit: analystTokens,
+      limits: config?.limits || {},
+      debugSession,
+      analysisMeta: state.analysisMeta,
       researchSetup,
     });
-    const baselineRes = await transport.callAnalyst(
-      [{ role: "user", content: baselinePrompt }],
-      analystPrompt,
-      analystTokens,
-      {
-        ...roleOptions(config, "analyst"),
-        liveSearch: false,
-        includeMeta: true,
-      }
-    );
-    const baselineParsed = extractJson(baselineRes?.text || baselineRes, {}, {
-      phase: "matrix_baseline",
-      attempt: "initial",
-      prompt: baselinePrompt,
-      debugSession,
-    });
-    const baselineMatrix = normalizeAnalystMatrix(baselineParsed, subjects, attributes);
-    state.analysisMeta = mergeMeta(state.analysisMeta, baselineRes?.meta, "analyst");
+    enforceMatrixChunkCompleteness(baselineMatrix, "matrix_baseline", state.analysisMeta, debugSession);
+    state.analysisMeta.matrixChunking = {
+      ...(state.analysisMeta.matrixChunking || {}),
+      matrix_baseline: baselineMatrix?.chunking || null,
+    };
+    state.analysisMeta.matrixNormalization = {
+      ...(state.analysisMeta.matrixNormalization || {}),
+      matrix_baseline: baselineMatrix?.normalization || null,
+    };
     await verifyMatrixCellSources(baselineMatrix, state.analysisMeta, sourceFetchCache, {
       penalizeConfidence: true,
       transport,
@@ -3945,33 +4416,32 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       analysisMeta: state.analysisMeta,
     });
 
-    const webPrompt = buildMatrixEvidencePrompt({
+    const webMatrix = await runChunkedAnalystMatrixPass({
+      transport,
+      analystPrompt,
+      requestOptions: roleOptions(config, "analyst"),
       rawInput: state.rawInput,
       decisionQuestion,
       subjects,
       attributes,
       passLabel: "web-assisted pass",
+      phase: "matrix_web",
       liveSearch: true,
+      tokenLimit: analystTokens,
+      limits: config?.limits || {},
+      debugSession,
+      analysisMeta: state.analysisMeta,
       researchSetup,
     });
-    const webRes = await transport.callAnalyst(
-      [{ role: "user", content: webPrompt }],
-      analystPrompt,
-      analystTokens,
-      {
-        ...roleOptions(config, "analyst"),
-        liveSearch: true,
-        includeMeta: true,
-      }
-    );
-    const webParsed = extractJson(webRes?.text || webRes, {}, {
-      phase: "matrix_web",
-      attempt: "initial",
-      prompt: webPrompt,
-      debugSession,
-    });
-    const webMatrix = normalizeAnalystMatrix(webParsed, subjects, attributes);
-    state.analysisMeta = mergeMeta(state.analysisMeta, webRes?.meta, "analyst");
+    enforceMatrixChunkCompleteness(webMatrix, "matrix_web", state.analysisMeta, debugSession);
+    state.analysisMeta.matrixChunking = {
+      ...(state.analysisMeta.matrixChunking || {}),
+      matrix_web: webMatrix?.chunking || null,
+    };
+    state.analysisMeta.matrixNormalization = {
+      ...(state.analysisMeta.matrixNormalization || {}),
+      matrix_web: webMatrix?.normalization || null,
+    };
     await verifyMatrixCellSources(webMatrix, state.analysisMeta, sourceFetchCache, {
       penalizeConfidence: true,
       transport,
@@ -3987,34 +4457,47 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     });
 
     const runReconcilePass = async (qualityGuard = null, attempt = "initial") => {
-      const reconcilePrompt = buildMatrixReconcilePrompt({
+      const matrix = await runChunkedAnalystMatrixPass({
+        transport,
+        analystPrompt,
+        requestOptions: roleOptions(config, "analyst"),
         rawInput: state.rawInput,
         decisionQuestion,
         subjects,
         attributes,
-        baseline: baselineMatrix,
-        web: webMatrix,
-        qualityGuard,
-        researchSetup,
-      });
-      const reconcileRes = await transport.callAnalyst(
-        [{ role: "user", content: reconcilePrompt }],
-        analystPrompt,
-        analystTokens,
-        {
-          ...roleOptions(config, "analyst"),
-          liveSearch: false,
-          includeMeta: true,
-        }
-      );
-      state.analysisMeta = mergeMeta(state.analysisMeta, reconcileRes?.meta, "analyst");
-      const reconcileParsed = extractJson(reconcileRes?.text || reconcileRes, {}, {
+        passLabel: `reconcile merge pass (${attempt})`,
         phase: "matrix_reconcile",
-        attempt,
-        prompt: reconcilePrompt,
+        liveSearch: false,
+        tokenLimit: analystTokens,
+        limits: config?.limits || {},
         debugSession,
+        analysisMeta: state.analysisMeta,
+        researchSetup,
+        buildPromptForChunk: (chunkSubjects) => {
+          const subjectIds = new Set(chunkSubjects.map((item) => item.id));
+          const baselineChunk = sliceMatrixBySubjects(baselineMatrix, subjectIds);
+          const webChunk = sliceMatrixBySubjects(webMatrix, subjectIds);
+          return buildMatrixReconcilePrompt({
+            rawInput: state.rawInput,
+            decisionQuestion,
+            subjects: chunkSubjects,
+            attributes,
+            baseline: baselineChunk,
+            web: webChunk,
+            qualityGuard,
+            researchSetup,
+          });
+        },
       });
-      const matrix = normalizeAnalystMatrix(reconcileParsed, subjects, attributes);
+      enforceMatrixChunkCompleteness(matrix, "matrix_reconcile", state.analysisMeta, debugSession);
+      state.analysisMeta.matrixChunking = {
+        ...(state.analysisMeta.matrixChunking || {}),
+        [`matrix_reconcile_${attempt}`]: matrix?.chunking || null,
+      };
+      state.analysisMeta.matrixNormalization = {
+        ...(state.analysisMeta.matrixNormalization || {}),
+        [`matrix_reconcile_${attempt}`]: matrix?.normalization || null,
+      };
       await verifyMatrixCellSources(matrix, state.analysisMeta, sourceFetchCache, {
         penalizeConfidence: true,
         transport,
@@ -4403,6 +4886,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           transport,
           debugSession,
           analysisMeta: state.analysisMeta,
+          strictQuality,
           rawInput: state.rawInput,
           decisionQuestion,
           subjects,
@@ -4678,7 +5162,30 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           `Strict quality mode: matrix deep-assist enrichment failed. ${note}`,
           "STRICT_MATRIX_DEEP_ASSIST_FAILED"
         );
+        throw deepAssistErr;
       }
+    }
+
+    const earlyCoverageGate = evaluateMatrixEarlyCatastrophicCoverage(
+      reconciledMatrix,
+      subjects,
+      attributes,
+      config
+    );
+    state.analysisMeta.matrixEarlyCoverageGate = earlyCoverageGate.diagnostics;
+    if (earlyCoverageGate.shouldAbort) {
+      const note = cleanText(earlyCoverageGate.reason || "Matrix run aborted by early catastrophic coverage gate.");
+      markDegraded(state.analysisMeta, "matrix_early_catastrophic_coverage_abort", note);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_early_coverage_abort",
+        phase: "matrix_targeted",
+        note,
+        diagnostics: earlyCoverageGate.diagnostics,
+      });
+      const abortErr = new Error(note);
+      abortErr.code = "MATRIX_EARLY_COVERAGE_ABORT";
+      abortErr.retryable = false;
+      throw abortErr;
     }
 
     update("matrix_critic", {
