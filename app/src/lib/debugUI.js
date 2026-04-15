@@ -4,9 +4,9 @@ const MAX_COMPLETED_SESSIONS = 1;
 const completedSessions = [];
 let activeRunCapture = null;
 
-const MAX_TEXT = 200000;
+const MAX_TEXT = 5000000;
 const MAX_ARRAY_ITEMS = 1200;
-const MAX_OBJECT_KEYS = 400;
+const MAX_OBJECT_KEYS = 1200;
 
 function trimText(value, max = MAX_TEXT) {
   if (value == null) return value;

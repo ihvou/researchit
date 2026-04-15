@@ -151,21 +151,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
   if (data.error) throw new Error(data.error.message);
 
   const text = extractChatCompletionsText(data);
-  if (!text) {
-    const fallback = await callResponsesTextOnly({
-      apiKey,
-      model,
-      messages,
-      systemPrompt,
-      maxTokens,
-      baseUrl,
-      extraMeta: {
-        ...extraMeta,
-        chatCompletionNoTextFallback: true,
-      },
-    });
-    return fallback;
-  }
+  if (!text) throw new Error("No text content in OpenAI chat completions output");
 
   return {
     text,
@@ -242,29 +228,14 @@ export async function callOpenAI({
   if (!standardModel) throw new Error("OpenAI model is required");
 
   if (liveSearch) {
-    try {
-      return await callResponsesWithWebSearch({
-        apiKey,
-        model: searchModel,
-        messages,
-        systemPrompt,
-        maxTokens,
-        baseUrl,
-      });
-    } catch (webErr) {
-      return callChatCompletions({
-        apiKey,
-        model: searchModel,
-        messages,
-        systemPrompt,
-        maxTokens,
-        baseUrl,
-        extraMeta: {
-          liveSearchRequested: true,
-          liveSearchFallbackReason: webErr.message,
-        },
-      });
-    }
+    return callResponsesWithWebSearch({
+      apiKey,
+      model: searchModel,
+      messages,
+      systemPrompt,
+      maxTokens,
+      baseUrl,
+    });
   }
 
   return callChatCompletions({

@@ -103,18 +103,9 @@ async function callAnthropic({
     return toJsonBody(response, "Anthropic request failed");
   };
 
-  let data;
-  let liveSearchFallbackReason = null;
-  if (liveSearch) {
-    try {
-      data = await makeRequest(true);
-    } catch (err) {
-      liveSearchFallbackReason = err?.message || "Anthropic web search tool request failed.";
-      data = await makeRequest(false);
-    }
-  } else {
-    data = await makeRequest(false);
-  }
+  const data = liveSearch
+    ? await makeRequest(true)
+    : await makeRequest(false);
 
   const blocks = Array.isArray(data?.content) ? data.content : [];
   const text = blocks
@@ -137,7 +128,6 @@ async function callAnthropic({
       model: resolvedModel,
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
-      ...(liveSearchFallbackReason ? { liveSearchFallbackReason } : {}),
     },
   };
 }
@@ -239,18 +229,9 @@ async function callGemini({
     return toJsonBody(response, "Gemini request failed");
   };
 
-  let data;
-  let liveSearchFallbackReason = null;
-  if (liveSearch) {
-    try {
-      data = await makeRequest(true);
-    } catch (err) {
-      liveSearchFallbackReason = err?.message || "Gemini grounding request failed.";
-      data = await makeRequest(false);
-    }
-  } else {
-    data = await makeRequest(false);
-  }
+  const data = liveSearch
+    ? await makeRequest(true)
+    : await makeRequest(false);
 
   const text = extractGeminiText(data);
   if (!text) {
@@ -266,7 +247,6 @@ async function callGemini({
       model: cleanText(model),
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
-      ...(liveSearchFallbackReason ? { liveSearchFallbackReason } : {}),
     },
   };
 }
@@ -316,4 +296,3 @@ export async function callProviderModel({
     baseUrl,
   });
 }
-

@@ -657,9 +657,8 @@ function clip(text, max = 260) {
 }
 
 function shortText(value, max = 1800) {
-  if (!value) return "";
-  if (value.length <= max) return value;
-  return `${value.slice(0, max)}... [trimmed]`;
+  if (value == null) return "";
+  return String(value);
 }
 
 function clampScore(value, fallback = null) {

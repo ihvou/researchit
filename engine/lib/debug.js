@@ -1,4 +1,4 @@
-const MAX_TEXT = 120000;
+const MAX_TEXT = 5000000;
 
 function trimText(value, max = MAX_TEXT) {
   if (value == null) return value;
@@ -14,7 +14,7 @@ function sanitizeEvent(event = {}) {
   if (out.type) out.type = trimText(out.type, 120);
   if (out.error) out.error = trimText(out.error, 8000);
   if (out.parseNear) out.parseNear = trimText(out.parseNear, 8000);
-  if (out.prompt) out.prompt = trimText(out.prompt, 50000);
+  if (out.prompt) out.prompt = trimText(out.prompt, MAX_TEXT);
   if (out.response) out.response = trimText(out.response, MAX_TEXT);
   if (out.responseExcerpt) out.responseExcerpt = trimText(out.responseExcerpt, 12000);
   return out;

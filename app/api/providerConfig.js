@@ -94,7 +94,8 @@ function resolveProviderOrder(role, requestedProvider, liveSearch = false) {
   );
   const requested = parseProviderList(requestedProvider);
   const defaults = DEFAULT_PROVIDER_PREFERENCE[profile] || DEFAULT_PROVIDER_PREFERENCE.analyst;
-  return uniqueProviderOrder([...requested, ...envSpecific, ...envGlobal, ...defaults]);
+  const ordered = uniqueProviderOrder([...requested, ...envSpecific, ...envGlobal, ...defaults]);
+  return ordered.length ? [ordered[0]] : [];
 }
 
 function resolveApiKey(role, provider) {
@@ -284,15 +285,15 @@ export function resolveRoleProviderConfig({
     liveSearch: false,
   });
   if (candidates.length) return candidates[0];
-  const fallbackProvider = resolveProvider(role, requestedProvider);
-  const model = resolveModel(role, fallbackProvider, requestedModel, defaultModel);
+  const pinnedProvider = resolveProvider(role, requestedProvider);
+  const model = resolveModel(role, pinnedProvider, requestedModel, defaultModel);
   return {
-    providerId: fallbackProvider,
-    provider: fallbackProvider,
+    providerId: pinnedProvider,
+    provider: pinnedProvider,
     model,
-    webSearchModel: resolveWebSearchModel(role, fallbackProvider, requestedWebSearchModel, model),
-    baseUrl: resolveBaseUrl(role, fallbackProvider, requestedBaseUrl),
-    apiKey: resolveApiKey(role, fallbackProvider),
+    webSearchModel: resolveWebSearchModel(role, pinnedProvider, requestedWebSearchModel, model),
+    baseUrl: resolveBaseUrl(role, pinnedProvider, requestedBaseUrl),
+    apiKey: resolveApiKey(role, pinnedProvider),
   };
 }
 

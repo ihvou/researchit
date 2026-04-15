@@ -40,40 +40,33 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: missingApiKeyError("synthesizer") });
   }
 
-  const failures = [];
-  for (let idx = 0; idx < candidates.length; idx += 1) {
-    const resolved = candidates[idx];
-    try {
-      const result = await callProviderModel({
-        providerId: resolved.providerId,
-        apiKey: resolved.apiKey,
-        model: resolved.model,
-        webSearchModel: resolved.webSearchModel,
-        messages,
-        systemPrompt,
-        maxTokens,
-        liveSearch,
-        baseUrl: resolved.baseUrl,
-      });
-      return res.status(200).json({
-        ...result,
-        meta: {
-          ...(result?.meta || {}),
-          providerId: result?.meta?.providerId || resolved.providerId,
-          providerFallbackUsed: idx > 0,
-          providerAttemptCount: idx + 1,
-        },
-      });
-    } catch (err) {
-      failures.push({
-        providerId: resolved.providerId,
-        message: err?.message || "Unknown provider error",
-      });
-    }
+  const resolved = candidates[0];
+  try {
+    const result = await callProviderModel({
+      providerId: resolved.providerId,
+      apiKey: resolved.apiKey,
+      model: resolved.model,
+      webSearchModel: resolved.webSearchModel,
+      messages,
+      systemPrompt,
+      maxTokens,
+      liveSearch,
+      baseUrl: resolved.baseUrl,
+    });
+    return res.status(200).json({
+      ...result,
+      meta: {
+        ...(result?.meta || {}),
+        providerId: result?.meta?.providerId || resolved.providerId,
+        providerFallbackUsed: false,
+        providerAttemptCount: 1,
+        providerRoutePinned: true,
+      },
+    });
+  } catch (err) {
+    const detail = err?.message || "Unknown provider error";
+    return res.status(500).json({
+      error: `Pinned synthesizer provider route failed (${resolved.providerId}): ${detail}`,
+    });
   }
-
-  const detail = failures.map((entry) => `${entry.providerId}: ${entry.message}`).join(" | ");
-  return res.status(500).json({
-    error: detail ? `All synthesizer provider routes failed. ${detail}` : "OpenAI-compatible request failed",
-  });
 }

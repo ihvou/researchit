@@ -846,11 +846,30 @@ function capabilityOptions(config, capability, fallbackRole = "analyst") {
   return base;
 }
 
-function extractJson(text, fallback = {}) {
+function extractJson(text, fallback = {}, context = {}) {
   try {
     return safeParseJSON(text);
-  } catch (_) {
-    return fallback;
+  } catch (err) {
+    const rawText = typeof text === "string" ? text : String(text || "");
+    const debugSession = context?.debugSession || null;
+    if (debugSession) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "json_parse_failure",
+        phase: cleanText(context?.phase) || "matrix_unknown",
+        attempt: cleanText(context?.attempt),
+        error: err?.message || "Failed to parse JSON response.",
+        responseLength: rawText.length,
+        responseExcerpt: rawText.slice(0, 12000),
+        response: rawText,
+        prompt: cleanText(context?.prompt),
+        extra: context?.extra || null,
+      });
+    }
+    if (context?.allowFallback) return fallback;
+    const parseErr = new Error(`JSON parse failed (${cleanText(context?.phase) || "matrix"}): ${err?.message || "Invalid JSON response."}`);
+    parseErr.code = "JSON_PARSE_FAILED";
+    parseErr.retryable = false;
+    throw parseErr;
   }
 }
 
@@ -2935,7 +2954,12 @@ async function runMatrixDeepAssistEnrichment({
           )
         );
         const responseMeta = response?.meta && typeof response.meta === "object" ? response.meta : null;
-        const parsed = extractJson(response?.text || response, {});
+        const parsed = extractJson(response?.text || response, {}, {
+          phase: "matrix_deep_assist",
+          attempt: providerId,
+          prompt,
+          debugSession,
+        });
         const matrix = normalizeAnalystMatrix(parsed, subjects, attributes);
         const durationMs = Math.max(0, Date.now() - startedAt);
         const webSearchCalls = Number(responseMeta?.webSearchCalls || 0);
@@ -3899,7 +3923,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         includeMeta: true,
       }
     );
-    const baselineParsed = extractJson(baselineRes?.text || baselineRes, {});
+    const baselineParsed = extractJson(baselineRes?.text || baselineRes, {}, {
+      phase: "matrix_baseline",
+      attempt: "initial",
+      prompt: baselinePrompt,
+      debugSession,
+    });
     const baselineMatrix = normalizeAnalystMatrix(baselineParsed, subjects, attributes);
     state.analysisMeta = mergeMeta(state.analysisMeta, baselineRes?.meta, "analyst");
     await verifyMatrixCellSources(baselineMatrix, state.analysisMeta, sourceFetchCache, {
@@ -3935,7 +3964,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         includeMeta: true,
       }
     );
-    const webParsed = extractJson(webRes?.text || webRes, {});
+    const webParsed = extractJson(webRes?.text || webRes, {}, {
+      phase: "matrix_web",
+      attempt: "initial",
+      prompt: webPrompt,
+      debugSession,
+    });
     const webMatrix = normalizeAnalystMatrix(webParsed, subjects, attributes);
     state.analysisMeta = mergeMeta(state.analysisMeta, webRes?.meta, "analyst");
     await verifyMatrixCellSources(webMatrix, state.analysisMeta, sourceFetchCache, {
@@ -3974,7 +4008,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
       );
       state.analysisMeta = mergeMeta(state.analysisMeta, reconcileRes?.meta, "analyst");
-      const reconcileParsed = extractJson(reconcileRes?.text || reconcileRes, {});
+      const reconcileParsed = extractJson(reconcileRes?.text || reconcileRes, {}, {
+        phase: "matrix_reconcile",
+        attempt,
+        prompt: reconcilePrompt,
+        debugSession,
+      });
       const matrix = normalizeAnalystMatrix(reconcileParsed, subjects, attributes);
       await verifyMatrixCellSources(matrix, state.analysisMeta, sourceFetchCache, {
         penalizeConfidence: true,
@@ -4106,7 +4145,16 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
       );
       state.analysisMeta = mergeTargetedMeta(state.analysisMeta, strategistRes?.meta);
-      strategistHints = normalizeMatrixStrategistHints(extractJson(strategistRes?.text || strategistRes, {}), subjects, attributes);
+      strategistHints = normalizeMatrixStrategistHints(
+        extractJson(strategistRes?.text || strategistRes, {}, {
+          phase: "matrix_targeted_strategist",
+          attempt: "initial",
+          prompt: strategistPrompt,
+          debugSession,
+        }),
+        subjects,
+        attributes
+      );
       state.analysisMeta.targetedRetrievalNiche = strategistHints.niche || "";
       state.analysisMeta.targetedRetrievalAliases = strategistHints.aliases || [];
     } catch (_) {
@@ -4178,7 +4226,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           }
         );
         state.analysisMeta = mergeTargetedMeta(state.analysisMeta, queryRes?.meta);
-        queryPlan = normalizeQueryPlan(extractJson(queryRes?.text || queryRes, {}), fallbackPlan);
+        queryPlan = normalizeQueryPlan(
+          extractJson(queryRes?.text || queryRes, {}, {
+            phase: "matrix_targeted_query_plan",
+            attempt: diag.cellKey,
+            prompt: queryPrompt,
+            debugSession,
+          }),
+          fallbackPlan
+        );
         queryPlan.queries = [...new Set([
           ...normalizeStringList(strategistForCell?.querySeeds, 3, 170),
           ...normalizeStringList(queryPlan.queries, 4, 170),
@@ -4227,7 +4283,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           }
         );
         state.analysisMeta = mergeTargetedMeta(state.analysisMeta, searchRes?.meta);
-        harvest = normalizeSearchHarvest(extractJson(searchRes?.text || searchRes, {}), queryPlan);
+        harvest = normalizeSearchHarvest(
+          extractJson(searchRes?.text || searchRes, {}, {
+            phase: "matrix_targeted_search_harvest",
+            attempt: diag.cellKey,
+            prompt: searchPrompt,
+            debugSession,
+          }),
+          queryPlan
+        );
         diag.queryCoverage = harvest?.queryCoverage || [];
         diag.findingsCount = (harvest?.findings || []).length;
       } catch (searchErr) {
@@ -4266,7 +4330,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         );
         state.analysisMeta = mergeTargetedMeta(state.analysisMeta, rescoreRes?.meta);
 
-        const parsed = extractJson(rescoreRes?.text || rescoreRes, {});
+        const parsed = extractJson(rescoreRes?.text || rescoreRes, {}, {
+          phase: "matrix_targeted_rescore",
+          attempt: diag.cellKey,
+          prompt: rescorePrompt,
+          debugSession,
+        });
         const nextConfidence = normalizeConfidence(parsed?.confidence || cell.confidence);
         const upgraded = confidenceRank(nextConfidence) > confidenceRank(cell.confidence);
 
@@ -4385,7 +4454,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
             );
             state.analysisMeta = mergeTargetedMeta(state.analysisMeta, strategistRes?.meta);
             deepAssistStrategistHints = normalizeMatrixStrategistHints(
-              extractJson(strategistRes?.text || strategistRes, {}),
+              extractJson(strategistRes?.text || strategistRes, {}, {
+                phase: "matrix_deep_assist_targeted_strategist",
+                attempt: "initial",
+                prompt: strategistPrompt,
+                debugSession,
+              }),
               subjects,
               attributes
             );
@@ -4447,7 +4521,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
                 }
               );
               state.analysisMeta = mergeTargetedMeta(state.analysisMeta, queryRes?.meta);
-              queryPlan = normalizeQueryPlan(extractJson(queryRes?.text || queryRes, {}), fallbackPlan);
+              queryPlan = normalizeQueryPlan(
+                extractJson(queryRes?.text || queryRes, {}, {
+                  phase: "matrix_deep_assist_targeted_query_plan",
+                  attempt: diag.cellKey,
+                  prompt: queryPrompt,
+                  debugSession,
+                }),
+                fallbackPlan
+              );
             } catch (_) {
               queryPlan = fallbackPlan;
             }
@@ -4482,7 +4564,15 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
                 }
               );
               state.analysisMeta = mergeTargetedMeta(state.analysisMeta, searchRes?.meta);
-              harvest = normalizeSearchHarvest(extractJson(searchRes?.text || searchRes, {}), queryPlan);
+              harvest = normalizeSearchHarvest(
+                extractJson(searchRes?.text || searchRes, {}, {
+                  phase: "matrix_deep_assist_targeted_search_harvest",
+                  attempt: diag.cellKey,
+                  prompt: searchPrompt,
+                  debugSession,
+                }),
+                queryPlan
+              );
             } catch (_) {
               harvest = {
                 findings: [],
@@ -4515,7 +4605,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
                 }
               );
               state.analysisMeta = mergeTargetedMeta(state.analysisMeta, rescoreRes?.meta);
-              const parsed = extractJson(rescoreRes?.text || rescoreRes, {});
+              const parsed = extractJson(rescoreRes?.text || rescoreRes, {}, {
+                phase: "matrix_deep_assist_targeted_rescore",
+                attempt: diag.cellKey,
+                prompt: rescorePrompt,
+                debugSession,
+              });
               const nextConfidence = normalizeConfidence(parsed?.confidence || cell.confidence);
               const upgraded = confidenceRank(nextConfidence) > confidenceRank(cell.confidence);
               const updatedCell = {
@@ -4615,7 +4710,16 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       }
     );
     state.analysisMeta = mergeMeta(state.analysisMeta, criticRes?.meta, "critic");
-    const criticFlags = normalizeCriticFlags(extractJson(criticRes?.text || criticRes, {}), subjects, attributes);
+    const criticFlags = normalizeCriticFlags(
+      extractJson(criticRes?.text || criticRes, {}, {
+        phase: "matrix_critic",
+        attempt: "initial",
+        prompt: criticPromptText,
+        debugSession,
+      }),
+      subjects,
+      attributes
+    );
     const criticMonitoring = computeCriticFlagMonitoring({
       matrix: reconciledMatrix,
       criticFlags,
@@ -4671,7 +4775,16 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
       );
       state.analysisMeta = mergeMeta(state.analysisMeta, responseRes?.meta, "analyst");
-      const responses = normalizeAnalystResponses(extractJson(responseRes?.text || responseRes, {}), subjects, attributes);
+      const responses = normalizeAnalystResponses(
+        extractJson(responseRes?.text || responseRes, {}, {
+          phase: "matrix_response",
+          attempt: "initial",
+          prompt: responsePrompt,
+          debugSession,
+        }),
+        subjects,
+        attributes
+      );
 
       const responseMap = new Map();
       responses.forEach((entry) => {
@@ -4758,7 +4871,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
       );
       state.analysisMeta = mergeMeta(state.analysisMeta, consistencyRes?.meta, "critic");
-      const consistencyParsed = extractJson(consistencyRes?.text || consistencyRes, {});
+      const consistencyParsed = extractJson(consistencyRes?.text || consistencyRes, {}, {
+        phase: "matrix_consistency",
+        attempt: "initial",
+        prompt: consistencyPrompt,
+        debugSession,
+      });
       const consistencyFlags = normalizeConsistencyFlags(consistencyParsed, subjects, attributes);
       state.analysisMeta.matrixConsistencyFlags = consistencyFlags.length;
       if (consistencyFlags.length) {
@@ -4817,7 +4935,16 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           }
         );
         state.analysisMeta = mergeMeta(state.analysisMeta, derivedRes?.meta, "analyst");
-        const derivedCells = normalizeDerivedCells(extractJson(derivedRes?.text || derivedRes, {}), subjects, derivedAttributes);
+        const derivedCells = normalizeDerivedCells(
+          extractJson(derivedRes?.text || derivedRes, {}, {
+            phase: "matrix_derived",
+            attempt: "initial",
+            prompt: derivedPrompt,
+            debugSession,
+          }),
+          subjects,
+          derivedAttributes
+        );
         state.analysisMeta.matrixDerivedAttributeCount = derivedAttributes.length;
         state.analysisMeta.matrixDerivedGeneratedCount = derivedCells.length;
         if (derivedCells.length) {
@@ -4884,7 +5011,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         }
       );
       state.analysisMeta = mergeMeta(state.analysisMeta, redTeamRes?.meta, "critic");
-      const parsedRedTeam = extractJson(redTeamRes?.text || redTeamRes, {});
+      const parsedRedTeam = extractJson(redTeamRes?.text || redTeamRes, {}, {
+        phase: "matrix_red_team",
+        attempt: "initial",
+        prompt: redTeamPrompt,
+        debugSession,
+      });
       const redTeamApplied = applyMatrixRedTeam(resolvedMatrix, parsedRedTeam, subjects, attributes);
       resolvedMatrix.cells = redTeamApplied.matrix.cells;
       resolvedMatrix.redTeam = redTeamApplied.matrix.redTeam;
@@ -4940,7 +5072,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       state.analysisMeta = mergeMeta(state.analysisMeta, synthesisRes?.meta, "analyst");
       state.analysisMeta.synthesizerCallMade = true;
       state.analysisMeta.synthesizerModel = modelSignatureFromOptions(synthOptions);
-      const parsedSynthesis = extractJson(synthesisRes?.text || synthesisRes, {});
+      const parsedSynthesis = extractJson(synthesisRes?.text || synthesisRes, {}, {
+        phase: "matrix_synthesis",
+        attempt: "initial",
+        prompt: synthesisPrompt,
+        debugSession,
+      });
       resolvedMatrix.executiveSummary = {
         decisionAnswer: cleanText(parsedSynthesis?.decisionAnswer),
         closestThreats: cleanText(parsedSynthesis?.closestThreats),
@@ -5081,7 +5218,14 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           }
         );
         state.analysisMeta = mergeMeta(state.analysisMeta, discoverRes?.meta, "discover");
-        discovery = normalizeMatrixDiscovery(extractJson(discoverRes?.text || discoverRes, {}));
+        discovery = normalizeMatrixDiscovery(
+          extractJson(discoverRes?.text || discoverRes, {}, {
+            phase: "matrix_discover",
+            attempt: "initial",
+            prompt: discoveryPromptText,
+            debugSession,
+          })
+        );
       } catch (discoveryErr) {
         state.analysisMeta.discoveryFailureReason = cleanText(discoveryErr?.message || "Discovery step failed.");
         appendAnalysisDebugEvent(debugSession, {
