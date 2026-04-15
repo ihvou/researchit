@@ -313,10 +313,7 @@ function normalizeSourceList(sources = []) {
     }))
     .filter((src) => src.name || src.quote || src.url)
     .slice(0, 10)
-    .map((src) => ({
-      ...src,
-      displayStatus: src.displayStatus || deriveSourceDisplayStatus(src, { staleEvidenceRatio: null }),
-    }));
+    .map((src) => ({ ...src }));
 }
 
 function extractEvidenceYearsFromSource(source = {}) {
@@ -334,10 +331,23 @@ function sourceHasOnlyStaleYears(source = {}, staleCutoff = (new Date().getFullY
   return years.every((year) => year < staleCutoff);
 }
 
+function isVendorPrimaryAttribute(attributeId = "", attributeLabel = "") {
+  const text = `${cleanText(attributeId)} ${cleanText(attributeLabel)}`.toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(icp|persona|buyer|segment|positioning|pricing|price|tier|package|company|channel|acquisition|gtm|decision[-\s]?trigger|workflow)\b/.test(text)
+    || text.includes("core-position")
+    || text.includes("target-icp")
+  );
+}
+
 function deriveSourceDisplayStatus(source = {}, options = {}) {
   const verificationStatus = cleanText(source?.verificationStatus);
   const sourceType = cleanText(source?.sourceType).toLowerCase();
   const staleEvidenceRatio = Number(options?.staleEvidenceRatio);
+  const attributeId = cleanText(options?.attributeId);
+  const attributeLabel = cleanText(options?.attributeLabel);
+  const allowVendorAsPrimary = !!options?.allowVendorAsPrimary || isVendorPrimaryAttribute(attributeId, attributeLabel);
   const staleCutoff = Number.isFinite(Number(options?.staleCutoff))
     ? Number(options.staleCutoff)
     : (new Date().getFullYear() - 2);
@@ -351,6 +361,10 @@ function deriveSourceDisplayStatus(source = {}, options = {}) {
     return "excluded_stale";
   }
   if (sourceType === "vendor" && verificationStatus !== "verified_in_page") {
+    if (allowVendorAsPrimary) {
+      if (verificationStatus === "name_only_in_page") return "corroborating";
+      return "unverified";
+    }
     return "excluded_marketing";
   }
   if (verificationStatus === "name_only_in_page" && sourceType !== "vendor") {
@@ -389,10 +403,17 @@ function buildMatrixSourceUniverse(matrix = {}) {
   const totals = emptySourceUniverseSummary();
   const seen = new Set();
   const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const attributeLabelById = new Map(
+    (Array.isArray(matrix?.attributes) ? matrix.attributes : [])
+      .map((attr) => [cleanText(attr?.id), cleanText(attr?.label)])
+      .filter((entry) => entry[0])
+  );
   cells.forEach((cell) => {
     const staleEvidenceRatio = Number(cell?.staleEvidenceRatio);
     const sources = annotateSourceListDisplayStatus(cell?.sources, {
       staleEvidenceRatio: Number.isFinite(staleEvidenceRatio) ? staleEvidenceRatio : null,
+      attributeId: cleanText(cell?.attributeId),
+      attributeLabel: attributeLabelById.get(cleanText(cell?.attributeId)) || "",
     });
     sources.forEach((source) => {
       const key = `${cleanText(source?.name)}|${cleanText(source?.quote)}|${cleanText(source?.url)}`;
@@ -488,6 +509,13 @@ function normalizeSubjectCandidates(raw) {
     .filter(Boolean);
 }
 
+function normalizeSubjectMatchKey(value = "") {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function splitSubjectTokens(text = "") {
   return String(text || "")
     .replace(/\s+versus\s+/gi, ",")
@@ -496,6 +524,56 @@ function splitSubjectTokens(text = "") {
     .split(/[\n,;|]/g)
     .map((item) => cleanText(item.replace(/^[-*\d.)\s]+/, "")))
     .filter(Boolean);
+}
+
+function extractRequiredSubjectsFromUnifiedPrompt(text = "") {
+  const raw = cleanText(text);
+  if (!raw) return [];
+
+  const candidates = [];
+  const addMany = (items = []) => {
+    items.forEach((item) => {
+      const value = cleanText(item)
+        .replace(/^['"“”‘’]+|['"“”‘’]+$/g, "")
+        .replace(/\s{2,}/g, " ");
+      if (!value || value.length > 90) return;
+      candidates.push(value);
+    });
+  };
+
+  const directLabelPatterns = [
+    /especially\s*:\s*([^.!\n]+)/gi,
+    /(?:vendors?|competitors?|subjects?)\s+to\s+cover\s*:?\s*([^.!\n]+)/gi,
+    /focus\s+on\s+(?:vendors?|competitors?|subjects?)\s*:\s*([^.!\n]+)/gi,
+    /include\s+(?:at\s+least\s+)?(?:vendors?|competitors?|subjects?)\s*:?\s*([^.!\n]+)/gi,
+  ];
+
+  for (const pattern of directLabelPatterns) {
+    let match;
+    while ((match = pattern.exec(raw)) !== null) {
+      addMany(splitSubjectTokens(match[1]));
+    }
+  }
+
+  const sectionMatch = raw.match(/(?:vendors?|competitors?|subjects?)\s+to\s+cover\s*\n([\s\S]{0,600})/i);
+  if (sectionMatch?.[1]) {
+    const sectionLines = sectionMatch[1]
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line && /^[-*]|^\d+[.)]/.test(line))
+      .map((line) => line.replace(/^[-*\d.)\s]+/, ""));
+    addMany(sectionLines);
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const item of candidates) {
+    const key = normalizeSubjectMatchKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
 }
 
 function extractSubjectsFromUnifiedPrompt(text = "") {
@@ -559,6 +637,45 @@ function extractDecisionQuestion(text = "") {
   return clip(picked, 220);
 }
 
+function buildMatrixAttributes({
+  rawInput = "",
+  decisionQuestion = "",
+  researchSetup = {},
+  subjects = [],
+} = {}) {
+  const normalizedInput = cleanText(rawInput);
+  const resolvedDecision = cleanText(researchSetup?.decisionContext) || cleanText(decisionQuestion) || extractDecisionQuestion(normalizedInput);
+  const subjectLabels = (Array.isArray(subjects) ? subjects : [])
+    .map((subject) => cleanText(subject?.label || subject))
+    .filter(Boolean)
+    .slice(0, 12);
+  const scopeParts = [];
+  const roleContext = cleanText(researchSetup?.userRoleContext);
+  if (subjectLabels.length) scopeParts.push(`Subjects: ${subjectLabels.join(", ")}`);
+  if (roleContext) scopeParts.push(`Role/context: ${roleContext}`);
+  return {
+    title: resolvedDecision || extractDecisionQuestion(normalizedInput) || clip(normalizedInput, 120) || "Matrix research",
+    expandedDescription: resolvedDecision
+      ? `Decision focus: ${resolvedDecision}`
+      : "",
+    vertical: "",
+    buyerPersona: roleContext,
+    aiSolutionType: "",
+    typicalTimeline: "",
+    deliveryModel: "",
+    inputFrame: {
+      providedInput: normalizedInput,
+      framingFields: {
+        researchObject: normalizedInput || "unspecified",
+        decisionQuestion: resolvedDecision || "unspecified",
+        scopeContext: scopeParts.join(" | ") || "unspecified",
+      },
+      assumptionsUsed: [],
+      confidenceLimits: "",
+    },
+  };
+}
+
 function normalizeSubjectList(rawSubjects, subjectsSpec = {}, options = {}) {
   const strict = options?.strict !== false;
   const values = normalizeSubjectCandidates(rawSubjects);
@@ -571,7 +688,15 @@ function normalizeSubjectList(rawSubjects, subjectsSpec = {}, options = {}) {
     unique.push(value);
   }
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
-  const maxCount = Math.max(minCount, Number(subjectsSpec?.maxCount) || 8);
+  const maxOverrideRaw = Number(options?.maxCountOverride);
+  const maxCount = options?.preserveAll
+    ? Math.max(minCount, unique.length)
+    : Math.max(
+      minCount,
+      Number.isFinite(maxOverrideRaw) && maxOverrideRaw >= minCount
+        ? Math.round(maxOverrideRaw)
+        : (Number(subjectsSpec?.maxCount) || 8)
+    );
   if (strict && unique.length < minCount) {
     throw new Error(`Matrix mode requires at least ${minCount} subjects.`);
   }
@@ -757,12 +882,18 @@ function createInitialState(input) {
   const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
   const deepAssist = normalizeDeepAssistOptions(input?.options?.deepAssist || {});
   const researchSetup = normalizeResearchSetupContext(input?.options?.researchSetup || {});
+  const initialDecisionQuestion = cleanText(researchSetup.decisionContext) || extractDecisionQuestion(desc) || desc;
   return {
     id,
     rawInput: desc,
     status: "analyzing",
     phase: "matrix_plan",
-    attributes: null,
+    attributes: buildMatrixAttributes({
+      rawInput: desc,
+      decisionQuestion: initialDecisionQuestion,
+      researchSetup,
+      subjects: normalizeSubjectCandidates(input?.options?.matrixSubjects || []),
+    }),
     dimScores: null,
     critique: null,
     finalScores: null,
@@ -804,6 +935,7 @@ function createInitialState(input) {
       lowConfidenceBudgetCells: 0,
       lowConfidenceBudgetUsed: 0,
       lowConfidenceDroppedByBudget: 0,
+      lowConfidenceBudgetStrategy: "adaptive",
       targetedRetrievalNiche: "",
       targetedRetrievalAliases: [],
       targetedCellDiagnostics: [],
@@ -822,6 +954,8 @@ function createInitialState(input) {
       subjectDiscoveryWebSearchCalls: 0,
       subjectDiscoveryFallbackReason: null,
       subjectDiscoverySuggestedCount: 0,
+      requiredSubjectsRequested: 0,
+      requiredSubjectsMissing: 0,
       sourceVerificationChecked: 0,
       sourceVerificationVerified: 0,
       sourceVerificationNotFound: 0,
@@ -849,6 +983,9 @@ function createInitialState(input) {
       matrixCoverageSLAPassed: false,
       matrixCoverageSLAFailureReason: "",
       matrixCoverageSLA: null,
+      decisionGradePassed: false,
+      decisionGradeFailureReason: "",
+      decisionGradeGate: null,
       qualityGrade: "standard",
       degradedReasons: [],
       safetyGuardrails: {
@@ -873,6 +1010,7 @@ function createInitialState(input) {
       verificationConfidenceCaps: 0,
       urlCoverageConfidenceCaps: 0,
       zeroSourceConfidenceCaps: 0,
+      highConfidenceCorroborationCaps: 0,
       sourceUniverse: emptySourceUniverseSummary(),
       redTeamCallMade: false,
       redTeamHighSeverityCount: 0,
@@ -1221,6 +1359,224 @@ function evaluateMatrixCoverageSla(matrix = {}, subjects = [], attributes = [], 
   };
 }
 
+function resolveMatrixDecisionGradeGate(config = {}) {
+  const raw = config?.limits?.matrixDecisionGradeGate || {};
+  const criticalFromConfig = Array.isArray(raw?.criticalAttributeIds)
+    ? raw.criticalAttributeIds.map((item) => cleanText(item)).filter(Boolean)
+    : [];
+  return {
+    enabled: raw?.enabled !== false,
+    minSourcesPerCoverageCell: Math.max(1, Number(raw?.minSourcesPerCoverageCell) || 2),
+    minSubjectEvidenceCoverage: Math.min(1, Math.max(0, Number(raw?.minSubjectEvidenceCoverage) || 0.75)),
+    maxLowConfidenceRatio: Math.min(1, Math.max(0, Number(raw?.maxLowConfidenceRatio) || 0.15)),
+    minSourcesPerCriticalCell: Math.max(1, Number(raw?.minSourcesPerCriticalCell) || 2),
+    minIndependentSourcesPerCriticalCell: Math.max(1, Number(raw?.minIndependentSourcesPerCriticalCell) || 1),
+    maxUnverifiedSourceRatio: Math.min(1, Math.max(0, Number(raw?.maxUnverifiedSourceRatio) || 0.05)),
+    minCitedSourceRatio: Math.min(1, Math.max(0, Number(raw?.minCitedSourceRatio) || 0.7)),
+    requireResolvedCriticFlags: raw?.requireResolvedCriticFlags !== false,
+    maxRedTeamHighSeverity: Number.isFinite(Number(raw?.maxRedTeamHighSeverity))
+      ? Math.max(0, Number(raw.maxRedTeamHighSeverity))
+      : 8,
+    criticalAttributeIds: criticalFromConfig.length
+      ? criticalFromConfig
+      : ["pricing-model", "pmf-signal", "moat-assessment"],
+  };
+}
+
+function evaluateMatrixDecisionGrade({
+  matrix = {},
+  subjects = [],
+  attributes = [],
+  analysisMeta = {},
+  requiredSubjects = [],
+  config = {},
+} = {}) {
+  const gate = resolveMatrixDecisionGradeGate(config);
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const coverage = matrix?.coverage && Number.isFinite(Number(matrix?.coverage?.totalCells))
+    ? matrix.coverage
+    : summarizeCoverage(cells);
+  const subjectList = Array.isArray(subjects) ? subjects : [];
+  const attributeList = Array.isArray(attributes) ? attributes : [];
+
+  if (!gate.enabled) {
+    return {
+      pass: true,
+      failureReason: "",
+      diagnostics: {
+        enabled: false,
+        pass: true,
+        checks: [],
+        metrics: {},
+      },
+    };
+  }
+
+  const cellMap = new Map();
+  cells.forEach((cell) => {
+    cellMap.set(buildCellKey(cell?.subjectId, cell?.attributeId), cell);
+  });
+  const reasons = [];
+
+  const lowConfidenceCells = Number(coverage?.lowConfidenceCells || 0);
+  const totalCells = Number(coverage?.totalCells || cells.length || 0);
+  const lowConfidenceRatio = totalCells ? (lowConfidenceCells / totalCells) : 0;
+  if (lowConfidenceRatio > gate.maxLowConfidenceRatio) {
+    reasons.push({
+      code: "decision_grade_low_confidence_ratio_failed",
+      detail: `Low-confidence cells ${lowConfidenceCells}/${totalCells} exceed ${(gate.maxLowConfidenceRatio * 100).toFixed(0)}% threshold.`,
+    });
+  }
+
+  const requiredNormalized = (Array.isArray(requiredSubjects) ? requiredSubjects : [])
+    .map((entry) => cleanText(entry?.label || entry))
+    .filter(Boolean);
+  const subjectKeySet = new Set(subjectList.map((entry) => normalizeSubjectMatchKey(entry?.label || entry)));
+  const missingRequiredSubjects = requiredNormalized.filter((label) => !subjectKeySet.has(normalizeSubjectMatchKey(label)));
+  if (missingRequiredSubjects.length) {
+    reasons.push({
+      code: "decision_grade_required_subjects_missing",
+      detail: `Required subjects missing from final matrix: ${missingRequiredSubjects.join(", ")}.`,
+    });
+  }
+
+  const subjectCoverage = subjectList.map((subject) => {
+    let evidenceCells = 0;
+    attributeList.forEach((attribute) => {
+      const cell = cellMap.get(buildCellKey(subject.id, attribute.id));
+      const sourceCount = normalizeSourceList(cell?.sources).length;
+      if (sourceCount >= gate.minSourcesPerCoverageCell && !hasExplicitFailureReason(cell)) {
+        evidenceCells += 1;
+      }
+    });
+    const total = attributeList.length || 1;
+    const coverageValue = evidenceCells / total;
+    return {
+      subjectId: subject.id,
+      subjectLabel: subject.label,
+      evidenceCells,
+      totalCells: attributeList.length,
+      coverage: coverageValue,
+      pass: coverageValue >= gate.minSubjectEvidenceCoverage,
+    };
+  });
+  const failingCoverageSubjects = subjectCoverage.filter((entry) => !entry.pass);
+  if (failingCoverageSubjects.length) {
+    reasons.push({
+      code: "decision_grade_subject_coverage_failed",
+      detail: `Subject evidence coverage below ${(gate.minSubjectEvidenceCoverage * 100).toFixed(0)}%: ${failingCoverageSubjects.map((entry) => `${entry.subjectLabel} ${(entry.coverage * 100).toFixed(0)}%`).join(", ")}.`,
+    });
+  }
+
+  const criticalAttributeIds = attributeList
+    .filter((attribute) => gate.criticalAttributeIds.includes(attribute.id))
+    .map((attribute) => attribute.id);
+  const attributeLabelById = new Map(attributeList.map((attribute) => [attribute.id, cleanText(attribute.label)]));
+  const criticalCellFailures = [];
+  if (criticalAttributeIds.length) {
+    subjectList.forEach((subject) => {
+      criticalAttributeIds.forEach((attributeId) => {
+        const cell = cellMap.get(buildCellKey(subject.id, attributeId));
+        const sources = normalizeSourceList(cell?.sources);
+        const citedSources = sources.filter((source) => (
+          deriveSourceDisplayStatus(source, {
+            staleEvidenceRatio: Number(cell?.staleEvidenceRatio),
+            attributeId,
+            attributeLabel: attributeLabelById.get(attributeId) || "",
+          }) === "cited"
+        ));
+        const independentCited = citedSources.filter((source) => (
+          cleanText(source?.sourceType).toLowerCase() === "independent"
+          || cleanText(source?.sourceType).toLowerCase() === "press"
+        ));
+        if (sources.length < gate.minSourcesPerCriticalCell || independentCited.length < gate.minIndependentSourcesPerCriticalCell) {
+          criticalCellFailures.push({
+            subjectId: subject.id,
+            subjectLabel: subject.label,
+            attributeId,
+            sourceCount: sources.length,
+            independentCited: independentCited.length,
+          });
+        }
+      });
+    });
+  }
+  if (criticalCellFailures.length) {
+    reasons.push({
+      code: "decision_grade_critical_cells_failed",
+      detail: `Critical attributes require >=${gate.minSourcesPerCriticalCell} sources and >=${gate.minIndependentSourcesPerCriticalCell} independent cited source(s); failures: ${criticalCellFailures.slice(0, 8).map((entry) => `${entry.subjectLabel}::${entry.attributeId} (${entry.sourceCount} sources, ${entry.independentCited} independent)`).join(", ")}${criticalCellFailures.length > 8 ? ` (+${criticalCellFailures.length - 8} more)` : ""}.`,
+    });
+  }
+
+  const sourceUniverse = analysisMeta?.sourceUniverse && typeof analysisMeta.sourceUniverse === "object"
+    ? analysisMeta.sourceUniverse
+    : buildMatrixSourceUniverse(matrix);
+  const sourceTotal = Number(sourceUniverse?.total || 0);
+  const citedRatio = sourceTotal ? (Number(sourceUniverse?.cited || 0) / sourceTotal) : 0;
+  const unverifiedRatio = sourceTotal ? (Number(sourceUniverse?.unverified || 0) / sourceTotal) : 1;
+  if (sourceTotal && citedRatio < gate.minCitedSourceRatio) {
+    reasons.push({
+      code: "decision_grade_cited_ratio_failed",
+      detail: `Cited source ratio ${(citedRatio * 100).toFixed(1)}% is below ${(gate.minCitedSourceRatio * 100).toFixed(0)}% threshold.`,
+    });
+  }
+  if (sourceTotal && unverifiedRatio > gate.maxUnverifiedSourceRatio) {
+    reasons.push({
+      code: "decision_grade_unverified_ratio_failed",
+      detail: `Unverified source ratio ${(unverifiedRatio * 100).toFixed(1)}% exceeds ${(gate.maxUnverifiedSourceRatio * 100).toFixed(0)}% threshold.`,
+    });
+  }
+
+  const contestedCells = Number(coverage?.contestedCells || 0);
+  const flagsRaised = Number(analysisMeta?.criticFlagsRaised || 0);
+  const resolvedFlags = Number(analysisMeta?.contestedCellsResolved || 0);
+  const unresolvedFlags = Math.max(0, flagsRaised - resolvedFlags);
+  if (gate.requireResolvedCriticFlags && (contestedCells > 0 || unresolvedFlags > 0)) {
+    reasons.push({
+      code: "decision_grade_unresolved_critic_flags",
+      detail: `Critic unresolved flags remain: contested cells ${contestedCells}, unresolved ${unresolvedFlags}.`,
+    });
+  }
+
+  const redTeamHighSeverityCount = Number(analysisMeta?.redTeamHighSeverityCount || 0);
+  if (redTeamHighSeverityCount > gate.maxRedTeamHighSeverity) {
+    reasons.push({
+      code: "decision_grade_red_team_high_severity",
+      detail: `Red Team high-severity findings (${redTeamHighSeverityCount}) exceed allowed maximum (${gate.maxRedTeamHighSeverity}).`,
+    });
+  }
+
+  const pass = reasons.length === 0;
+  return {
+    pass,
+    failureReason: reasons.map((entry) => entry.detail).join(" "),
+    diagnostics: {
+      enabled: true,
+      pass,
+      checks: reasons,
+      metrics: {
+        totalCells,
+        lowConfidenceCells,
+        lowConfidenceRatio,
+        requiredSubjects: requiredNormalized,
+        missingRequiredSubjects,
+        subjectCoverage,
+        criticalAttributeIds,
+        criticalCellFailures,
+        sourceUniverse,
+        citedRatio,
+        unverifiedRatio,
+        contestedCells,
+        criticFlagsRaised: flagsRaised,
+        contestedCellsResolved: resolvedFlags,
+        unresolvedFlags,
+        redTeamHighSeverityCount,
+      },
+      config: gate,
+    },
+  };
+}
+
 function computeCriticFlagMonitoring({ matrix = {}, criticFlags = [], config = {} } = {}) {
   const thresholds = resolveCriticFlagMonitoring(config);
   const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
@@ -1386,6 +1742,18 @@ async function verifySourceListWithFetch(sources = [], sourceFetchCache, analysi
 
   const out = [];
   for (const source of normalizedSources) {
+    const existingStatus = cleanText(source?.verificationStatus).toLowerCase();
+    if (
+      existingStatus === "verified_in_page"
+      || existingStatus === "not_found_in_page"
+      || existingStatus === "fetch_failed"
+      || existingStatus === "invalid_url"
+      || existingStatus === "name_only_in_page"
+    ) {
+      out.push({ ...source });
+      continue;
+    }
+
     const normalizedUrl = normalizeHttpUrl(source.url);
     if (!normalizedUrl) {
       counters.invalidUrl += 1;
@@ -1456,7 +1824,7 @@ function applyCellVerificationPenalty(cell, counters, analysisMeta) {
   if (verified / checked >= 0.5) return;
 
   const current = normalizeConfidence(cell.confidence);
-  const downgraded = confidenceFromRank(confidenceRank(current) - 1, current);
+  const downgraded = confidenceRank(current) > confidenceRank("medium") ? "medium" : current;
   if (downgraded !== current) {
     cell.confidence = downgraded;
     analysisMeta.sourceVerificationPenalizedCells += 1;
@@ -1499,7 +1867,7 @@ function applyCellQualityCaps(cell = {}, analysisMeta = {}) {
 
   if (staleRatio >= 0.6 && confidenceRank(confidence) > confidenceRank("low")) {
     const previous = confidence;
-    confidence = confidenceFromRank(confidenceRank(confidence) - 1, confidence);
+    confidence = confidenceRank(confidence) > confidenceRank("medium") ? "medium" : confidence;
     if (confidence !== previous) {
       analysisMeta.staleEvidenceConfidenceCaps = Number(analysisMeta.staleEvidenceConfidenceCaps || 0) + 1;
       const note = `Confidence reduced: evidence appears mostly stale (pre-${staleCutoff + 1}).`;
@@ -1535,6 +1903,26 @@ function applyCellQualityCaps(cell = {}, analysisMeta = {}) {
     }
   }
 
+  if (sourceCount > 0 && confidenceRank(confidence) > confidenceRank("medium")) {
+    const citedSources = sources.filter((source) => (
+      deriveSourceDisplayStatus(source, {
+        staleEvidenceRatio: staleRatio,
+        attributeId: cleanText(cell?.attributeId),
+        attributeLabel: cleanText(cell?.attributeLabel || ""),
+      }) === "cited"
+    ));
+    const independentCited = citedSources.filter((source) => {
+      const sourceType = cleanText(source?.sourceType).toLowerCase();
+      return sourceType === "independent" || sourceType === "press";
+    }).length;
+    if (citedSources.length < 2 || independentCited < 1) {
+      confidence = "medium";
+      analysisMeta.highConfidenceCorroborationCaps = Number(analysisMeta.highConfidenceCorroborationCaps || 0) + 1;
+      const note = "Confidence capped: high confidence requires at least two cited sources including one independent corroborating source.";
+      cell.confidenceReason = [cleanText(cell.confidenceReason), note].filter(Boolean).join(" ");
+    }
+  }
+
   cell.sourceMix = {
     total: sourceCount,
     withUrl,
@@ -1542,7 +1930,11 @@ function applyCellQualityCaps(cell = {}, analysisMeta = {}) {
     vendor: sources.filter((source) => source.sourceType === "vendor").length,
     press: sources.filter((source) => source.sourceType === "press").length,
   };
-  cell.sources = annotateSourceListDisplayStatus(sources, { staleEvidenceRatio: staleRatio });
+  cell.sources = annotateSourceListDisplayStatus(sources, {
+    staleEvidenceRatio: staleRatio,
+    attributeId: cleanText(cell?.attributeId),
+    attributeLabel: cleanText(cell?.attributeLabel || ""),
+  });
   cell.confidence = confidence;
 }
 
@@ -1562,6 +1954,8 @@ async function verifyMatrixCellSources(matrix, analysisMeta, sourceFetchCache, o
         staleEvidenceRatio: Number.isFinite(Number(cell?.staleEvidenceRatio))
           ? Number(cell.staleEvidenceRatio)
           : null,
+        attributeId: cleanText(cell?.attributeId),
+        attributeLabel: cleanText(cell?.attributeLabel || ""),
       });
     }
   }
@@ -1905,6 +2299,89 @@ function matrixCellPressure(cell = {}) {
   return score;
 }
 
+function matrixAttributePlaybook(attribute = {}, subjectLabel = "") {
+  const id = cleanText(attribute?.id).toLowerCase();
+  const label = cleanText(attribute?.label || attribute?.id);
+  const subject = cleanText(subjectLabel || "subject");
+
+  if (id === "pricing-model") {
+    return {
+      gap: `Need verified pricing structure and commercial packaging evidence for ${subject}.`,
+      querySeeds: [
+        `${subject} pricing model annual contract PMPM per-facility`,
+        `${subject} RFP pricing implementation fee contract term`,
+        `${subject} procurement pricing benchmark hospital`,
+      ],
+      counterfactualQueries: [
+        `${subject} no public pricing disclosed`,
+        `${subject} hidden implementation costs complaints`,
+      ],
+      sourceTargets: ["RFP/procurement records", "buyer reviews", "contract summaries"],
+    };
+  }
+
+  if (id === "pmf-signal") {
+    return {
+      gap: `Need hard PMF evidence for ${subject}: named deployments, outcomes, or independent validation.`,
+      querySeeds: [
+        `${subject} named hospital customer case study readmission outcomes`,
+        `${subject} KLAS rating peer-reviewed validation`,
+        `${subject} deployment outcomes readmission reduction`,
+      ],
+      counterfactualQueries: [
+        `${subject} churn complaints failed implementation`,
+        `${subject} no clinical validation evidence`,
+      ],
+      sourceTargets: ["named customer evidence", "independent analyst reports", "peer-reviewed studies"],
+    };
+  }
+
+  if (id === "moat-assessment") {
+    return {
+      gap: `Need defensibility evidence for ${subject}: lock-in, switching cost, distribution control, and data advantage.`,
+      querySeeds: [
+        `${subject} switching costs integration depth EHR embedment`,
+        `${subject} exclusive partnerships network effects data moat`,
+        `${subject} contract renewal expansion evidence`,
+      ],
+      counterfactualQueries: [
+        `${subject} easily replaceable alternatives`,
+        `${subject} weak differentiation commoditized`,
+      ],
+      sourceTargets: ["integration docs", "customer migration case studies", "distribution partnership evidence"],
+    };
+  }
+
+  if (id === "key-weaknesses") {
+    return {
+      gap: `Need evidence-backed failure modes for ${subject}, not inferred weaknesses.`,
+      querySeeds: [
+        `${subject} user complaints implementation issues`,
+        `${subject} limitations review hospital deployment`,
+        `${subject} failures workflow adoption problems`,
+      ],
+      counterfactualQueries: [
+        `${subject} strengths that counter stated weakness`,
+        `${subject} successful outcomes despite known limitations`,
+      ],
+      sourceTargets: ["G2/Capterra/KLAS feedback", "implementation retrospectives", "customer interviews"],
+    };
+  }
+
+  return {
+    gap: `Evidence remains weak for ${subject} x ${label}.`,
+    querySeeds: [
+      `${subject} ${label} evidence`,
+      `${subject} ${label} customer outcome`,
+    ],
+    counterfactualQueries: [
+      `${subject} ${label} criticism`,
+      `${subject} alternatives outperforming ${label}`,
+    ],
+    sourceTargets: ["independent sources", "customer evidence"],
+  };
+}
+
 function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds = new Set()) {
   const candidates = cells
     .map((cell) => ({ ...cell, _pressure: matrixCellPressure(cell) }))
@@ -1918,9 +2395,31 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
     });
 
   const maxBudget = Number(limits?.matrixTargetedBudgetCells);
-  const budgetCells = Number.isFinite(maxBudget)
-    ? Math.max(1, Math.min(candidates.length || 1, Math.round(maxBudget)))
-    : Math.min(candidates.length || 0, Math.max(6, Math.min(10, candidates.length)));
+  let budgetCells = 0;
+  let strategy = "adaptive";
+  if (Number.isFinite(maxBudget)) {
+    budgetCells = Math.max(1, Math.min(candidates.length || 1, Math.round(maxBudget)));
+    strategy = "fixed";
+  } else {
+    const adaptiveRatioRaw = Number(limits?.matrixAdaptiveTargetedRatio);
+    const adaptiveRatio = Number.isFinite(adaptiveRatioRaw)
+      ? Math.min(1, Math.max(0.2, adaptiveRatioRaw))
+      : 0.7;
+    const adaptiveFloorRaw = Number(limits?.matrixAdaptiveTargetedFloor);
+    const adaptiveFloor = Number.isFinite(adaptiveFloorRaw)
+      ? Math.max(1, Math.round(adaptiveFloorRaw))
+      : 12;
+    const adaptiveCapRaw = Number(limits?.matrixAdaptiveTargetedMax);
+    const adaptiveCap = Number.isFinite(adaptiveCapRaw)
+      ? Math.max(1, Math.round(adaptiveCapRaw))
+      : 36;
+    const adaptiveByRatio = Math.ceil(candidates.length * adaptiveRatio);
+    const adaptiveTarget = Math.min(
+      candidates.length,
+      Math.max(Math.min(adaptiveFloor, candidates.length), Math.min(adaptiveCap, adaptiveByRatio))
+    );
+    budgetCells = adaptiveTarget;
+  }
 
   const buckets = new Map();
   candidates
@@ -1954,6 +2453,7 @@ function selectMatrixTargetedCells(cells = [], limits = {}, derivedAttributeIds 
     allCount: candidates.length,
     budgetCells,
     droppedByBudget: Math.max(0, candidates.length - selected.length),
+    strategy,
   };
 }
 
@@ -2871,9 +3371,15 @@ function normalizeSubjectDiscoveryResult(raw = {}, subjectsSpec = {}) {
   };
 }
 
-function mergeSubjectEntries(primary = [], secondary = [], subjectsSpec = {}) {
+function mergeSubjectEntries(primary = [], secondary = [], subjectsSpec = {}, options = {}) {
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
-  const maxCount = Math.max(minCount, Number(subjectsSpec?.maxCount) || 8);
+  const maxOverrideRaw = Number(options?.maxCountOverride);
+  const maxCount = Math.max(
+    minCount,
+    Number.isFinite(maxOverrideRaw) && maxOverrideRaw >= minCount
+      ? Math.round(maxOverrideRaw)
+      : (Number(subjectsSpec?.maxCount) || 8)
+  );
   const seen = new Set();
   const out = [];
 
@@ -2881,13 +3387,14 @@ function mergeSubjectEntries(primary = [], secondary = [], subjectsSpec = {}) {
     items.forEach((entry) => {
       const label = cleanText(entry?.label || entry);
       if (!label) return;
-      const key = label.toLowerCase();
+      const key = normalizeSubjectMatchKey(label);
       if (seen.has(key)) return;
       seen.add(key);
       out.push({ id: toId(label, `subject-${out.length + 1}`), label });
     });
   };
 
+  consume(Array.isArray(options?.required) ? options.required : []);
   consume(primary);
   consume(secondary);
   return out.slice(0, maxCount);
@@ -2900,18 +3407,59 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
 
   const subjectsSpec = config?.subjects || {};
   const minCount = Math.max(2, Number(subjectsSpec?.minCount) || 2);
+  const specMaxCount = Math.max(minCount, Number(subjectsSpec?.maxCount) || 8);
   const explicitSubjects = normalizeSubjectList(input?.options?.matrixSubjects, subjectsSpec, { strict: false });
+  const requiredFromPrompt = normalizeSubjectList(
+    extractRequiredSubjectsFromUnifiedPrompt(desc),
+    subjectsSpec,
+    { strict: false, preserveAll: true }
+  );
+  const requiredSubjects = mergeSubjectEntries(
+    explicitSubjects,
+    requiredFromPrompt,
+    subjectsSpec,
+    {
+      required: [...explicitSubjects, ...requiredFromPrompt],
+      maxCountOverride: Math.max(specMaxCount, explicitSubjects.length, requiredFromPrompt.length),
+    }
+  );
+  const runMaxCount = Math.max(specMaxCount, requiredSubjects.length);
   const extractedLabels = extractSubjectsFromUnifiedPrompt(desc);
-  const extractedSubjects = normalizeSubjectList(extractedLabels, subjectsSpec, { strict: false });
-  const mergedLocal = mergeSubjectEntries(explicitSubjects, extractedSubjects, subjectsSpec);
+  const extractedSubjects = normalizeSubjectList(
+    extractedLabels,
+    subjectsSpec,
+    { strict: false, maxCountOverride: runMaxCount }
+  );
+  const mergedLocal = mergeSubjectEntries(explicitSubjects, extractedSubjects, subjectsSpec, {
+    required: requiredSubjects,
+    maxCountOverride: runMaxCount,
+  });
   const decisionQuestion = extractDecisionQuestion(desc);
 
+  const findMissingRequired = (items = []) => {
+    const itemSet = new Set((Array.isArray(items) ? items : []).map((entry) => normalizeSubjectMatchKey(entry?.label || entry)));
+    return requiredSubjects
+      .map((entry) => cleanText(entry?.label))
+      .filter(Boolean)
+      .filter((label) => !itemSet.has(normalizeSubjectMatchKey(label)));
+  };
+  const ensureRequiredPresent = (items = []) => {
+    const missing = findMissingRequired(items);
+    if (missing.length) {
+      throw new Error(`Required subjects missing from matrix plan: ${missing.join(", ")}.`);
+    }
+    return missing;
+  };
+
   if (mergedLocal.length >= minCount) {
+    ensureRequiredPresent(mergedLocal);
     return {
       subjects: mergedLocal,
       decisionQuestion,
       extractedSubjects,
       localSubjects: mergedLocal,
+      requiredSubjects,
+      missingRequiredSubjects: [],
       discovery: null,
       usedSubjectDiscovery: false,
       requiresConfirmation: false,
@@ -2949,10 +3497,15 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     throw new Error(`Subject discovery returned fewer than ${minCount} viable subjects. Please provide subjects explicitly.`);
   }
 
-  const finalSubjects = mergeSubjectEntries(mergedLocal, discoveredSubjects, subjectsSpec);
+  const finalSubjects = mergeSubjectEntries(mergedLocal, discoveredSubjects, subjectsSpec, {
+    required: requiredSubjects,
+    maxCountOverride: runMaxCount,
+  });
   if (finalSubjects.length < minCount) {
     throw new Error(`Please confirm at least ${minCount} subjects before running matrix analysis.`);
   }
+  const missingRequiredSubjects = findMissingRequired(finalSubjects);
+  ensureRequiredPresent(finalSubjects);
 
   const requireConfirmation = options?.requireConfirmation === true;
   return {
@@ -2960,6 +3513,8 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
     decisionQuestion: discovery.decisionQuestion || decisionQuestion,
     extractedSubjects,
     localSubjects: mergedLocal,
+    requiredSubjects,
+    missingRequiredSubjects,
     discovery,
     usedSubjectDiscovery: true,
     requiresConfirmation: requireConfirmation,
@@ -3195,6 +3750,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     deepAssistRecoveryUpgraded: Number(state.analysisMeta?.deepAssistRecoveryUpgraded || 0),
     deepAssistRecoveryValidatedLow: Number(state.analysisMeta?.deepAssistRecoveryValidatedLow || 0),
     deepAssistRecoveryFailed: !!state.analysisMeta?.deepAssistRecoveryFailed,
+    lowConfidenceBudgetStrategy: cleanText(state.analysisMeta?.lowConfidenceBudgetStrategy || "adaptive") || "adaptive",
     deepAssistRecoveryDiagnostics: Array.isArray(state.analysisMeta?.deepAssistRecoveryDiagnostics)
       ? state.analysisMeta.deepAssistRecoveryDiagnostics
       : [],
@@ -3205,6 +3761,13 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     redTeamHighSeverityCount: Number(state.analysisMeta?.redTeamHighSeverityCount || 0),
     synthesizerCallMade: !!state.analysisMeta?.synthesizerCallMade,
     synthesizerModel: cleanText(state.analysisMeta?.synthesizerModel),
+    requiredSubjectsRequested: Number(state.analysisMeta?.requiredSubjectsRequested || 0),
+    requiredSubjectsMissing: Number(state.analysisMeta?.requiredSubjectsMissing || 0),
+    decisionGradePassed: !!state.analysisMeta?.decisionGradePassed,
+    decisionGradeFailureReason: cleanText(state.analysisMeta?.decisionGradeFailureReason),
+    decisionGradeGate: state.analysisMeta?.decisionGradeGate && typeof state.analysisMeta.decisionGradeGate === "object"
+      ? state.analysisMeta.decisionGradeGate
+      : null,
     deepAssistProvidersRequested: evidenceMode === "deep-assist" ? deepAssistOptions.providers.length : Number(state.analysisMeta?.deepAssistProvidersRequested || 0),
   };
   const sourceFetchCache = new Map();
@@ -3245,6 +3808,8 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
 
     state.analysisMeta.subjectDiscoveryRequested = true;
     state.analysisMeta.subjectDiscoverySuggestedCount = resolvedInput?.discovery?.normalizedSubjects?.length || 0;
+    state.analysisMeta.requiredSubjectsRequested = Number((resolvedInput?.requiredSubjects || []).length || 0);
+    state.analysisMeta.requiredSubjectsMissing = Number((resolvedInput?.missingRequiredSubjects || []).length || 0);
     state.analysisMeta = mergeMeta(state.analysisMeta, resolvedInput?.discoveryMeta, "subject_discovery");
 
     const subjects = resolvedInput.subjects;
@@ -3258,6 +3823,12 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       || extractDecisionQuestion(state.rawInput)
       || state.rawInput;
     const relatedDiscovery = config?.relatedDiscovery !== false;
+    state.attributes = buildMatrixAttributes({
+      rawInput: state.rawInput,
+      decisionQuestion,
+      researchSetup,
+      subjects,
+    });
 
     update("matrix_plan", {
       outputMode: "matrix",
@@ -3276,6 +3847,8 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
           usedSubjectDiscovery: !!resolvedInput.usedSubjectDiscovery,
           extractedSubjects: resolvedInput.extractedSubjects || [],
           localSubjects: resolvedInput.localSubjects || [],
+          requiredSubjects: resolvedInput.requiredSubjects || [],
+          missingRequiredSubjects: resolvedInput.missingRequiredSubjects || [],
           notes: resolvedInput?.discovery?.notes || "",
         },
       },
@@ -3484,6 +4057,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     state.analysisMeta.lowConfidenceBudgetCells = targetedPlan.budgetCells;
     state.analysisMeta.lowConfidenceBudgetUsed = 0;
     state.analysisMeta.lowConfidenceDroppedByBudget = targetedPlan.droppedByBudget;
+    state.analysisMeta.lowConfidenceBudgetStrategy = cleanText(targetedPlan.strategy || "adaptive") || "adaptive";
     state.analysisMeta.targetedCellDiagnostics = [];
 
     let strategistHints = { niche: "", aliases: [], cellHints: {} };
@@ -3530,11 +4104,13 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       };
       const strategistForCell = strategistHints?.cellHints?.[buildCellKey(cell.subjectId, cell.attributeId)] || {};
       const aliasHints = normalizeStringList(strategistHints?.aliases, 6, 110);
+      const attributePlaybook = matrixAttributePlaybook(attribute, subject.label);
 
       const fallbackPlan = {
-        gap: `Evidence is weak for ${subject.label} x ${attribute.label}.`,
+        gap: attributePlaybook.gap || `Evidence is weak for ${subject.label} x ${attribute.label}.`,
         queries: [...new Set([
           ...normalizeStringList(strategistForCell?.querySeeds, 4, 170),
+          ...normalizeStringList(attributePlaybook.querySeeds, 4, 170),
           ...normalizeStringList(aliasHints.map((alias) => `${alias} ${attribute.label} evidence`), 2, 170),
           `${subject.label} ${attribute.label} case study metrics`,
           `${subject.label} ${attribute.label} benchmark evidence`,
@@ -3542,6 +4118,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         ])].slice(0, 4),
         counterfactualQueries: [...new Set([
           ...normalizeStringList(strategistForCell?.counterfactualQueries, 4, 170),
+          ...normalizeStringList(attributePlaybook.counterfactualQueries, 4, 170),
           `${subject.label} ${attribute.label} criticism`,
           `${subject.label} ${attribute.label} failure cases`,
           `${subject.label} alternatives outperforming ${attribute.label}`,
@@ -3549,7 +4126,10 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       };
       diag.fallbackQueries = fallbackPlan.queries;
       diag.fallbackCounterfactualQueries = fallbackPlan.counterfactualQueries;
-      diag.sourceTargets = normalizeStringList(strategistForCell?.sourceTargets, 4, 170);
+      diag.sourceTargets = [...new Set([
+        ...normalizeStringList(strategistForCell?.sourceTargets, 4, 170),
+        ...normalizeStringList(attributePlaybook.sourceTargets, 4, 170),
+      ])].slice(0, 5);
 
       let queryPlan = fallbackPlan;
       try {
@@ -3802,16 +4382,19 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
             };
             const strategistForCell = deepAssistStrategistHints?.cellHints?.[buildCellKey(cell.subjectId, cell.attributeId)] || {};
             const aliasHints = normalizeStringList(deepAssistStrategistHints?.aliases, 6, 110);
+            const attributePlaybook = matrixAttributePlaybook(attribute, subject.label);
             const fallbackPlan = {
-              gap: `Post-merge Deep Assist conflict/uncertainty for ${subject.label} x ${attribute.label}.`,
+              gap: attributePlaybook.gap || `Post-merge Deep Assist conflict/uncertainty for ${subject.label} x ${attribute.label}.`,
               queries: [...new Set([
                 ...normalizeStringList(strategistForCell?.querySeeds, 4, 170),
+                ...normalizeStringList(attributePlaybook.querySeeds, 4, 170),
                 ...normalizeStringList(aliasHints.map((alias) => `${alias} ${attribute.label} evidence`), 2, 170),
                 `${subject.label} ${attribute.label} benchmark evidence`,
                 `${subject.label} ${attribute.label} deployment outcomes`,
               ])].slice(0, 4),
               counterfactualQueries: [...new Set([
                 ...normalizeStringList(strategistForCell?.counterfactualQueries, 4, 170),
+                ...normalizeStringList(attributePlaybook.counterfactualQueries, 4, 170),
                 `${subject.label} ${attribute.label} criticism`,
                 `${subject.label} ${attribute.label} failure cases`,
               ])].slice(0, Math.max(1, Number(config?.limits?.counterfactualQueriesPerDim || 2))),
@@ -4398,6 +4981,36 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         strictQuality,
         `Strict quality mode: matrix coverage SLA failed. ${coverageSlaResult.failureReason || "Matrix coverage requirements were not met."}`,
         "STRICT_MATRIX_COVERAGE_SLA_FAILED"
+      );
+    }
+
+    const decisionGradeResult = evaluateMatrixDecisionGrade({
+      matrix: resolvedMatrix,
+      subjects,
+      attributes,
+      analysisMeta: state.analysisMeta,
+      requiredSubjects: resolvedInput?.requiredSubjects || [],
+      config,
+    });
+    state.analysisMeta.decisionGradeGate = decisionGradeResult.diagnostics;
+    state.analysisMeta.decisionGradePassed = !!decisionGradeResult.pass;
+    state.analysisMeta.decisionGradeFailureReason = decisionGradeResult.failureReason || "";
+    if (!decisionGradeResult.pass) {
+      appendAnalysisDebugEvent(debugSession, {
+        type: "decision_grade_failed",
+        phase: "matrix_summary",
+        diagnostics: decisionGradeResult.diagnostics,
+        note: decisionGradeResult.failureReason,
+      });
+      markDegraded(
+        state.analysisMeta,
+        "matrix_decision_grade_failed",
+        decisionGradeResult.failureReason || "Decision-grade gate requirements were not met."
+      );
+      failIfStrictQuality(
+        strictQuality,
+        `Strict quality mode: matrix decision-grade gate failed. ${decisionGradeResult.failureReason || "Decision-grade gate requirements were not met."}`,
+        "STRICT_MATRIX_DECISION_GRADE_FAILED"
       );
     }
 

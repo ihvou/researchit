@@ -9,4 +9,7 @@ export {
   storeCompletedAnalysisDebugSession,
   downloadAnalysisDebugSession,
   downloadDebugLogsBundle,
+  startRunDebugCapture,
+  appendRunDebugNetworkEvent,
+  stopRunDebugCapture,
 } from "./debugUI";

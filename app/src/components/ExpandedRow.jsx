@@ -7,7 +7,6 @@ import ProgressTab from "./ProgressTab";
 import MatrixTab from "./MatrixTab";
 import MatrixDebateTab from "./MatrixDebateTab";
 import MatrixSummaryTab from "./MatrixSummaryTab";
-import RunDiagnosticsPanel from "./RunDiagnosticsPanel";
 
 const PHASE_LABELS = {
   analyst: "Analyst researching...",
@@ -55,31 +54,34 @@ export default function ExpandedRow({
 }) {
   const isMatrixMode = outputMode === "matrix";
   const isDeepAssist = uc?.analysisMeta?.evidenceMode === "deep-assist";
+  const matrixCriticFlags = Number(uc?.analysisMeta?.criticFlagsRaised || uc?.matrix?.coverage?.contestedCells || 0);
   const defaultTab = isMatrixMode ? "summary" : "dimensions";
-  const [tab, setTab] = useState(defaultTab);
+  const [tab, setTab] = useState("progress");
 
   useEffect(() => {
-    setTab(defaultTab);
+    setTab(uc.status === "analyzing" ? "progress" : defaultTab);
   }, [uc.id, defaultTab]);
 
   useEffect(() => {
-    if (uc.status === "complete") {
+    if (uc.status === "analyzing") {
+      setTab("progress");
+    } else if (uc.status === "complete") {
       setTab(defaultTab);
     }
   }, [uc.status, defaultTab]);
 
   const tabs = isMatrixMode
     ? [
+      { id: "progress", label: "Progress" },
       { id: "summary", label: "Summary" },
       { id: "matrix", label: "Matrix" },
       { id: "debate", label: "Debate & Challenges" },
-      { id: "progress", label: "Progress" },
     ]
     : [
+      { id: "progress", label: "Progress" },
       { id: "dimensions", label: "Dimensions" },
       { id: "debate", label: "Debate & Challenges" },
       { id: "discover", label: "Discover" },
-      { id: "progress", label: "Progress" },
     ];
 
   return (
@@ -129,12 +131,17 @@ export default function ExpandedRow({
             )}
             {isMatrixMode && uc.matrix?.coverage?.totalCells != null && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
-                | Cells: {uc.matrix.coverage.totalCells} | Low confidence: {uc.matrix.coverage.lowConfidenceCells || 0} | Critic flags: {uc.matrix.coverage.contestedCells || 0}
+                | Cells: {uc.matrix.coverage.totalCells} | Low confidence: {uc.matrix.coverage.lowConfidenceCells || 0} | Critic flags: {matrixCriticFlags}
               </span>
             )}
             {isMatrixMode && uc.status === "complete" && uc.analysisMeta?.matrixCoverageSLAPassed != null && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
                 | Coverage SLA: {uc.analysisMeta.matrixCoverageSLAPassed ? "pass" : "fail"}
+              </span>
+            )}
+            {isMatrixMode && uc.status === "complete" && uc.analysisMeta?.decisionGradeGate?.enabled != null && (
+              <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>
+                | Decision grade: {uc.analysisMeta.decisionGradePassed ? "pass" : "fail"}
               </span>
             )}
             {!isMatrixMode && uc.status === "complete" && uc.analysisMeta?.hybridReconcileRetryTriggered && (
@@ -154,7 +161,9 @@ export default function ExpandedRow({
         )}
         {uc.analysisMeta?.qualityGrade === "degraded" && (
           <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px", color: "var(--ck-text)", fontSize: 12, marginBottom: 14, lineHeight: 1.55 }}>
-            This research completed in degraded quality mode.
+            {uc.analysisMeta?.decisionGradeGate?.enabled && !uc.analysisMeta?.decisionGradePassed
+              ? "This research is not decision-grade yet."
+              : "This research completed in degraded quality mode."}
             {Array.isArray(uc.analysisMeta?.degradedReasons) && uc.analysisMeta.degradedReasons.length ? (
               <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
                 {uc.analysisMeta.degradedReasons.map((reason, idx) => (
@@ -162,10 +171,12 @@ export default function ExpandedRow({
                 ))}
               </ul>
             ) : null}
+            {uc.analysisMeta?.decisionGradeGate?.enabled && !uc.analysisMeta?.decisionGradePassed && uc.analysisMeta?.decisionGradeFailureReason ? (
+              <div style={{ marginTop: 8 }}>
+                {uc.analysisMeta.decisionGradeFailureReason}
+              </div>
+            ) : null}
           </div>
-        )}
-        {(uc.status === "complete" || uc.status === "error") && (
-          <RunDiagnosticsPanel uc={uc} outputMode={outputMode} />
         )}
         {tab === "summary" && isMatrixMode && (
           <MatrixSummaryTab uc={uc} />

@@ -79,11 +79,15 @@ function parseSubjectsInput(text) {
 
 function getMatrixCoverage(uc) {
   const coverage = uc?.matrix?.coverage;
+  const criticFlags = Number(uc?.analysisMeta?.criticFlagsRaised || 0);
   if (coverage && Number.isFinite(Number(coverage.totalCells))) {
     return {
       totalCells: Number(coverage.totalCells),
       lowConfidenceCells: Number(coverage.lowConfidenceCells) || 0,
       contestedCells: Number(coverage.contestedCells) || 0,
+      criticFlags: Number.isFinite(criticFlags) && criticFlags >= 0
+        ? criticFlags
+        : (Number(coverage.contestedCells) || 0),
     };
   }
   const cells = Array.isArray(uc?.matrix?.cells) ? uc.matrix.cells : [];
@@ -91,6 +95,9 @@ function getMatrixCoverage(uc) {
     totalCells: cells.length,
     lowConfidenceCells: cells.filter((cell) => String(cell?.confidence || "").toLowerCase() === "low").length,
     contestedCells: cells.filter((cell) => !!cell?.contested).length,
+    criticFlags: Number.isFinite(criticFlags) && criticFlags >= 0
+      ? criticFlags
+      : cells.filter((cell) => !!cell?.contested).length,
   };
 }
 
@@ -100,6 +107,30 @@ function normalizeAssumptions(values) {
     .map((item) => String(item || "").trim())
     .filter(Boolean)
     .slice(0, 6);
+}
+
+function resolveResearchTitle(uc = {}, isMatrixMode = false) {
+  const explicit = String(uc?.attributes?.title || "").trim();
+  if (explicit) return explicit;
+  if (isMatrixMode) {
+    const decision = String(uc?.matrix?.decisionQuestion || uc?.researchSetup?.decisionContext || uc?.analysisMeta?.decisionContext || "").trim();
+    if (decision) return decision;
+  }
+  return String(uc?.rawInput || "").trim() || "Untitled research";
+}
+
+function resolveMatrixFramingFallbackValues(uc = {}, providedInput = "", frameValues = {}) {
+  const existing = frameValues && typeof frameValues === "object" ? frameValues : {};
+  const decisionQuestion = String(existing?.decisionQuestion || uc?.matrix?.decisionQuestion || uc?.researchSetup?.decisionContext || uc?.analysisMeta?.decisionContext || "").trim();
+  const roleContext = String(uc?.researchSetup?.userRoleContext || uc?.analysisMeta?.userRoleContext || "").trim();
+  const scopeContext = String(existing?.scopeContext || roleContext).trim();
+  const researchObject = String(existing?.researchObject || providedInput || uc?.rawInput || "").trim();
+  return {
+    ...existing,
+    researchObject: researchObject || "unspecified",
+    decisionQuestion: decisionQuestion || "unspecified",
+    scopeContext: scopeContext || "unspecified",
+  };
 }
 
 function dimensionAcronym(label) {
@@ -586,9 +617,15 @@ export default function App({
         lowConfidenceTargetedSearchUsed: false,
         lowConfidenceTargetedWebSearchCalls: 0,
         lowConfidenceTargetedFallbackReason: null,
+        lowConfidenceBudgetStrategy: "adaptive",
         hybridStats: null,
         qualityGrade: "standard",
         degradedReasons: [],
+        requiredSubjectsRequested: 0,
+        requiredSubjectsMissing: 0,
+        decisionGradePassed: false,
+        decisionGradeFailureReason: "",
+        decisionGradeGate: null,
         deepAssistProvidersRequested: normalizedEvidenceMode === "deep-assist"
           ? deepAssistRunOptions.providers.length
           : 0,
@@ -1841,20 +1878,23 @@ export default function App({
               const score = ucIsMatrix ? null : calcWeightedScore(uc, ucDims);
               const matrixCoverage = ucIsMatrix ? getMatrixCoverage(uc) : null;
               const isExpanded = expandAllResearches || expandedId === uc.id;
-              const title = uc.attributes?.title || uc.rawInput || "Untitled research";
+              const title = resolveResearchTitle(uc, ucIsMatrix);
               const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
               const inputFrame = uc.attributes?.inputFrame || {};
               const providedInput = String(inputFrame?.providedInput || uc.rawInput || "");
               const frameValues = inputFrame?.framingFields && typeof inputFrame.framingFields === "object"
                 ? inputFrame.framingFields
                 : {};
+              const resolvedFrameValues = ucIsMatrix
+                ? resolveMatrixFramingFallbackValues(uc, providedInput, frameValues)
+                : frameValues;
               const assumptions = normalizeAssumptions(inputFrame?.assumptionsUsed);
               const confidenceLimits = String(inputFrame?.confidenceLimits || "");
               const analysisSummary = String(uc.attributes?.expandedDescription || "");
               const frameCombinedLength = [
                 providedInput,
                 analysisSummary,
-                ...framingFieldDefs.map((field) => String(frameValues?.[field.id] || "")),
+                ...framingFieldDefs.map((field) => String(resolvedFrameValues?.[field.id] || "")),
                 assumptions.join(" "),
                 confidenceLimits,
               ].join(" ").length;
@@ -2055,7 +2095,7 @@ export default function App({
                         {framingFieldDefs.length ? (
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
                             {framingFieldDefs.map((field) => {
-                              const value = String(frameValues?.[field.id] || "unspecified");
+                              const value = String(resolvedFrameValues?.[field.id] || "unspecified");
                               return (
                                 <div key={`${uc.id}-frame-${field.id}`}>
                                   <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
@@ -2195,7 +2235,7 @@ export default function App({
                             Critic flags
                           </div>
                           <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
-                            {matrixCoverage?.contestedCells || 0}
+                            {matrixCoverage?.criticFlags || 0}
                           </div>
                         </div>
                       </div>

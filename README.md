@@ -97,18 +97,19 @@ Matrix pipeline:
 2. Baseline matrix pass (memory-only)
 3. Web matrix pass
 4. Reconcile baseline + web drafts (with quality guard retry/fail-fast)
-5. Targeted low-confidence cell recovery
+5. Targeted low-confidence cell recovery (adaptive budget by default)
 6. Critic matrix audit
 7. Analyst response (defend or concede contested cells)
 8. Cross-subject consistency audit
 9. Derived attributes (optional)
 10. Red Team matrix pass (risk-only)
 11. Synthesizer matrix pass
-12. Matrix summary (+ optional matrix discovery suggestions)
+12. Decision-grade gate (explicit pass/fail checks before final recommendation use)
+13. Matrix summary (+ optional matrix discovery suggestions)
 
 Source verification runs after source-producing phases in both scorecard and matrix flows. Cited URLs are checked with `fetchSource`; unverified claims can reduce confidence.
 Each source is also classified into a UI/export taxonomy: `cited`, `corroborating`, `unverified`, `excluded_marketing`, `excluded_stale`, with aggregate counts in `analysisMeta.sourceUniverse`.
-Run diagnostics are captured in `analysisMeta` and surfaced in Progress UI + exports (HTML/PDF/Markdown).
+Run diagnostics are captured in `analysisMeta` and surfaced in Progress UI + exports (HTML/PDF/Markdown), including matrix decision-grade pass/fail and failure reasons.
 
 Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals. Matrix follow-ups are supported at cell level (`subjectId` × `attributeId`) in addition to scorecard dimension threads.
 
@@ -250,10 +251,26 @@ Default system prompts live in:
     targetedBudgetUnits: 8,
     counterfactualQueriesPerDim: 2,
     discoveryMaxCandidates: 5,
+    matrixAdaptiveTargetedRatio: 0.7,
+    matrixAdaptiveTargetedFloor: 12,
+    matrixAdaptiveTargetedMax: 36,
     matrixCoverageSLA: {
       minSourcesPerCell: 2,
       minSubjectEvidenceCoverage: 0.5,
       maxUnresolvedCellsRatio: 0.35
+    },
+    matrixDecisionGradeGate: {
+      enabled: true,
+      minSourcesPerCoverageCell: 2,
+      minSubjectEvidenceCoverage: 0.75,
+      maxLowConfidenceRatio: 0.15,
+      minSourcesPerCriticalCell: 2,
+      minIndependentSourcesPerCriticalCell: 1,
+      maxUnverifiedSourceRatio: 0.05,
+      minCitedSourceRatio: 0.7,
+      requireResolvedCriticFlags: true,
+      maxRedTeamHighSeverity: 8,
+      criticalAttributeIds: ["pricing-model", "pmf-signal", "moat-assessment"]
     },
     criticFlagMonitoring: {
       minAuditedCells: 8,

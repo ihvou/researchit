@@ -58,10 +58,26 @@ const SHARED_DEEP_ASSIST = {
 const SHARED_LIMITS = {
   maxSourcesPerDim: 14,
   discoveryMaxCandidates: 5,
+  matrixAdaptiveTargetedRatio: 0.7,
+  matrixAdaptiveTargetedFloor: 12,
+  matrixAdaptiveTargetedMax: 36,
   matrixCoverageSLA: {
     minSourcesPerCell: 2,
     minSubjectEvidenceCoverage: 0.5,
     maxUnresolvedCellsRatio: 0.35,
+  },
+  matrixDecisionGradeGate: {
+    enabled: true,
+    minSourcesPerCoverageCell: 2,
+    minSubjectEvidenceCoverage: 0.75,
+    maxLowConfidenceRatio: 0.15,
+    minSourcesPerCriticalCell: 2,
+    minIndependentSourcesPerCriticalCell: 1,
+    maxUnverifiedSourceRatio: 0.05,
+    minCitedSourceRatio: 0.7,
+    requireResolvedCriticFlags: true,
+    maxRedTeamHighSeverity: 8,
+    criticalAttributeIds: ["pricing-model", "pmf-signal", "moat-assessment"],
   },
   criticFlagMonitoring: {
     minAuditedCells: 8,
@@ -847,7 +863,7 @@ const CONFIG_SPECS = [
       "inputPrompt": "List the competitors to analyze - direct and indirect",
       "examples": ["Notion", "Coda", "Confluence", "Linear"],
       "minCount": 2,
-      "maxCount": 8
+      "maxCount": 12
     },
     "attributes": [
       { "id": "target-icp", "label": "Target ICP", "brief": "Who they actually sell to by segment and buyer role." },

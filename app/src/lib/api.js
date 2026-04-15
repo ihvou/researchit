@@ -1,6 +1,14 @@
 import { createTransport, DEFAULT_RETRYABLE_STATUS } from "@researchit/engine";
+import { appendRunDebugNetworkEvent } from "./debug";
 
 async function callRoute(role, payload, runtime = {}) {
+  appendRunDebugNetworkEvent({
+    channel: "transport",
+    direction: "request",
+    role,
+    payload,
+  });
+
   let res;
   try {
     res = await fetch(`/api/${role}`, {
@@ -10,6 +18,13 @@ async function callRoute(role, payload, runtime = {}) {
       signal: runtime?.signal,
     });
   } catch (err) {
+    appendRunDebugNetworkEvent({
+      channel: "transport",
+      direction: "error",
+      role,
+      error: err?.message || String(err),
+      stage: "fetch",
+    });
     const networkErr = new Error(err?.message || `Network error: /api/${role}`);
     networkErr.role = role;
     networkErr.retryable = true;
@@ -22,6 +37,15 @@ async function callRoute(role, payload, runtime = {}) {
   } catch (_) {
     data = null;
   }
+
+  appendRunDebugNetworkEvent({
+    channel: "transport",
+    direction: "response",
+    role,
+    status: res.status,
+    ok: res.ok,
+    data,
+  });
 
   if (!res.ok) {
     const err = new Error(data?.error || `Request failed: /api/${role} (${res.status})`);

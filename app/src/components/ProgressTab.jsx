@@ -384,7 +384,7 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
     rows.push({
       label: "Targeted budget",
       value: `${budgetUsed}/${budgetUnits}`,
-      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
+      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Strategy: ${String(meta.lowConfidenceBudgetStrategy || "adaptive")} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
     });
   }
 
@@ -400,6 +400,15 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
 
   if (outputMode === "matrix") {
     const coverage = uc?.matrix?.coverage || {};
+    if (meta?.decisionGradeGate?.enabled) {
+      rows.push({
+        label: "Decision grade",
+        value: meta.decisionGradePassed ? "Passed" : "Not passed",
+        detail: meta.decisionGradePassed
+          ? "All decision-grade checks passed."
+          : String(meta.decisionGradeFailureReason || "Decision-grade requirements were not met."),
+      });
+    }
     const criticFlags = Number(meta.criticFlagsRaised || 0);
     const criticAudited = Number(meta.criticCellsAudited || coverage.totalCells || 0);
     const flagRate = Number(meta.criticFlagRate || 0);
@@ -484,7 +493,6 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
   const rank = phaseRankMap(flow);
   const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
   const currentIdx = rank[resolvedPhase] ?? 0;
-  const diagnostics = diagnosticRows(uc, outputMode);
 
   return (
     <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
@@ -549,27 +557,6 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
             </div>
           );
         })}
-      </div>
-
-      <div style={{ marginTop: 12, border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, padding: "10px 10px 8px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
-          Run Diagnostics
-        </div>
-        <div style={{ display: "grid", gap: 7 }}>
-          {diagnostics.map((item, idx) => (
-            <div key={`${item.label}-${idx}`} style={{ border: "1px solid var(--ck-line)", background: "var(--ck-bg)", borderRadius: 2, padding: "6px 8px" }}>
-              <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>{item.label}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-text)" }}>{item.value}</span>
-              </div>
-              {item.detail ? (
-                <div style={{ marginTop: 2, fontSize: 10, color: "var(--ck-muted)", lineHeight: 1.35 }}>
-                  {item.detail}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
       </div>
 
       <div style={{

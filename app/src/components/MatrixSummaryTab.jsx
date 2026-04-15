@@ -58,6 +58,12 @@ export default function MatrixSummaryTab({ uc }) {
   const sourceUniverse = normalizeSourceUniverse(uc?.analysisMeta?.sourceUniverse);
   const showSourceUniverse = sourceUniverse.total > 0;
   const redTeam = matrix?.redTeam || {};
+  const decisionGate = uc?.analysisMeta?.decisionGradeGate && typeof uc.analysisMeta.decisionGradeGate === "object"
+    ? uc.analysisMeta.decisionGradeGate
+    : null;
+  const decisionGradeEnabled = !!decisionGate?.enabled;
+  const decisionGradePassed = decisionGradeEnabled ? !!uc?.analysisMeta?.decisionGradePassed : true;
+  const decisionGradeFailureReason = cleanText(uc?.analysisMeta?.decisionGradeFailureReason);
   const redTeamCells = redTeam?.cells && typeof redTeam.cells === "object" ? redTeam.cells : {};
   const redTeamCounts = redTeamSeverityCounts(redTeamCells);
   const subjectLabelMap = new Map((Array.isArray(matrix?.subjects) ? matrix.subjects : []).map((item) => [item.id, item.label || item.id]));
@@ -86,6 +92,22 @@ export default function MatrixSummaryTab({ uc }) {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {decisionGradeEnabled ? (
+        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            Decision Grade
+          </div>
+          <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55 }}>
+            {decisionGradePassed ? "Passed. This run meets decision-grade checks." : "Not passed. Continue evidence recovery before using this output for hard go/no-go decisions."}
+          </div>
+          {!decisionGradePassed && decisionGradeFailureReason ? (
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+              {decisionGradeFailureReason}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", display: "grid", gap: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
           Executive Summary

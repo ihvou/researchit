@@ -904,7 +904,7 @@ function runDiagnosticsEntries(uc, outputMode = "scorecard") {
     entries.push({
       label: "Targeted budget",
       value: `${budgetUsed}/${budgetUnits}`,
-      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
+      detail: `Dropped by budget: ${Number(meta.lowConfidenceDroppedByBudget || 0)} | Strategy: ${String(meta.lowConfidenceBudgetStrategy || "adaptive")} | Round-robin: ${meta.lowConfidenceRoundRobinApplied ? "enabled" : "off"}`,
     });
   }
 
@@ -920,6 +920,15 @@ function runDiagnosticsEntries(uc, outputMode = "scorecard") {
 
   if (outputMode === "matrix") {
     const coverage = uc?.matrix?.coverage || {};
+    if (meta?.decisionGradeGate?.enabled) {
+      entries.push({
+        label: "Decision grade",
+        value: meta.decisionGradePassed ? "Passed" : "Not passed",
+        detail: meta.decisionGradePassed
+          ? "All decision-grade checks passed."
+          : String(meta.decisionGradeFailureReason || "Decision-grade requirements were not met."),
+      });
+    }
     const audited = Number(meta.criticCellsAudited || coverage.totalCells || 0);
     const flags = Number(meta.criticFlagsRaised || 0);
     const flagRate = Number(meta.criticFlagRate || 0);
@@ -1069,6 +1078,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
   const title = uc?.attributes?.title || uc?.rawInput || "Untitled matrix research";
   const matrix = uc?.matrix || {};
   const coverage = matrixCoverageSnapshot(matrix);
+  const criticFlags = Number((uc?.analysisMeta?.criticFlagsRaised ?? coverage.contestedCells) || 0);
   const decisionQuestion = matrix?.decisionQuestion || uc?.rawInput || "";
   const subjectCount = Array.isArray(matrix?.subjects) ? matrix.subjects.length : 0;
   const attributeCount = Array.isArray(matrix?.attributes) ? matrix.attributes.length : 0;
@@ -1083,7 +1093,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
       <div><span class="meta-k">Attributes</span><span class="meta-v">${attributeCount}</span></div>
       <div><span class="meta-k">Cells</span><span class="meta-v">${coverage.totalCells}</span></div>
       <div><span class="meta-k">Low confidence</span><span class="meta-v">${coverage.lowConfidenceCells}</span></div>
-      <div><span class="meta-k">Critic flags</span><span class="meta-v">${coverage.contestedCells}</span></div>
+      <div><span class="meta-k">Critic flags</span><span class="meta-v">${criticFlags}</span></div>
       <div><span class="meta-k">Mode</span><span class="meta-v">Matrix</span></div>
     </div>
   `;
@@ -2368,6 +2378,7 @@ function buildMatrixMarkdown(uc) {
   const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
   const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
   const coverage = matrix?.coverage || {};
+  const criticFlags = Number((uc?.analysisMeta?.criticFlagsRaised ?? coverage?.contestedCells) || 0);
   const lines = [];
 
   lines.push(`# ${title}`);
@@ -2377,7 +2388,7 @@ function buildMatrixMarkdown(uc) {
   lines.push(`- Exported at: ${new Date().toISOString()}`);
   lines.push(`- Cells: ${Number(coverage?.totalCells) || cells.length}`);
   lines.push(`- Low-confidence cells: ${Number(coverage?.lowConfidenceCells) || 0}`);
-  lines.push(`- Critic flags: ${Number(coverage?.contestedCells) || 0}`);
+  lines.push(`- Critic flags: ${criticFlags}`);
   lines.push("");
 
   const decisionQuestion = markdownTextBlock(matrix?.decisionQuestion || "");

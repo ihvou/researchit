@@ -150,7 +150,8 @@ Workspace state sync → /api/account/researches (load/upsert/delete)
 7. **Derived attributes (optional)** — computed columns after core evidence phases
 8. **Red Team pass** — per-cell counter-case and missed-risk pressure (risk context only)
 9. **Synthesizer pass** — independent matrix executive synthesis
-10. **Summary/discovery** — subject summaries, cross-matrix notes, and optional missing-coverage discovery
+10. **Decision-grade gate** — explicit pass/fail checks on required-subject coverage, confidence mix, critical-cell evidence depth, source quality, critic resolution, and red-team severity
+11. **Summary/discovery** — subject summaries, cross-matrix notes, and optional missing-coverage discovery
 
 ### Source verification and taxonomy
 After source-producing passes, cited URLs are checked via `fetchSource`. Raw verification signals include `verified_in_page`, `not_found_in_page`, `fetch_failed`, `invalid_url`, and `name_only_in_page`.
@@ -165,7 +166,7 @@ Engine derives user-facing source taxonomy:
 Aggregated source-quality totals are emitted as `analysisMeta.sourceUniverse` and consumed by UI/exports.
 
 ### Run diagnostics surface
-Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, stale-evidence ratio, provider contribution, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
+Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, decision-grade gate status, stale-evidence ratio, provider contribution, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
 
 ### Degraded-complete semantics
 Quality gates no longer hard-abort the entire run for recoverable failures. Pipelines can complete with:
@@ -245,8 +246,24 @@ Supports both:
     targetedBudgetUnits,               // optional low-confidence budget
     counterfactualQueriesPerDim,       // default 2
     discoveryMaxCandidates,
+    matrixAdaptiveTargetedRatio,       // adaptive matrix targeted-recovery ratio
+    matrixAdaptiveTargetedFloor,       // minimum adaptive targeted batch size
+    matrixAdaptiveTargetedMax,         // maximum adaptive targeted batch size
     matrixCoverageSLA: {
       minSourcesPerCell, minSubjectEvidenceCoverage, maxUnresolvedCellsRatio, maxUnresolvedCells?
+    },
+    matrixDecisionGradeGate: {
+      enabled,
+      minSourcesPerCoverageCell,
+      minSubjectEvidenceCoverage,
+      maxLowConfidenceRatio,
+      minSourcesPerCriticalCell,
+      minIndependentSourcesPerCriticalCell,
+      maxUnverifiedSourceRatio,
+      minCitedSourceRatio,
+      requireResolvedCriticFlags,
+      maxRedTeamHighSeverity,
+      criticalAttributeIds
     },
     criticFlagMonitoring: {
       minAuditedCells, minFlagRate, highLowConfidenceRate

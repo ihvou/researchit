@@ -9,6 +9,8 @@ import { appTransport } from "../lib/api";
 import {
   storeCompletedAnalysisDebugSession,
   downloadAnalysisDebugSession,
+  startRunDebugCapture,
+  stopRunDebugCapture,
 } from "../lib/debugUI";
 
 function mergeConfig(baseConfig, dims) {
@@ -44,14 +46,20 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   const evidenceMode = String(options?.evidenceMode || "native").trim().toLowerCase() === "deep-assist"
     ? "deep-assist"
     : "native";
+  const resolvedAnalysisMode = String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
+    ? (evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
+    : (evidenceMode === "deep-assist" ? "deep-assist" : "hybrid");
   const debugDims = String(config?.outputMode || "").trim().toLowerCase() === "matrix"
     ? (Array.isArray(config?.attributes) ? config.attributes : [])
     : (Array.isArray(config?.dimensions) ? config.dimensions : []);
+  startRunDebugCapture({
+    useCaseId: id,
+    analysisMode: resolvedAnalysisMode,
+    rawInput: desc,
+  });
   const fallbackDebugSession = createAnalysisDebugSession({
     useCaseId: id,
-    analysisMode: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
-      ? (evidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
-      : (evidenceMode === "deep-assist" ? "deep-assist" : "hybrid"),
+    analysisMode: resolvedAnalysisMode,
     rawInput: desc,
     dims: debugDims,
   });
@@ -98,9 +106,10 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
         },
         onDebugSession: (session, meta = {}) => {
           debugSessionReceived = true;
-          storeCompletedAnalysisDebugSession(session);
+          const networkCapture = stopRunDebugCapture(id);
+          storeCompletedAnalysisDebugSession(session, { networkCapture });
           if (meta?.downloadRequested) {
-            downloadAnalysisDebugSession(session);
+            downloadAnalysisDebugSession(session, { networkCapture });
           }
         },
       }
@@ -111,6 +120,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
   } finally {
     if (!debugSessionReceived) {
       const status = latest?.status || "error";
+      const networkCapture = stopRunDebugCapture(id);
       const payload = finalizeAnalysisDebugSession(fallbackDebugSession, {
         status,
         error: status === "error"
@@ -118,9 +128,9 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
           : null,
         analysisMeta: latest?.analysisMeta || null,
       });
-      storeCompletedAnalysisDebugSession(payload);
+      storeCompletedAnalysisDebugSession(payload, { networkCapture });
       if (options?.downloadDebugLog) {
-        downloadAnalysisDebugSession(payload);
+        downloadAnalysisDebugSession(payload, { networkCapture });
       }
     }
   }

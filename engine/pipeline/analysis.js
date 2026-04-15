@@ -711,10 +711,23 @@ function sourceHasOnlyStaleYears(source = {}, staleCutoff = (new Date().getFullY
   return years.every((year) => year < staleCutoff);
 }
 
+function isVendorPrimaryDimension(dimensionId = "", dimensionLabel = "") {
+  const text = `${cleanString(dimensionId)} ${cleanString(dimensionLabel)}`.toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(icp|persona|buyer|segment|positioning|pricing|price|tier|package|channel|acquisition|gtm|workflow)\b/.test(text)
+    || text.includes("target-icp")
+    || text.includes("core-position")
+  );
+}
+
 function deriveSourceDisplayStatus(source = {}, options = {}) {
   const verificationStatus = cleanString(source?.verificationStatus);
   const sourceType = cleanString(source?.sourceType).toLowerCase();
   const staleEvidenceRatio = Number(options?.staleEvidenceRatio);
+  const dimensionId = cleanString(options?.dimensionId);
+  const dimensionLabel = cleanString(options?.dimensionLabel);
+  const allowVendorAsPrimary = !!options?.allowVendorAsPrimary || isVendorPrimaryDimension(dimensionId, dimensionLabel);
   const staleCutoff = Number.isFinite(Number(options?.staleCutoff))
     ? Number(options.staleCutoff)
     : (new Date().getFullYear() - 2);
@@ -728,6 +741,10 @@ function deriveSourceDisplayStatus(source = {}, options = {}) {
     return "excluded_stale";
   }
   if (sourceType === "vendor" && verificationStatus !== "verified_in_page") {
+    if (allowVendorAsPrimary) {
+      if (verificationStatus === "name_only_in_page") return "corroborating";
+      return "unverified";
+    }
     return "excluded_marketing";
   }
   if (verificationStatus === "name_only_in_page" && sourceType !== "vendor") {
@@ -800,12 +817,17 @@ function buildScorecardSourceUniverse(payload = {}, dims = []) {
     const staleEvidenceRatio = Number(dimState?.staleEvidenceRatio);
     const sources = annotateSourceListDisplayStatus(dimState?.sources, {
       staleEvidenceRatio: Number.isFinite(staleEvidenceRatio) ? staleEvidenceRatio : null,
+      dimensionId: cleanString(dim?.id),
+      dimensionLabel: cleanString(dim?.label),
     });
     sources.forEach(addSource);
     const supporting = Array.isArray(dimState?.arguments?.supporting) ? dimState.arguments.supporting : [];
     const limiting = Array.isArray(dimState?.arguments?.limiting) ? dimState.arguments.limiting : [];
     [...supporting, ...limiting].forEach((arg) => {
-      annotateSourceListDisplayStatus(arg?.sources).forEach(addSource);
+      annotateSourceListDisplayStatus(arg?.sources, {
+        dimensionId: cleanString(dim?.id),
+        dimensionLabel: cleanString(dim?.label),
+      }).forEach(addSource);
     });
   });
 
@@ -1158,7 +1180,11 @@ function applyEvidenceQualityCaps(dim = {}, analysisMeta = {}) {
     vendor: vendorSources,
     press: sources.filter((source) => source.sourceType === "press").length,
   };
-  dim.sources = annotateSourceListDisplayStatus(sources, { staleEvidenceRatio: staleRatio });
+  dim.sources = annotateSourceListDisplayStatus(sources, {
+    staleEvidenceRatio: staleRatio,
+    dimensionId: cleanString(dim?.id),
+    dimensionLabel: cleanString(dim?.label),
+  });
   dim.confidence = nextConfidence;
 }
 
@@ -1205,6 +1231,8 @@ async function verifyScorecardSources({
         staleEvidenceRatio: Number.isFinite(Number(dimState?.staleEvidenceRatio))
           ? Number(dimState.staleEvidenceRatio)
           : null,
+        dimensionId: cleanString(dim?.id),
+        dimensionLabel: cleanString(dim?.label),
       });
     }
   }
