@@ -35,10 +35,45 @@ configs/
 
 - **Two output modes**: Scorecard (per-dimension scores) and Matrix (subject × attribute grid)
 - **Two evidence modes**: "Verified Research" (native hybrid) and "Deep Research ×3" (3 external providers cross-validated)
-- **Pipeline actors**: Query Strategist → Web Search → Analyst → Critic → Reconciler → Red Team (RQ-02) → Synthesizer (RQ-09)
 - **Transport is injected**: engine never calls APIs directly; `app/api/` routes resolve providers
 - **Provider routing**: providerConfig.js resolves role → provider → model via env vars with fallback chain
 - **ACTIVE_RUNTIME global** in analysis.js — mutable state, unsafe for concurrent runs (flagged as ENG-02)
+
+For full architecture see `docs/architecture.md`; for high-level pipeline overview see `README.md` § Analysis Pipeline.
+
+### Scorecard Pipeline (analysis.js → `runAnalysisLegacy`)
+
+1. **Query Strategist** — infer niche, aliases, per-dimension query seeds + counterfactual seeds
+2. **Analyst Phase 1** — evidence collection with web search, produces per-dimension scores/confidence/sources
+3. **Targeted Recovery** — low-confidence dimensions get: query plan → search harvest → rescore (sequential per dim)
+4. **Source Verification** — fetch URLs, check quotes in page, assign verificationStatus, apply confidence penalties
+5. **Critic** — independent audit with live search, flags disagreements, proposes score changes
+6. **Reconciler (Phase 3)** — analyst responds to critic flags, updates scores with justification
+7. **Consistency & Coherence** — cross-dimension score consistency check + coherence audit
+8. **Final Source Verification** — re-verify after reconciliation
+9. **Red Team (RQ-02)** — adversarial stress test via Critic model, appends threats/missed risks per dimension
+10. **Synthesizer (RQ-09)** — independent executive narrative via different model, produces decisionImplication + dissent
+11. **Discovery** — suggests related research threads
+
+Deep Research ×3 inserts after step 2: three providers run in parallel → merge best per dimension → DA-02 recovery loop for weak dimensions → then continues from step 4.
+
+### Matrix Pipeline (matrix.js → `runMatrixAnalysis`)
+
+1. **Subject Discovery** (optional) — auto-discover comparison subjects if not provided
+2. **Query Strategist** — niche/alias hints + per-cell query seeds + counterfactual seeds
+3. **Analyst Pass** — populate all cells with evidence, scores, confidence via web search
+4. **Targeted Recovery** — low-confidence cells get: query plan → search harvest → rescore (sequential per cell)
+5. **Cell Source Verification** — same as scorecard but per-cell
+6. **Critic** — audits matrix cells, flags issues
+7. **Analyst Response** — resolves critic flags per cell
+8. **Consistency Audit** — cross-subject consistency check
+9. **Derived Attributes** — computed columns (e.g., composite scores)
+10. **Red Team** — adversarial counter-cases per cell via Critic model
+11. **Synthesizer** — executive synthesis: decision answer, threats, whitespace, implications
+12. **Coverage SLA** — validates minimum source/evidence thresholds
+13. **Discovery** — suggests additional subjects/attributes
+
+Deep Research ×3 inserts after step 5: three providers run in parallel → merge/reconcile → DA-02 recovery for conflicting cells → re-verify sources → then continues from step 6.
 
 ## Model Configuration
 
