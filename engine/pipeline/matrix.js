@@ -2313,6 +2313,19 @@ function sliceMatrixBySubjects(matrix = {}, subjectIds = new Set()) {
   };
 }
 
+function sliceMatrixBySubjectsAndAttributes(matrix = {}, subjectIds = new Set(), attributeIds = new Set()) {
+  const allowedSubjects = subjectIds instanceof Set ? subjectIds : new Set(subjectIds || []);
+  const allowedAttributes = attributeIds instanceof Set ? attributeIds : new Set(attributeIds || []);
+  return {
+    ...matrix,
+    cells: (Array.isArray(matrix?.cells) ? matrix.cells : []).filter((cell) => (
+      allowedSubjects.has(cell?.subjectId) && allowedAttributes.has(cell?.attributeId)
+    )),
+    subjectSummaries: (Array.isArray(matrix?.subjectSummaries) ? matrix.subjectSummaries : [])
+      .filter((entry) => allowedSubjects.has(entry?.subjectId)),
+  };
+}
+
 function combineMatrixChunkPayloads(chunks = []) {
   const cellMap = new Map();
   const summaryMap = new Map();
@@ -2517,6 +2530,10 @@ async function runChunkedAnalystMatrixPass({
   const parseSplitMaxDepth = Number.isFinite(parseSplitMaxDepthRaw)
     ? Math.max(0, Math.min(4, Math.round(parseSplitMaxDepthRaw)))
     : 3;
+  const parseSplitAttributeMaxDepthRaw = Number(limits?.matrixChunkParseRetryAttributeSplitDepth);
+  const parseSplitAttributeMaxDepth = Number.isFinite(parseSplitAttributeMaxDepthRaw)
+    ? Math.max(0, Math.min(5, Math.round(parseSplitAttributeMaxDepthRaw)))
+    : parseSplitMaxDepth + 1;
 
   const isJsonParseFailure = (err) => (
     cleanText(err?.code) === "JSON_PARSE_FAILED"
@@ -2532,18 +2549,24 @@ CRITICAL JSON REQUIREMENTS:
 - Do not truncate or leave dangling keys.
 `;
 
-  const runChunkSubjects = async (chunkSubjects, chunkTag = "chunk", depth = 0) => {
+  const runChunkSubjects = async (
+    chunkSubjects,
+    chunkAttributes = attributes,
+    chunkTag = "chunk",
+    subjectDepth = 0,
+    attributeDepth = 0
+  ) => {
     let lastParseError = null;
 
     for (let attempt = 0; attempt <= parseRetryAttempts; attempt += 1) {
       const forceStrict = attempt > 0;
       let prompt = typeof buildPromptForChunk === "function"
-        ? buildPromptForChunk(chunkSubjects, chunkTag)
+        ? buildPromptForChunk(chunkSubjects, chunkTag, chunkAttributes)
         : buildMatrixEvidencePrompt({
           rawInput,
           decisionQuestion,
           subjects: chunkSubjects,
-          attributes,
+          attributes: chunkAttributes,
           passLabel: `${passLabel} (${chunkTag})`,
           liveSearch,
           researchSetup,
@@ -2571,7 +2594,11 @@ CRITICAL JSON REQUIREMENTS:
           prompt,
           debugSession,
         });
-        return [{ subjectIds: chunkSubjects.map((item) => item.id), payload: parsed }];
+        return [{
+          subjectIds: chunkSubjects.map((item) => item.id),
+          attributeIds: chunkAttributes.map((item) => item.id),
+          payload: parsed,
+        }];
       } catch (err) {
         if (!isJsonParseFailure(err)) throw err;
         lastParseError = err;
@@ -2582,14 +2609,16 @@ CRITICAL JSON REQUIREMENTS:
           note: cleanText(err?.message || "matrix_chunk_parse_retry"),
           diagnostics: {
             subjectCount: chunkSubjects.length,
-            depth,
+            attributeCount: chunkAttributes.length,
+            subjectDepth,
+            attributeDepth,
             strictAttempt: forceStrict,
           },
         });
       }
     }
 
-    if (chunkSubjects.length > 1 && depth < parseSplitMaxDepth) {
+    if (chunkSubjects.length > 1 && subjectDepth < parseSplitMaxDepth) {
       const mid = Math.ceil(chunkSubjects.length / 2);
       const left = chunkSubjects.slice(0, mid);
       const right = chunkSubjects.slice(mid);
@@ -2599,12 +2628,47 @@ CRITICAL JSON REQUIREMENTS:
         attempt: chunkTag,
         note: `Parse retries exhausted; splitting chunk ${chunkSubjects.length} into ${left.length}+${right.length}.`,
         diagnostics: {
-          depth,
+          subjectDepth,
+          attributeDepth,
           parseRetryAttempts,
+          splitAxis: "subjects",
         },
       });
-      const leftPayloads = await runChunkSubjects(left, `${chunkTag}.a`, depth + 1);
-      const rightPayloads = await runChunkSubjects(right, `${chunkTag}.b`, depth + 1);
+      const leftPayloads = await runChunkSubjects(left, chunkAttributes, `${chunkTag}.a`, subjectDepth + 1, attributeDepth);
+      const rightPayloads = await runChunkSubjects(right, chunkAttributes, `${chunkTag}.b`, subjectDepth + 1, attributeDepth);
+      return [...leftPayloads, ...rightPayloads];
+    }
+
+    if (chunkAttributes.length > 1 && attributeDepth < parseSplitAttributeMaxDepth) {
+      const mid = Math.ceil(chunkAttributes.length / 2);
+      const left = chunkAttributes.slice(0, mid);
+      const right = chunkAttributes.slice(mid);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_chunk_parse_split_retry",
+        phase,
+        attempt: chunkTag,
+        note: `Parse retries exhausted; splitting attributes ${chunkAttributes.length} into ${left.length}+${right.length}.`,
+        diagnostics: {
+          subjectDepth,
+          attributeDepth,
+          parseRetryAttempts,
+          splitAxis: "attributes",
+        },
+      });
+      const leftPayloads = await runChunkSubjects(
+        chunkSubjects,
+        left,
+        `${chunkTag}.x`,
+        subjectDepth,
+        attributeDepth + 1
+      );
+      const rightPayloads = await runChunkSubjects(
+        chunkSubjects,
+        right,
+        `${chunkTag}.y`,
+        subjectDepth,
+        attributeDepth + 1
+      );
       return [...leftPayloads, ...rightPayloads];
     }
 
@@ -2615,11 +2679,12 @@ CRITICAL JSON REQUIREMENTS:
   for (let idx = 0; idx < chunks.length; idx += 1) {
     const chunkSubjects = chunks[idx];
     const chunkTag = `chunk_${idx + 1}/${chunks.length}`;
-    const payloadEntries = await runChunkSubjects(chunkSubjects, chunkTag, 0);
+    const payloadEntries = await runChunkSubjects(chunkSubjects, attributes, chunkTag, 0, 0);
     payloadEntries.forEach((entry) => {
       chunkPayloads.push({
         chunkIndex: chunkSequence,
         subjectIds: Array.isArray(entry?.subjectIds) ? entry.subjectIds : [],
+        attributeIds: Array.isArray(entry?.attributeIds) ? entry.attributeIds : [],
         payload: entry?.payload && typeof entry.payload === "object" ? entry.payload : {},
       });
       chunkSequence += 1;
@@ -4803,15 +4868,19 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         debugSession,
         analysisMeta: state.analysisMeta,
         researchSetup,
-        buildPromptForChunk: (chunkSubjects) => {
+        buildPromptForChunk: (chunkSubjects, _chunkTag, chunkAttributes) => {
           const subjectIds = new Set(chunkSubjects.map((item) => item.id));
-          const baselineChunk = sliceMatrixBySubjects(baselineMatrix, subjectIds);
-          const webChunk = sliceMatrixBySubjects(webMatrix, subjectIds);
+          const scopedAttributes = Array.isArray(chunkAttributes) && chunkAttributes.length
+            ? chunkAttributes
+            : attributes;
+          const attributeIds = new Set(scopedAttributes.map((item) => item.id));
+          const baselineChunk = sliceMatrixBySubjectsAndAttributes(baselineMatrix, subjectIds, attributeIds);
+          const webChunk = sliceMatrixBySubjectsAndAttributes(webMatrix, subjectIds, attributeIds);
           return buildMatrixReconcilePrompt({
             rawInput: state.rawInput,
             decisionQuestion,
             subjects: chunkSubjects,
-            attributes,
+            attributes: scopedAttributes,
             baseline: baselineChunk,
             web: webChunk,
             qualityGuard,
