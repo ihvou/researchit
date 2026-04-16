@@ -122,6 +122,7 @@ const MATRIX_FLOW = [
     phase: "matrix_deep_assist",
     title: "Deep Assist matrix enrichment",
     detail: "Merges provider-level matrix passes and records per-cell agreement signals.",
+    modes: ["deep-assist"],
   },
   {
     key: "matrix_targeted",
