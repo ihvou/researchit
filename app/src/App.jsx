@@ -376,6 +376,7 @@ export default function App({
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [setupNotice, setSetupNotice] = useState("");
+  const [runErrorModal, setRunErrorModal] = useState({ open: false, message: "" });
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [evidenceMode, setEvidenceMode] = useState(() => (
     String(draftState?.evidenceMode || "").trim().toLowerCase() === "deep-assist"
@@ -724,12 +725,7 @@ export default function App({
       console.error("Analysis error:", err);
       const errorMessage = String(err?.message || "Analysis failed.");
       updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: errorMessage }));
-      const shouldDownloadDebug = window.confirm(
-        `Research run failed.\n\n${errorMessage}\n\nDownload debug log now?`
-      );
-      if (shouldDownloadDebug) {
-        downloadDebugLogsBundle();
-      }
+      setRunErrorModal({ open: true, message: errorMessage });
     }
     setGlobalAnalyzing(false);
   }
@@ -1891,6 +1887,74 @@ export default function App({
                   Save setup
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {runErrorModal.open && (
+        <div className="setup-modal-backdrop" onClick={() => setRunErrorModal({ open: false, message: "" })}>
+          <div className="setup-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="setup-modal-header">
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ck-text)" }}>
+                Research failed
+              </div>
+              <button
+                type="button"
+                onClick={() => setRunErrorModal({ open: false, message: "" })}
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
+              This run stopped due to a quality guard or runtime failure. Download debug logs to inspect the exact phase and payloads.
+            </div>
+
+            <div style={{ marginTop: 8, background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "8px 10px", color: "var(--ck-text)", fontSize: 12 }}>
+              {runErrorModal.message || "Unknown analysis error."}
+            </div>
+
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setRunErrorModal({ open: false, message: "" })}
+                style={{
+                  border: "1px solid var(--ck-line)",
+                  background: "var(--ck-surface)",
+                  color: "var(--ck-text)",
+                  padding: "7px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  downloadDebugLogsBundle();
+                }}
+                style={{
+                  border: "1px solid var(--ck-accent)",
+                  background: "var(--ck-accent)",
+                  color: "var(--ck-accent-ink)",
+                  padding: "7px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                Download Debug Log
+              </button>
             </div>
           </div>
         </div>

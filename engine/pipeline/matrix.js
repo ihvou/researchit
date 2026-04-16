@@ -1132,6 +1132,7 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
     rawCells: cellsRaw.length,
     mappedCells: 0,
     placeholderCellsAdded: 0,
+    missingCellKeys: [],
     droppedUnknownSubject: 0,
     droppedUnknownAttribute: 0,
     duplicateCellOverwrites: 0,
@@ -1197,6 +1198,7 @@ function normalizeAnalystMatrix(raw = {}, subjects = [], attributes = []) {
       if (existing) {
         cells.push(existing);
       } else {
+        diagnostics.missingCellKeys.push(key);
         cells.push({
           subjectId: subject.id,
           attributeId: attribute.id,
@@ -2337,6 +2339,151 @@ function combineMatrixChunkPayloads(chunks = []) {
   };
 }
 
+function buildMatrixCompletenessRepairPrompt({
+  rawInput,
+  decisionQuestion,
+  subjects = [],
+  attributes = [],
+  passLabel = "",
+  liveSearch = false,
+  researchSetup = {},
+  missingCellKeys = [],
+}) {
+  const liveSearchBlock = liveSearch
+    ? "- Use live web evidence and provide sources for each populated claim."
+    : "- Use memory-only reasoning; do not fabricate sources.";
+  const setupContext = buildResearchSetupContextBlock(researchSetup);
+  const missingCells = (Array.isArray(missingCellKeys) ? missingCellKeys : [])
+    .filter(Boolean)
+    .map((key) => `- ${key}`);
+
+  return `Repair missing matrix cells for an in-progress pass.
+
+Pass label:
+${passLabel}
+
+Research brief:
+${rawInput}
+
+Decision question:
+${decisionQuestion || rawInput}
+
+Run context:
+${setupContext}
+
+Subjects to repair:
+${subjects.map((subject, idx) => `${idx + 1}. ${subject.id}: ${subject.label}`).join("\n")}
+
+Attributes:
+${attributes.map((attr) => `- ${attr.id}: ${attr.label}${attr.brief ? ` - ${attr.brief}` : ""}`).join("\n")}
+
+Missing cell keys:
+${missingCells.length ? missingCells.join("\n") : "- none listed"}
+
+Rules:
+- Return a complete cell object for every subject x attribute pair in this prompt.
+- Use exact subjectId/attributeId IDs.
+${liveSearchBlock}
+- If evidence is insufficient, keep confidence low and state exactly why.
+
+Return JSON only:
+{
+  "cells": [
+    {
+      "subjectId":"<subject id>",
+      "attributeId":"<attribute id>",
+      "value":"<short value>",
+      "full":"<full explanation>",
+      "risks":"<key risks>",
+      "confidence":"<high|medium|low>",
+      "confidenceReason":"<why>",
+      "sources":[{"name":"<source title>", "url":"<https://...>", "snippet":"<optional snippet>"}]
+    }
+  ],
+  "subjectSummaries":[{"subjectId":"<subject id>","summary":"<optional summary>"}],
+  "crossMatrixSummary":"<optional summary>"
+}`;
+}
+
+function parseMatrixCellKey(key = "") {
+  const value = cleanText(key);
+  if (!value || !value.includes("::")) return null;
+  const [subjectId, attributeId] = value.split("::");
+  if (!cleanText(subjectId) || !cleanText(attributeId)) return null;
+  return {
+    subjectId: cleanText(subjectId),
+    attributeId: cleanText(attributeId),
+  };
+}
+
+function resolveMissingSubjectsFromKeys(missingKeys = [], subjects = []) {
+  const missingSubjectIds = new Set(
+    (Array.isArray(missingKeys) ? missingKeys : [])
+      .map((key) => parseMatrixCellKey(key))
+      .filter(Boolean)
+      .map((entry) => entry.subjectId)
+  );
+  return subjects.filter((subject) => missingSubjectIds.has(subject.id));
+}
+
+function mergeMatrixRepairChunk(baseMatrix = {}, repairedChunk = {}, missingKeys = new Set()) {
+  const replacedKeys = new Set();
+  const repairedMap = new Map(
+    (Array.isArray(repairedChunk?.cells) ? repairedChunk.cells : [])
+      .map((cell) => [buildCellKey(cell.subjectId, cell.attributeId), cell])
+  );
+
+  const nextCells = (Array.isArray(baseMatrix?.cells) ? baseMatrix.cells : []).map((cell) => {
+    const key = buildCellKey(cell.subjectId, cell.attributeId);
+    if (!missingKeys.has(key)) return cell;
+    const candidate = repairedMap.get(key);
+    if (!candidate) return cell;
+    const candidateHasEvidence = normalizeSourceList(candidate.sources).length > 0
+      || cleanText(candidate?.value) !== "No reliable evidence found for this cell."
+      || cleanText(candidate?.full)
+      || normalizeConfidence(candidate?.confidence) !== "low";
+    if (!candidateHasEvidence) return cell;
+    replacedKeys.add(key);
+    return {
+      ...cell,
+      ...candidate,
+    };
+  });
+
+  const summaryBySubject = new Map(
+    (Array.isArray(baseMatrix?.subjectSummaries) ? baseMatrix.subjectSummaries : [])
+      .map((entry) => [cleanText(entry?.subjectId), cleanText(entry?.summary)])
+      .filter(([subjectId]) => !!subjectId)
+  );
+  (Array.isArray(repairedChunk?.subjectSummaries) ? repairedChunk.subjectSummaries : []).forEach((entry) => {
+    const subjectId = cleanText(entry?.subjectId);
+    const summary = cleanText(entry?.summary);
+    if (!subjectId || !summary) return;
+    summaryBySubject.set(subjectId, summary);
+  });
+
+  return {
+    matrix: {
+      ...baseMatrix,
+      cells: nextCells,
+      subjectSummaries: [...summaryBySubject.entries()].map(([subjectId, summary]) => ({ subjectId, summary })),
+    },
+    replacedKeys,
+  };
+}
+
+function refreshMatrixNormalizationAfterRepair(matrix = {}, subjects = [], attributes = [], missingKeys = []) {
+  const expectedCells = Math.max(0, subjects.length * attributes.length);
+  const missingSet = new Set((Array.isArray(missingKeys) ? missingKeys : []).filter(Boolean));
+  return {
+    ...(matrix?.normalization || {}),
+    expectedCells,
+    mappedCells: Math.max(0, expectedCells - missingSet.size),
+    placeholderCellsAdded: missingSet.size,
+    missingCellKeys: [...missingSet],
+  };
+}
+
 async function runChunkedAnalystMatrixPass({
   transport,
   analystPrompt,
@@ -2399,7 +2546,105 @@ async function runChunkedAnalystMatrixPass({
   }
 
   const combinedPayload = combineMatrixChunkPayloads(chunkPayloads);
-  const matrix = normalizeAnalystMatrix(combinedPayload, subjects, attributes);
+  let matrix = normalizeAnalystMatrix(combinedPayload, subjects, attributes);
+
+  const maxRepairRoundsRaw = Number(limits?.matrixCompletenessRepairRounds);
+  const maxRepairRounds = Number.isFinite(maxRepairRoundsRaw)
+    ? Math.max(0, Math.min(3, Math.round(maxRepairRoundsRaw)))
+    : 1;
+  const repairSubjectChunkSizeRaw = Number(limits?.matrixCompletenessRepairSubjectChunkSize);
+  const repairSubjectChunkSize = Number.isFinite(repairSubjectChunkSizeRaw)
+    ? Math.max(1, Math.min(subjects.length || 1, Math.round(repairSubjectChunkSizeRaw)))
+    : Math.min(2, subjects.length || 1);
+
+  let repairRoundsUsed = 0;
+  let repairedCellCount = 0;
+  if (maxRepairRounds > 0) {
+    for (let round = 1; round <= maxRepairRounds; round += 1) {
+      const missingKeysRound = Array.isArray(matrix?.normalization?.missingCellKeys)
+        ? matrix.normalization.missingCellKeys.filter(Boolean)
+        : [];
+      if (!missingKeysRound.length) break;
+
+      const missingSubjects = resolveMissingSubjectsFromKeys(missingKeysRound, subjects);
+      if (!missingSubjects.length) break;
+
+      const repairChunks = splitIntoChunks(missingSubjects, repairSubjectChunkSize);
+      const recoveredInRound = new Set();
+      const missingSet = new Set(missingKeysRound);
+
+      for (let idx = 0; idx < repairChunks.length; idx += 1) {
+        const repairSubjects = repairChunks[idx];
+        const repairSubjectIds = new Set(repairSubjects.map((subject) => subject.id));
+        const repairKeys = missingKeysRound.filter((key) => {
+          const parsedKey = parseMatrixCellKey(key);
+          return parsedKey && repairSubjectIds.has(parsedKey.subjectId);
+        });
+        if (!repairKeys.length) continue;
+
+        const prompt = buildMatrixCompletenessRepairPrompt({
+          rawInput,
+          decisionQuestion,
+          subjects: repairSubjects,
+          attributes,
+          passLabel: `${passLabel} completeness repair round ${round}`,
+          liveSearch,
+          researchSetup,
+          missingCellKeys: repairKeys,
+        });
+        try {
+          const res = await transport.callAnalyst(
+            [{ role: "user", content: prompt }],
+            analystPrompt,
+            tokenLimit,
+            {
+              ...(requestOptions || {}),
+              liveSearch,
+              includeMeta: true,
+            }
+          );
+          if (analysisMeta && typeof analysisMeta === "object") {
+            Object.assign(analysisMeta, mergeMeta(analysisMeta, res?.meta, "analyst"));
+          }
+          const parsed = extractJson(res?.text || res, {}, {
+            phase: `${phase}_completeness_repair`,
+            attempt: `round_${round}_chunk_${idx + 1}/${repairChunks.length}`,
+            prompt,
+            debugSession,
+          });
+          const repairedChunk = normalizeAnalystMatrix(parsed, repairSubjects, attributes);
+          const merged = mergeMatrixRepairChunk(matrix, repairedChunk, missingSet);
+          matrix = merged.matrix;
+          merged.replacedKeys.forEach((key) => recoveredInRound.add(key));
+        } catch (repairErr) {
+          appendAnalysisDebugEvent(debugSession, {
+            type: "matrix_completeness_repair_failed",
+            phase: `${phase}_completeness_repair`,
+            attempt: `round_${round}_chunk_${idx + 1}/${repairChunks.length}`,
+            error: cleanText(repairErr?.message || "matrix_completeness_repair_failed"),
+          });
+        }
+      }
+
+      const remainingMissing = missingKeysRound.filter((key) => !recoveredInRound.has(key));
+      matrix.normalization = refreshMatrixNormalizationAfterRepair(matrix, subjects, attributes, remainingMissing);
+      repairedCellCount += recoveredInRound.size;
+      repairRoundsUsed = round;
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_completeness_repair_round",
+        phase,
+        attempt: `round_${round}`,
+        diagnostics: {
+          missingBefore: missingKeysRound.length,
+          repaired: recoveredInRound.size,
+          missingAfter: remainingMissing.length,
+        },
+      });
+
+      if (!remainingMissing.length || recoveredInRound.size === 0) break;
+    }
+  }
+
   matrix.chunking = {
     enabled: chunks.length > 1,
     chunkCount: chunks.length,
@@ -2408,6 +2653,8 @@ async function runChunkedAnalystMatrixPass({
     rawCells: Number(matrix?.normalization?.rawCells || 0),
     mappedCells: Number(matrix?.normalization?.mappedCells || 0),
     placeholderCellsAdded: Number(matrix?.normalization?.placeholderCellsAdded || 0),
+    repairRoundsUsed,
+    repairedCellCount,
   };
   return matrix;
 }
