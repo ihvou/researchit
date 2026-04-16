@@ -2505,43 +2505,120 @@ async function runChunkedAnalystMatrixPass({
   const chunkSize = resolveMatrixChunkSize(subjects, attributes, limits);
   const chunks = splitIntoChunks(subjects, chunkSize);
   const chunkPayloads = [];
+  const parseRetryAttemptsRaw = Number(limits?.matrixChunkParseRetryAttempts);
+  const parseRetryAttempts = Number.isFinite(parseRetryAttemptsRaw)
+    ? Math.max(0, Math.min(2, Math.round(parseRetryAttemptsRaw)))
+    : 1;
+  const parseSplitMaxDepthRaw = Number(limits?.matrixChunkParseRetrySplitDepth);
+  const parseSplitMaxDepth = Number.isFinite(parseSplitMaxDepthRaw)
+    ? Math.max(0, Math.min(4, Math.round(parseSplitMaxDepthRaw)))
+    : 3;
 
+  const isJsonParseFailure = (err) => (
+    cleanText(err?.code) === "JSON_PARSE_FAILED"
+    || /JSON parse failed/i.test(cleanText(err?.message))
+  );
+
+  const strictJsonReminder = `
+
+CRITICAL JSON REQUIREMENTS:
+- Return one valid JSON object only.
+- No prose outside JSON.
+- Ensure all properties use ":" with valid values.
+- Do not truncate or leave dangling keys.
+`;
+
+  const runChunkSubjects = async (chunkSubjects, chunkTag = "chunk", depth = 0) => {
+    let lastParseError = null;
+
+    for (let attempt = 0; attempt <= parseRetryAttempts; attempt += 1) {
+      const forceStrict = attempt > 0;
+      let prompt = typeof buildPromptForChunk === "function"
+        ? buildPromptForChunk(chunkSubjects, chunkTag)
+        : buildMatrixEvidencePrompt({
+          rawInput,
+          decisionQuestion,
+          subjects: chunkSubjects,
+          attributes,
+          passLabel: `${passLabel} (${chunkTag})`,
+          liveSearch,
+          researchSetup,
+        });
+      if (forceStrict) prompt = `${prompt}${strictJsonReminder}`;
+
+      const res = await transport.callAnalyst(
+        [{ role: "user", content: prompt }],
+        analystPrompt,
+        tokenLimit,
+        {
+          ...(requestOptions || {}),
+          liveSearch,
+          includeMeta: true,
+        }
+      );
+      if (analysisMeta && typeof analysisMeta === "object") {
+        Object.assign(analysisMeta, mergeMeta(analysisMeta, res?.meta, "analyst"));
+      }
+
+      try {
+        const parsed = extractJson(res?.text || res, {}, {
+          phase,
+          attempt: `${chunkTag}::try_${attempt + 1}`,
+          prompt,
+          debugSession,
+        });
+        return [{ subjectIds: chunkSubjects.map((item) => item.id), payload: parsed }];
+      } catch (err) {
+        if (!isJsonParseFailure(err)) throw err;
+        lastParseError = err;
+        appendAnalysisDebugEvent(debugSession, {
+          type: "matrix_chunk_parse_retry",
+          phase,
+          attempt: `${chunkTag}::try_${attempt + 1}`,
+          note: cleanText(err?.message || "matrix_chunk_parse_retry"),
+          diagnostics: {
+            subjectCount: chunkSubjects.length,
+            depth,
+            strictAttempt: forceStrict,
+          },
+        });
+      }
+    }
+
+    if (chunkSubjects.length > 1 && depth < parseSplitMaxDepth) {
+      const mid = Math.ceil(chunkSubjects.length / 2);
+      const left = chunkSubjects.slice(0, mid);
+      const right = chunkSubjects.slice(mid);
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_chunk_parse_split_retry",
+        phase,
+        attempt: chunkTag,
+        note: `Parse retries exhausted; splitting chunk ${chunkSubjects.length} into ${left.length}+${right.length}.`,
+        diagnostics: {
+          depth,
+          parseRetryAttempts,
+        },
+      });
+      const leftPayloads = await runChunkSubjects(left, `${chunkTag}.a`, depth + 1);
+      const rightPayloads = await runChunkSubjects(right, `${chunkTag}.b`, depth + 1);
+      return [...leftPayloads, ...rightPayloads];
+    }
+
+    throw lastParseError || new Error(`Chunk parse failed for ${chunkTag}.`);
+  };
+
+  let chunkSequence = 0;
   for (let idx = 0; idx < chunks.length; idx += 1) {
     const chunkSubjects = chunks[idx];
-    const prompt = typeof buildPromptForChunk === "function"
-      ? buildPromptForChunk(chunkSubjects, idx)
-      : buildMatrixEvidencePrompt({
-        rawInput,
-        decisionQuestion,
-        subjects: chunkSubjects,
-        attributes,
-        passLabel: `${passLabel} (chunk ${idx + 1}/${chunks.length})`,
-        liveSearch,
-        researchSetup,
+    const chunkTag = `chunk_${idx + 1}/${chunks.length}`;
+    const payloadEntries = await runChunkSubjects(chunkSubjects, chunkTag, 0);
+    payloadEntries.forEach((entry) => {
+      chunkPayloads.push({
+        chunkIndex: chunkSequence,
+        subjectIds: Array.isArray(entry?.subjectIds) ? entry.subjectIds : [],
+        payload: entry?.payload && typeof entry.payload === "object" ? entry.payload : {},
       });
-    const res = await transport.callAnalyst(
-      [{ role: "user", content: prompt }],
-      analystPrompt,
-      tokenLimit,
-      {
-        ...(requestOptions || {}),
-        liveSearch,
-        includeMeta: true,
-      }
-    );
-    if (analysisMeta && typeof analysisMeta === "object") {
-      Object.assign(analysisMeta, mergeMeta(analysisMeta, res?.meta, "analyst"));
-    }
-    const parsed = extractJson(res?.text || res, {}, {
-      phase,
-      attempt: `chunk_${idx + 1}/${chunks.length}`,
-      prompt,
-      debugSession,
-    });
-    chunkPayloads.push({
-      chunkIndex: idx,
-      subjectIds: chunkSubjects.map((item) => item.id),
-      payload: parsed,
+      chunkSequence += 1;
     });
   }
 
