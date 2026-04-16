@@ -61,6 +61,7 @@ const SHARED_LIMITS = {
   matrixAdaptiveTargetedRatio: 0.7,
   matrixAdaptiveTargetedFloor: 12,
   matrixAdaptiveTargetedMax: 36,
+  matrixWebChunkMaxCells: 16,
   matrixCoverageSLA: {
     minSourcesPerCell: 2,
     minSubjectEvidenceCoverage: 0.5,
@@ -86,6 +87,7 @@ const SHARED_LIMITS = {
   },
   tokenLimits: {
     phase1Evidence: 10000,
+    phase1EvidenceWeb: 14000,
     phase1Scoring: 12000,
     critic: 6000,
     phase3Response: 6000,

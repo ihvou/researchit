@@ -2288,13 +2288,17 @@ function splitIntoChunks(items = [], chunkSize = 1) {
   return out.length ? out : [[]];
 }
 
-function resolveMatrixChunkSize(subjects = [], attributes = [], limits = {}) {
+function resolveMatrixChunkSize(subjects = [], attributes = [], limits = {}, { liveSearch = false } = {}) {
   const subjectCount = Math.max(1, Array.isArray(subjects) ? subjects.length : 0);
   const attributeCount = Math.max(1, Array.isArray(attributes) ? attributes.length : 0);
-  const rawMaxCells = Number(limits?.matrixChunkMaxCells);
+  const rawMaxCells = Number(
+    liveSearch
+      ? (limits?.matrixWebChunkMaxCells ?? limits?.matrixChunkMaxCells)
+      : limits?.matrixChunkMaxCells
+  );
   const maxCells = Number.isFinite(rawMaxCells)
     ? Math.max(attributeCount, Math.round(rawMaxCells))
-    : Math.max(attributeCount, 32);
+    : Math.max(attributeCount, liveSearch ? 16 : 32);
   const byCells = Math.max(1, Math.floor(maxCells / attributeCount));
   return Math.min(subjectCount, byCells);
 }
@@ -2502,7 +2506,7 @@ async function runChunkedAnalystMatrixPass({
   researchSetup = {},
   buildPromptForChunk = null,
 }) {
-  const chunkSize = resolveMatrixChunkSize(subjects, attributes, limits);
+  const chunkSize = resolveMatrixChunkSize(subjects, attributes, limits, { liveSearch });
   const chunks = splitIntoChunks(subjects, chunkSize);
   const chunkPayloads = [];
   const parseRetryAttemptsRaw = Number(limits?.matrixChunkParseRetryAttempts);
@@ -3605,6 +3609,7 @@ async function runMatrixDeepAssistEnrichment({
 }) {
   const deepAssist = normalizeDeepAssistOptions(state?.options?.deepAssist || {});
   const stepTimeoutMs = Math.max(40000, Number(deepAssist?.maxWaitMs || 300000) + 15000);
+  const deepAssistEvidenceTokens = Number(tokenLimits?.phase1EvidenceWeb) || Number(tokenLimits?.phase1Evidence) || 10000;
   const providerRuns = await Promise.all(
     deepAssist.providers.map(async (providerId) => {
       const label = deepAssistProviderLabel(providerId);
@@ -3625,7 +3630,7 @@ async function runMatrixDeepAssistEnrichment({
           () => transport.callAnalyst(
             [{ role: "user", content: prompt }],
             analystPrompt,
-            Number(tokenLimits?.phase1Evidence) || 10000,
+            deepAssistEvidenceTokens,
             {
               ...resolveDeepAssistProviderRequestOptions(config, providerId, "analyst", deepAssist),
               liveSearch: true,
@@ -4634,6 +4639,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
 
   const limits = config?.limits?.tokenLimits || {};
   const analystTokens = Number(limits.phase1Evidence) || 10000;
+  const analystWebTokens = Number(limits.phase1EvidenceWeb) || Math.max(12000, analystTokens + 2000);
   const criticTokens = Number(limits.critic) || 6000;
   const responseTokens = Number(limits.phase3Response) || 4200;
   const discoveryTokens = Number(limits.phase3Response) || 3200;
@@ -4751,7 +4757,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       passLabel: "web-assisted pass",
       phase: "matrix_web",
       liveSearch: true,
-      tokenLimit: analystTokens,
+      tokenLimit: analystWebTokens,
       limits: config?.limits || {},
       debugSession,
       analysisMeta: state.analysisMeta,
