@@ -3341,6 +3341,8 @@ function buildMatrixCriticPrompt({
     const includeFull = profile.includeFull !== false;
     const includeArguments = profile.includeArguments !== false;
     const includeSources = profile.includeSources !== false;
+    const includeReason = profile.includeReason !== false;
+    const includeRisks = profile.includeRisks !== false;
     const sourceLimit = Number.isFinite(Number(profile.sourceLimit))
       ? Math.max(0, Math.min(4, Number(profile.sourceLimit)))
       : 2;
@@ -3350,11 +3352,11 @@ function buildMatrixCriticPrompt({
       attributeId: cleanText(cell?.attributeId),
       value: clip(cell?.value, profile.maxValueChars || 220),
       confidence: normalizeConfidence(cell?.confidence),
-      confidenceReason: clip(cell?.confidenceReason, profile.maxReasonChars || 160),
-      risks: clip(cell?.risks, profile.maxRiskChars || 180),
       providerAgreement: cleanText(cell?.providerAgreement),
       sourceCount: normalizeSourceList(cell?.sources).length,
     };
+    if (includeReason) out.confidenceReason = clip(cell?.confidenceReason, profile.maxReasonChars || 160);
+    if (includeRisks) out.risks = clip(cell?.risks, profile.maxRiskChars || 180);
     if (includeFull) out.full = clip(cell?.full, profile.maxFullChars || 300);
     if (includeArguments) {
       out.arguments = {
@@ -3405,8 +3407,8 @@ function buildMatrixCriticPrompt({
   const estimateTokens = (text = "") => Math.ceil(cleanText(text).length / 4);
   const targetTokenBudgetRaw = Number(limits?.matrixCriticPromptTokenBudget);
   const targetTokenBudget = Number.isFinite(targetTokenBudgetRaw)
-    ? Math.max(20000, Math.round(targetTokenBudgetRaw))
-    : 120000;
+    ? Math.max(8000, Math.round(targetTokenBudgetRaw))
+    : 12000;
   const compactionProfiles = [
     {
       label: "rich",
@@ -3466,6 +3468,28 @@ function buildMatrixCriticPrompt({
       maxRiskChars: 120,
       maxCells: 140,
     },
+    {
+      label: "ultra",
+      includeFull: false,
+      includeArguments: false,
+      includeSources: false,
+      includeSourceQuote: false,
+      includeReason: false,
+      includeRisks: false,
+      maxValueChars: 120,
+      maxCells: 80,
+    },
+    {
+      label: "skeleton",
+      includeFull: false,
+      includeArguments: false,
+      includeSources: false,
+      includeSourceQuote: false,
+      includeReason: false,
+      includeRisks: false,
+      maxValueChars: 90,
+      maxCells: 48,
+    },
   ];
 
   const setupContext = buildResearchSetupContextBlock(researchSetup);
@@ -3515,6 +3539,32 @@ Audit this matrix and return JSON only:
     selectedPrompt = candidatePrompt;
     selectedMatrix = candidateMatrix;
     if (candidateTokens <= targetTokenBudget) break;
+  }
+  if (selected.estimatedTokens > targetTokenBudget) {
+    const emergencyBase = {
+      label: "emergency",
+      includeFull: false,
+      includeArguments: false,
+      includeSources: false,
+      includeSourceQuote: false,
+      includeReason: false,
+      includeRisks: false,
+      maxValueChars: 72,
+    };
+    const emergencyCaps = [40, 32, 24, 16, 12, 8];
+    for (const cap of emergencyCaps) {
+      const candidateMatrix = buildCompactMatrixPayload({ ...emergencyBase, maxCells: cap });
+      const candidatePrompt = renderPrompt(candidateMatrix);
+      const candidateTokens = estimateTokens(candidatePrompt);
+      selected = {
+        profile: `${emergencyBase.label}-${cap}`,
+        estimatedTokens: candidateTokens,
+        chars: candidatePrompt.length,
+      };
+      selectedPrompt = candidatePrompt;
+      selectedMatrix = candidateMatrix;
+      if (candidateTokens <= targetTokenBudget) break;
+    }
   }
   return {
     promptText: selectedPrompt || renderPrompt(selectedMatrix),
@@ -4044,31 +4094,50 @@ async function runMatrixDeepAssistEnrichment({
   return merged;
 }
 
-function buildMatrixConsistencyPrompt({ decisionQuestion, subjects, attributes, matrix }) {
-  const compactMatrix = {
-    coverage: matrix?.coverage || null,
-    crossMatrixSummary: clip(matrix?.crossMatrixSummary, 360),
-    cells: (Array.isArray(matrix?.cells) ? matrix.cells : []).map((cell) => ({
+function buildMatrixConsistencyPrompt({ decisionQuestion, subjects, attributes, matrix, limits = {} }) {
+  const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+  const estimateTokens = (text = "") => Math.ceil(cleanText(text).length / 4);
+  const targetTokenBudgetRaw = Number(limits?.matrixConsistencyPromptTokenBudget);
+  const targetTokenBudget = Number.isFinite(targetTokenBudgetRaw)
+    ? Math.max(5000, Math.round(targetTokenBudgetRaw))
+    : 9000;
+
+  const compactCell = (cell = {}, profile = {}) => {
+    const includeReason = profile.includeReason !== false;
+    return {
       subjectId: cleanText(cell?.subjectId),
       attributeId: cleanText(cell?.attributeId),
-      value: clip(cell?.value, 180),
+      value: clip(cell?.value, profile.maxValueChars || 120),
       confidence: normalizeConfidence(cell?.confidence),
-      confidenceReason: clip(cell?.confidenceReason, 140),
+      ...(includeReason ? { confidenceReason: clip(cell?.confidenceReason, profile.maxReasonChars || 90) } : {}),
       providerAgreement: cleanText(cell?.providerAgreement),
       sourceCount: normalizeSourceList(cell?.sources).length,
-    })),
+    };
   };
 
-  return `You are auditing cross-subject consistency for a completed research matrix.
+  const profiles = [
+    { label: "standard", maxCells: 140, maxValueChars: 160, includeReason: true, maxReasonChars: 120 },
+    { label: "lean", maxCells: 100, maxValueChars: 120, includeReason: false },
+    { label: "minimal", maxCells: 72, maxValueChars: 90, includeReason: false },
+    { label: "skeleton", maxCells: 48, maxValueChars: 72, includeReason: false },
+  ];
+
+  const buildPayload = (profile = {}) => {
+    const maxCells = Math.max(1, Math.min(cells.length || 1, Number(profile.maxCells) || cells.length || 1));
+    return {
+      profile: cleanText(profile.label || "standard"),
+      coverage: matrix?.coverage || null,
+      crossMatrixSummary: clip(matrix?.crossMatrixSummary, 260),
+      subjects: subjects.map((subject) => ({ id: subject.id, label: subject.label })),
+      attributes: attributes.map((attribute) => ({ id: attribute.id, label: attribute.label })),
+      cells: cells.slice(0, maxCells).map((cell) => compactCell(cell, profile)),
+    };
+  };
+
+  const renderPrompt = (compactMatrix) => `You are auditing cross-subject consistency for a completed research matrix.
 
 Decision question:
 ${decisionQuestion}
-
-Subjects:
-${subjects.map((subject) => `- ${subject.label}`).join("\n")}
-
-Attributes:
-${attributes.map((attribute) => `- ${attribute.label}`).join("\n")}
 
 Matrix:
 ${JSON.stringify(compactMatrix, null, 2)}
@@ -4090,6 +4159,52 @@ Return JSON only:
   ],
   "summary":"<short contradiction summary>"
 }`;
+
+  let selected = { profile: cleanText(profiles[0].label), estimatedTokens: 0, chars: 0 };
+  let selectedPrompt = "";
+  let selectedPayload = buildPayload(profiles[0]);
+  for (const profile of profiles) {
+    const candidatePayload = buildPayload(profile);
+    const candidatePrompt = renderPrompt(candidatePayload);
+    const candidateTokens = estimateTokens(candidatePrompt);
+    selected = {
+      profile: cleanText(profile.label),
+      estimatedTokens: candidateTokens,
+      chars: candidatePrompt.length,
+    };
+    selectedPrompt = candidatePrompt;
+    selectedPayload = candidatePayload;
+    if (candidateTokens <= targetTokenBudget) break;
+  }
+  if (selected.estimatedTokens > targetTokenBudget) {
+    const emergencyCaps = [40, 32, 24, 16, 12, 8];
+    for (const cap of emergencyCaps) {
+      const candidatePayload = buildPayload({
+        label: `emergency-${cap}`,
+        maxCells: cap,
+        maxValueChars: 60,
+        includeReason: false,
+      });
+      const candidatePrompt = renderPrompt(candidatePayload);
+      const candidateTokens = estimateTokens(candidatePrompt);
+      selected = {
+        profile: `emergency-${cap}`,
+        estimatedTokens: candidateTokens,
+        chars: candidatePrompt.length,
+      };
+      selectedPrompt = candidatePrompt;
+      selectedPayload = candidatePayload;
+      if (candidateTokens <= targetTokenBudget) break;
+    }
+  }
+  return {
+    promptText: selectedPrompt || renderPrompt(selectedPayload),
+    compactionMeta: {
+      ...selected,
+      targetTokenBudget,
+      cells: Array.isArray(selectedPayload?.cells) ? selectedPayload.cells.length : 0,
+    },
+  };
 }
 
 function normalizeConsistencyFlags(raw = {}, subjects = [], attributes = []) {
@@ -5979,12 +6094,24 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
     });
 
     try {
-      const consistencyPrompt = buildMatrixConsistencyPrompt({
+      const consistencyPromptPayload = buildMatrixConsistencyPrompt({
         decisionQuestion,
         subjects,
         attributes,
         matrix: resolvedMatrix,
+        limits: config?.limits || {},
       });
+      const consistencyPrompt = cleanText(consistencyPromptPayload?.promptText || "");
+      appendAnalysisDebugEvent(debugSession, {
+        type: "matrix_prompt_size",
+        phase: "matrix_consistency",
+        diagnostics: {
+          chars: consistencyPrompt.length,
+          estimatedTokens: Math.ceil(consistencyPrompt.length / 4),
+          compaction: consistencyPromptPayload?.compactionMeta || null,
+        },
+      });
+      state.analysisMeta.consistencyPromptCompaction = consistencyPromptPayload?.compactionMeta || null;
       const consistencyRes = await transport.callCritic(
         [{ role: "user", content: consistencyPrompt }],
         criticPrompt,
@@ -6431,3 +6558,8 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
 
   return clone(state);
 }
+
+export const __test__ = {
+  buildMatrixCriticPrompt,
+  buildMatrixConsistencyPrompt,
+};

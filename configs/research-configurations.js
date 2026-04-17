@@ -62,6 +62,8 @@ const SHARED_LIMITS = {
   matrixAdaptiveTargetedFloor: 12,
   matrixAdaptiveTargetedMax: 36,
   matrixWebChunkMaxCells: 16,
+  matrixCriticPromptTokenBudget: 12000,
+  matrixConsistencyPromptTokenBudget: 9000,
   matrixCoverageSLA: {
     minSourcesPerCell: 2,
     minSubjectEvidenceCoverage: 0.5,

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "cd app && npm run build"
+    "build": "cd app && npm run build",
+    "test:engine": "cd engine && npm run test"
   }
 }

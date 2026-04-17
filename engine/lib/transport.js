@@ -118,10 +118,21 @@ function isRetryableError(err, policy) {
   );
 }
 
-function retryBackoffMs(attempt, policy) {
+function retryBackoffMs(attempt, policy, err = null) {
   const base = clampNumber(policy.initialBackoffMs, 250);
   const factor = clampNumber(policy.backoffFactor, 2, 1);
   const max = clampNumber(policy.maxBackoffMs, 2500);
+  const msg = String(err?.message || "").toLowerCase();
+  const status = extractStatus(err);
+  const isRateLimit = status === 429 || msg.includes("rate limit");
+  if (isRateLimit) {
+    const rateBase = clampNumber(policy.rateLimitInitialBackoffMs, Math.max(base, 10000));
+    const rateFactor = clampNumber(policy.rateLimitBackoffFactor, 1.7, 1);
+    const rateMax = clampNumber(policy.rateLimitMaxBackoffMs, Math.max(max, 60000));
+    const rateExp = rateBase * (rateFactor ** Math.max(0, attempt - 1));
+    const rateJitter = 0.9 + (Math.random() * 0.2);
+    return Math.min(rateMax, rateExp) * rateJitter;
+  }
   const exp = base * (factor ** Math.max(0, attempt - 1));
   const jitter = 0.85 + (Math.random() * 0.3);
   return Math.min(max, exp) * jitter;
@@ -197,7 +208,7 @@ async function callWithRetry({
         }
         throw err;
       }
-      await sleep(retryBackoffMs(attempt, policy));
+      await sleep(retryBackoffMs(attempt, policy, err));
     }
   }
 
