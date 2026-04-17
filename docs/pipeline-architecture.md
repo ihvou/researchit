@@ -54,6 +54,29 @@ flowchart TD
     TARGETED --> SV1 --> CRITIC --> RESPONSE --> CONSISTENCY --> SV2 --> REDTEAM --> SYNTH --> DISCOVER --> OUTPUT
 ```
 
+### Scorecard Step-to-Model Mapping (Current Runtime Defaults)
+
+These routes reflect current implementation defaults in `configs/research-configurations.js` plus per-step routing in `engine/pipeline/analysis.js`. Env overrides can still change provider/model at runtime.
+
+| Step | Actor/Route | Default provider:model | Live web search |
+| --- | --- | --- | --- |
+| ① Query Strategist | Analyst via retrieval capability | `gemini:gemini-2.5-flash` | No |
+| ② Native Phase 1 (baseline evidence) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ② Native Phase 1 (web evidence) | Analyst via retrieval capability | `gemini:gemini-2.5-flash` | Yes |
+| ② Native Phase 1 (scoring for baseline/web/reconcile) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ②᛫ Deep Research ×3 (each provider lane) | Deep Assist provider route | `openai:gpt-5.4`, `anthropic:claude-sonnet-4-20250514`, `gemini:gemini-2.5-pro` | Yes |
+| ②᛫ DA-02 Recovery (query plan/search harvest) | Analyst via retrieval capability | `gemini:gemini-2.5-flash` | Query plan: No, harvest: Yes |
+| ②᛫ DA-02 Recovery (rescore) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ③ Targeted Recovery (query plan/search harvest) | Analyst via retrieval capability | `gemini:gemini-2.5-flash` | Query plan: No, harvest: Yes |
+| ③ Targeted Recovery (rescore) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ⑤ Critic Audit | Critic role | `anthropic:claude-sonnet-4-20250514` | Yes |
+| ⑥ Analyst Response (Phase 3) | Analyst role | `openai:gpt-5.4-mini` | Yes |
+| ⑦ Consistency check | Analyst role | `openai:gpt-5.4-mini` | Yes |
+| ⑦ Coherence audit | Critic role | `anthropic:claude-sonnet-4-20250514` | Yes |
+| ⑨ Red Team | Critic role | `anthropic:claude-sonnet-4-20250514` | No |
+| ⑩ Synthesizer | Synthesizer route (fallback critic route) | default fallback `anthropic:claude-sonnet-4-20250514` | No |
+| ⑪ Discovery | Analyst role | `openai:gpt-5.4-mini` | Yes |
+
 ---
 
 ## Matrix Pipeline
@@ -109,3 +132,29 @@ flowchart TD
     DA_CHECK -->|"Deep Research ×3"| DA_PARALLEL --> DA_MERGE --> DA_RECOVER --> SV
     SV --> EARLY --> CRITIC --> RESPONSE --> CONSISTENCY --> DERIVED --> REDTEAM --> SYNTH --> SLA --> DISCOVER --> OUTPUT
 ```
+
+### Matrix Step-to-Model Mapping (Current Runtime Defaults)
+
+These routes reflect current implementation defaults in `configs/research-configurations.js` plus per-step routing in `engine/pipeline/matrix.js`. Env overrides can still change provider/model at runtime.
+
+| Step | Actor/Route | Default provider:model | Live web search |
+| --- | --- | --- | --- |
+| ① Subject Discovery (when needed) | Analyst role | `openai:gpt-5.4-mini` | Yes |
+| ② Baseline matrix pass | Analyst role | `openai:gpt-5.4-mini` | No |
+| ③ Web matrix pass | Analyst role | `openai:gpt-5.4-mini` | Yes |
+| ④ Reconcile matrix pass | Analyst role | `openai:gpt-5.4-mini` | No |
+| ⑤ Targeted recovery (query plan) | Retrieval helper path | currently resolves to analyst route (`openai:gpt-5.4-mini`) | No |
+| ⑤ Targeted recovery (search harvest) | Retrieval helper path | currently resolves to analyst route (`openai:gpt-5.4-mini`) | Yes |
+| ⑤ Targeted recovery (rescore) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ⑤᛫ Deep Research ×3 (each provider lane) | Deep Assist provider route | `openai:gpt-5.4`, `anthropic:claude-sonnet-4-20250514`, `gemini:gemini-2.5-pro` | Yes |
+| ⑤᛫ DA-02 Recovery (query/search) | Retrieval helper path | currently resolves to analyst route (`openai:gpt-5.4-mini`) | Query plan: No, harvest: Yes |
+| ⑤᛫ DA-02 Recovery (rescore) | Analyst role | `openai:gpt-5.4-mini` | No |
+| ⑧ Critic Audit | Critic role | `anthropic:claude-sonnet-4-20250514` | Yes |
+| ⑨ Analyst Response | Analyst role | `openai:gpt-5.4-mini` | Yes |
+| ⑩ Consistency Audit | Critic role | `anthropic:claude-sonnet-4-20250514` | No |
+| ⑪ Derived Attributes | Analyst role | `openai:gpt-5.4-mini` | No |
+| ⑫ Red Team | Critic role | `anthropic:claude-sonnet-4-20250514` | No |
+| ⑬ Synthesizer | Synthesizer route (fallback critic route) | default fallback `anthropic:claude-sonnet-4-20250514` | No |
+| ⑮ Discovery | Analyst role | `openai:gpt-5.4-mini` | Yes |
+
+Note: In matrix flows, retrieval helper calls currently inherit analyst route defaults due current helper merge behavior, which is why OpenAI web-search tool charges can appear in native matrix runs.
