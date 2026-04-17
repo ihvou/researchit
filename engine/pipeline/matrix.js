@@ -641,10 +641,10 @@ function deriveMatrixTitleFromInput(rawInput = "", subjects = []) {
   const normalizedInput = cleanText(rawInput)
     .replace(/^(product concept|research brief|context)\s*:\s*/i, "")
     .trim();
-  const decisionLike = extractDecisionQuestion(normalizedInput);
-  const sourceText = cleanText(decisionLike || normalizedInput);
+  const firstSentence = cleanText(normalizedInput.split(/(?<=[.?!])\s+/).find(Boolean) || normalizedInput);
+  const sourceText = cleanText(firstSentence || normalizedInput);
   const words = sourceText.split(/\s+/).filter(Boolean);
-  let title = words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "");
+  let title = words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "").trim();
 
   if (!title) {
     const labels = (Array.isArray(subjects) ? subjects : [])
@@ -658,7 +658,11 @@ function deriveMatrixTitleFromInput(rawInput = "", subjects = []) {
     }
   }
 
-  return clip(title || "Matrix research", 100);
+  if (title.length > 100) {
+    const trimmed = title.slice(0, 100).replace(/\s+\S*$/g, "").trim();
+    title = trimmed || title.slice(0, 100).trim();
+  }
+  return title || "Matrix research";
 }
 
 function buildMatrixAttributes({

@@ -161,20 +161,9 @@ function getMatrixCoverage(uc) {
   };
 }
 
-function normalizeAssumptions(values) {
-  if (!Array.isArray(values)) return [];
-  return values
-    .map((item) => String(item || "").trim())
-    .filter(Boolean)
-    .slice(0, 6);
-}
-
-function resolveResearchTitle(uc = {}, isMatrixMode = false) {
+function resolveResearchTitle(uc = {}) {
   const explicit = String(uc?.attributes?.title || "").trim();
   if (explicit) return explicit;
-  if (isMatrixMode && String(uc?.researchSetup?.decisionContext || "").trim()) {
-    return deriveDraftTitleFromInput(uc.researchSetup.decisionContext);
-  }
   return deriveDraftTitleFromInput(uc?.rawInput || "");
 }
 
@@ -186,30 +175,6 @@ function deriveDraftTitleFromInput(input = "") {
   const words = text.split(/\s+/).filter(Boolean);
   const title = words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "").trim();
   return title || "Untitled research";
-}
-
-function resolveMatrixFramingFallbackValues(uc = {}, providedInput = "", frameValues = {}) {
-  const existing = frameValues && typeof frameValues === "object" ? frameValues : {};
-  const decisionQuestion = String(existing?.decisionQuestion || uc?.matrix?.decisionQuestion || uc?.researchSetup?.decisionContext || uc?.analysisMeta?.decisionContext || "").trim();
-  const roleContext = String(uc?.researchSetup?.userRoleContext || uc?.analysisMeta?.userRoleContext || "").trim();
-  const scopeContext = String(existing?.scopeContext || roleContext).trim();
-  const explicitResearchObject = String(existing?.researchObject || "").trim();
-  const fallbackResearchObject = String(
-    uc?.attributes?.title
-    || decisionQuestion
-    || providedInput
-    || uc?.rawInput
-    || ""
-  ).trim();
-  const researchObject = explicitResearchObject && explicitResearchObject !== String(providedInput || "").trim()
-    ? explicitResearchObject
-    : fallbackResearchObject;
-  return {
-    ...existing,
-    researchObject: researchObject || "unspecified",
-    decisionQuestion: decisionQuestion || "unspecified",
-    scopeContext: scopeContext || "unspecified",
-  };
 }
 
 function dimensionAcronym(label) {
@@ -1075,7 +1040,7 @@ export default function App({
     if (!id) return;
     if (String(uc?.status || "").toLowerCase() === "analyzing") return;
 
-    const title = resolveResearchTitle(uc, String(uc?.outputMode || "").toLowerCase() === "matrix");
+    const title = resolveResearchTitle(uc);
     const confirmed = window.confirm(`Delete this research permanently?\n\n${title}`);
     if (!confirmed) return;
 
@@ -1887,12 +1852,12 @@ export default function App({
 
             <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-                Role / Context (optional)
+                Your Role (optional)
               </div>
               <input
                 value={setupDraft.userRoleContext}
                 onChange={(e) => setSetupDraft((prev) => ({ ...prev, userRoleContext: e.target.value }))}
-                placeholder="e.g. VP Product deciding whether to build or buy under a six-month timeline"
+                placeholder="e.g. VP Care Management at a 500-bed health system"
                 style={{
                   width: "100%",
                   background: "var(--ck-surface-soft)",
@@ -2085,25 +2050,41 @@ export default function App({
               const score = ucIsMatrix ? null : calcWeightedScore(uc, ucDims);
               const matrixCoverage = ucIsMatrix ? getMatrixCoverage(uc) : null;
               const isExpanded = expandAllResearches || expandedId === uc.id;
-              const title = resolveResearchTitle(uc, ucIsMatrix);
-              const framingFieldDefs = Array.isArray(ucConfig?.framingFields) ? ucConfig.framingFields : [];
+              const title = resolveResearchTitle(uc);
               const inputFrame = uc.attributes?.inputFrame || {};
               const providedInput = String(inputFrame?.providedInput || uc.rawInput || "");
-              const frameValues = inputFrame?.framingFields && typeof inputFrame.framingFields === "object"
-                ? inputFrame.framingFields
-                : {};
-              const resolvedFrameValues = ucIsMatrix
-                ? resolveMatrixFramingFallbackValues(uc, providedInput, frameValues)
-                : frameValues;
-              const assumptions = normalizeAssumptions(inputFrame?.assumptionsUsed);
-              const confidenceLimits = String(inputFrame?.confidenceLimits || "");
-              const analysisSummary = String(uc.attributes?.expandedDescription || "");
+              const setupDecisionContext = String(uc?.researchSetup?.decisionContext || "").trim();
+              const setupRoleContext = String(uc?.researchSetup?.userRoleContext || "").trim();
+              const setupSubjects = ucIsMatrix
+                ? (Array.isArray(uc?.matrix?.subjects) && uc.matrix.subjects.length
+                  ? uc.matrix.subjects.map((subject) => String(subject?.label || "").trim()).filter(Boolean)
+                  : parseSubjectsInput(String(uc?.researchSetup?.subjectsText || "")))
+                : [];
+              const setupRows = [];
+              if (ucIsMatrix && setupSubjects.length) {
+                setupRows.push({
+                  id: "subjects",
+                  label: subjectsLabel,
+                  value: setupSubjects.join(", "),
+                });
+              }
+              if (setupDecisionContext) {
+                setupRows.push({
+                  id: "decision-context",
+                  label: "Decision Context",
+                  value: setupDecisionContext,
+                });
+              }
+              if (setupRoleContext) {
+                setupRows.push({
+                  id: "role",
+                  label: "Your Role",
+                  value: setupRoleContext,
+                });
+              }
               const frameCombinedLength = [
                 providedInput,
-                analysisSummary,
-                ...framingFieldDefs.map((field) => String(resolvedFrameValues?.[field.id] || "")),
-                assumptions.join(" "),
-                confidenceLimits,
+                ...setupRows.map((entry) => String(entry?.value || "")),
               ].join(" ").length;
               const canCollapseFrame = frameCombinedLength > 620;
               const isFrameExpanded = !!expandedInputFrames[uc.id];
@@ -2392,49 +2373,20 @@ export default function App({
                         <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
                           {providedInput || "-"}
                         </div>
-                        {analysisSummary ? (
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                              Analysis Framing
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{analysisSummary}</div>
-                          </div>
-                        ) : null}
-                        {framingFieldDefs.length ? (
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
-                            {framingFieldDefs.map((field) => {
-                              const value = String(resolvedFrameValues?.[field.id] || "unspecified");
-                              return (
-                                <div key={`${uc.id}-frame-${field.id}`}>
-                                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                                    {field.label || field.id}
-                                  </div>
-                                  <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
-                                    {value || "unspecified"}
-                                  </div>
+                        {setupRows.length ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
+                            {setupRows.map((entry) => (
+                              <div key={`${uc.id}-setup-${entry.id}`}>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                                  {entry.label}
                                 </div>
-                              );
-                            })}
+                                <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                                  {entry.value}
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         ) : null}
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                              Assumptions Used
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
-                              {assumptions.length ? assumptions.join(" | ") : "None."}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                              Confidence Limits
-                            </div>
-                            <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
-                              {confidenceLimits || "No explicit limits were captured."}
-                            </div>
-                          </div>
-                        </div>
                         {canCollapseFrame && !isFrameExpanded ? (
                           <div style={{
                             position: "absolute",
