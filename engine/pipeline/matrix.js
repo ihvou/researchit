@@ -691,7 +691,7 @@ function buildMatrixAttributes({
     inputFrame: {
       providedInput: normalizedInput,
       framingFields: {
-        researchObject: normalizedInput || "unspecified",
+        researchObject: derivedTitle || normalizedInput || "unspecified",
         decisionQuestion: resolvedDecision || "unspecified",
         scopeContext: scopeParts.join(" | ") || "unspecified",
       },

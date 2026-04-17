@@ -22,7 +22,7 @@ import ChevronIcon from "./components/ChevronIcon";
 import { downloadDebugLogsBundle } from "./lib/debug";
 import SiteFooter from "./components/SiteFooter";
 import { appTransport } from "./lib/api";
-import { listAccountResearches, upsertAccountResearches } from "./lib/accountApi";
+import { listAccountResearches, upsertAccountResearches, deleteAccountResearch } from "./lib/accountApi";
 import { loadLocalDraftState, saveLocalDraftState } from "./lib/localDrafts";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
@@ -172,8 +172,20 @@ function normalizeAssumptions(values) {
 function resolveResearchTitle(uc = {}, isMatrixMode = false) {
   const explicit = String(uc?.attributes?.title || "").trim();
   if (explicit) return explicit;
-  if (isMatrixMode && String(uc?.matrix?.decisionQuestion || "").trim()) return String(uc.matrix.decisionQuestion).trim();
-  return String(uc?.rawInput || "").trim() || "Untitled research";
+  if (isMatrixMode && String(uc?.researchSetup?.decisionContext || "").trim()) {
+    return deriveDraftTitleFromInput(uc.researchSetup.decisionContext);
+  }
+  return deriveDraftTitleFromInput(uc?.rawInput || "");
+}
+
+function deriveDraftTitleFromInput(input = "") {
+  const text = String(input || "")
+    .replace(/^(product concept|research brief|context)\s*:\s*/i, "")
+    .trim();
+  if (!text) return "Untitled research";
+  const words = text.split(/\s+/).filter(Boolean);
+  const title = words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "").trim();
+  return title || "Untitled research";
 }
 
 function resolveMatrixFramingFallbackValues(uc = {}, providedInput = "", frameValues = {}) {
@@ -181,7 +193,17 @@ function resolveMatrixFramingFallbackValues(uc = {}, providedInput = "", frameVa
   const decisionQuestion = String(existing?.decisionQuestion || uc?.matrix?.decisionQuestion || uc?.researchSetup?.decisionContext || uc?.analysisMeta?.decisionContext || "").trim();
   const roleContext = String(uc?.researchSetup?.userRoleContext || uc?.analysisMeta?.userRoleContext || "").trim();
   const scopeContext = String(existing?.scopeContext || roleContext).trim();
-  const researchObject = String(existing?.researchObject || providedInput || uc?.rawInput || "").trim();
+  const explicitResearchObject = String(existing?.researchObject || "").trim();
+  const fallbackResearchObject = String(
+    uc?.attributes?.title
+    || decisionQuestion
+    || providedInput
+    || uc?.rawInput
+    || ""
+  ).trim();
+  const researchObject = explicitResearchObject && explicitResearchObject !== String(providedInput || "").trim()
+    ? explicitResearchObject
+    : fallbackResearchObject;
   return {
     ...existing,
     researchObject: researchObject || "unspecified",
@@ -635,7 +657,7 @@ export default function App({
       : (normalizedEvidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline");
     const blankUC = {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
-      attributes: null, dimScores: null, critique: null, finalScores: null,
+      attributes: { title: deriveDraftTitleFromInput(desc) }, dimScores: null, critique: null, finalScores: null,
       debate: [], followUps: {}, errorMsg: null, discover: null, origin,
       researchConfigId: selectedConfig.id,
       researchConfigName: selectedConfig.name,
@@ -1048,6 +1070,50 @@ export default function App({
     downloadDebugLogsBundle();
   }
 
+  async function deleteResearchPermanently(uc = {}) {
+    const id = String(uc?.id || "").trim();
+    if (!id) return;
+    if (String(uc?.status || "").toLowerCase() === "analyzing") return;
+
+    const title = resolveResearchTitle(uc, String(uc?.outputMode || "").toLowerCase() === "matrix");
+    const confirmed = window.confirm(`Delete this research permanently?\n\n${title}`);
+    if (!confirmed) return;
+
+    setUseCases((prev) => prev.filter((item) => String(item?.id || "") !== id));
+    setExpandedInputFrames((prev) => {
+      if (!prev || typeof prev !== "object" || !(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setFuInputs((prev) => {
+      if (!prev || typeof prev !== "object" || !(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setFuLoading((prev) => {
+      if (!prev || typeof prev !== "object" || !(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setExpandedId((prev) => (prev === id ? null : prev));
+
+    const syncState = accountSyncStateRef.current;
+    syncState.lastSyncedUpdatedAt.delete(id);
+    syncState.lastSyncAtById.delete(id);
+
+    const userId = String(authUser?.id || "").trim();
+    if (!userId) return;
+    try {
+      await deleteAccountResearch(id);
+      setAccountSyncMessage("Research deleted from account.");
+    } catch (err) {
+      setAccountSyncMessage(`Local delete complete, account delete failed: ${err?.message || "unknown error"}`);
+    }
+  }
+
   async function onImportJsonChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1078,10 +1144,16 @@ export default function App({
     }
   }
 
-  const visibleUseCases = useCases.filter((u) => {
-    const configId = u?.researchConfigId || DEFAULT_RESEARCH_CONFIG.id;
-    return configId === activeConfig.id;
-  });
+  const visibleUseCases = useCases
+    .filter((u) => {
+      const configId = u?.researchConfigId || DEFAULT_RESEARCH_CONFIG.id;
+      return configId === activeConfig.id;
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(String(a?.updatedAt || a?.createdAt || "")) || 0;
+      const bTime = Date.parse(String(b?.updatedAt || b?.createdAt || "")) || 0;
+      return bTime - aTime;
+    });
   const configItems = isMatrixMode ? matrixAttributes : dims;
   const activeDims = isMatrixMode ? [] : dims.filter(d => d.enabled);
   const totalWeight = isMatrixMode ? 0 : dims.reduce((s, d) => s + d.weight, 0);
@@ -2063,6 +2135,9 @@ export default function App({
                     action: () => exportSingleUseCaseJson(uc, ucDims),
                   },
                 ];
+              const inlineResearchExportItems = researchExportItems.filter((item) => item.key === "markdown" || item.key === "json");
+              const menuResearchExportItems = researchExportItems.filter((item) => item.key !== "markdown" && item.key !== "json");
+              const canDeleteResearch = uc.status !== "analyzing";
 
               return (
                 <article
@@ -2116,7 +2191,7 @@ export default function App({
                             : <span style={{ color: "var(--ck-muted)", fontSize: 11 }}>-</span>}
                     </div>
                     <div className="desktop-only research-head-export-buttons">
-                      {researchExportItems.map((item) => {
+                      {inlineResearchExportItems.map((item) => {
                         const key = `research-${uc.id}-${item.key}`;
                         const isLoading = toolbarExportLoading === key;
                         return (
@@ -2144,6 +2219,85 @@ export default function App({
                           </button>
                         );
                       })}
+                      {menuResearchExportItems.length ? (
+                        <details style={{ position: "relative" }}>
+                          <summary
+                            style={{
+                              background: "var(--ck-surface)",
+                              border: "1px solid var(--ck-line)",
+                              color: "var(--ck-text)",
+                              borderRadius: 2,
+                              fontSize: 11,
+                              padding: "4px 8px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontWeight: 700,
+                            }}>
+                            <span>More Exports</span>
+                            <ChevronIcon direction="down" size={11} />
+                          </summary>
+                          <div style={{
+                            position: "absolute",
+                            right: 0,
+                            top: "calc(100% + 6px)",
+                            background: "var(--ck-surface)",
+                            border: "1px solid var(--ck-line)",
+                            borderRadius: 2,
+                            minWidth: 170,
+                            padding: 6,
+                            display: "grid",
+                            gap: 4,
+                            zIndex: 40,
+                          }}>
+                            {menuResearchExportItems.map((item) => {
+                              const key = `research-${uc.id}-${item.key}`;
+                              return (
+                                <button
+                                  key={`${key}-desktop-menu`}
+                                  type="button"
+                                  onClick={(e) => {
+                                    void runToolbarExport(key, item.action);
+                                    e.currentTarget.closest("details")?.removeAttribute("open");
+                                  }}
+                                  disabled={!!toolbarExportLoading || importLoading || !canExportResearch}
+                                  style={{
+                                    background: "var(--ck-surface-soft)",
+                                    border: "1px solid var(--ck-line)",
+                                    color: "var(--ck-text)",
+                                    textAlign: "left",
+                                    borderRadius: 2,
+                                    fontSize: 12,
+                                    padding: "6px 8px",
+                                    opacity: toolbarExportLoading && toolbarExportLoading !== key ? 0.55 : 1,
+                                  }}>
+                                  {toolbarExportLoading === key ? `${item.label}...` : item.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </details>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void deleteResearchPermanently(uc);
+                        }}
+                        disabled={!canDeleteResearch}
+                        style={{
+                          background: "var(--ck-surface)",
+                          border: "1px solid var(--ck-line)",
+                          color: "var(--ck-text)",
+                          borderRadius: 2,
+                          fontSize: 11,
+                          padding: "4px 8px",
+                          cursor: canDeleteResearch ? "pointer" : "not-allowed",
+                          opacity: canDeleteResearch ? 1 : 0.45,
+                          whiteSpace: "nowrap",
+                        }}>
+                        Delete
+                      </button>
                     </div>
                     <details className="mobile-only" style={{ position: "relative" }}>
                       <summary
@@ -2199,6 +2353,25 @@ export default function App({
                             </button>
                           );
                         })}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            void deleteResearchPermanently(uc);
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                          disabled={!canDeleteResearch}
+                          style={{
+                            background: "var(--ck-surface-soft)",
+                            border: "1px solid var(--ck-line)",
+                            color: "var(--ck-text)",
+                            textAlign: "left",
+                            borderRadius: 2,
+                            fontSize: 12,
+                            padding: "6px 8px",
+                            opacity: canDeleteResearch ? 1 : 0.45,
+                          }}>
+                          Delete
+                        </button>
                       </div>
                     </details>
                   </div>
