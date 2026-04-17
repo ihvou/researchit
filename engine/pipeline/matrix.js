@@ -3311,9 +3311,161 @@ function selectDeepAssistRecoveryCells(cells = [], limits = {}, derivedAttribute
   };
 }
 
-function buildMatrixCriticPrompt({ rawInput, decisionQuestion, subjects, attributes, matrix, researchSetup = {} }) {
+function buildMatrixCriticPrompt({
+  rawInput,
+  decisionQuestion,
+  subjects,
+  attributes,
+  matrix,
+  researchSetup = {},
+  limits = {},
+}) {
+  const compactSource = (source = {}, { includeQuote = false } = {}) => {
+    const normalized = normalizeSourceList([source])[0] || {};
+    const out = {
+      name: clip(normalized.name, 120),
+      url: clip(normalized.url, 260),
+      sourceType: cleanText(normalized.sourceType),
+      displayStatus: cleanText(normalized.displayStatus || normalized.verificationStatus || ""),
+      verificationNote: clip(normalized.verificationNote, 140),
+    };
+    if (includeQuote && cleanText(normalized.quote)) out.quote = clip(normalized.quote, 140);
+    return out;
+  };
+
+  const compactCell = (cell = {}, profile = {}) => {
+    const includeFull = profile.includeFull !== false;
+    const includeArguments = profile.includeArguments !== false;
+    const includeSources = profile.includeSources !== false;
+    const sourceLimit = Number.isFinite(Number(profile.sourceLimit))
+      ? Math.max(0, Math.min(4, Number(profile.sourceLimit)))
+      : 2;
+
+    const out = {
+      subjectId: cleanText(cell?.subjectId),
+      attributeId: cleanText(cell?.attributeId),
+      value: clip(cell?.value, profile.maxValueChars || 220),
+      confidence: normalizeConfidence(cell?.confidence),
+      confidenceReason: clip(cell?.confidenceReason, profile.maxReasonChars || 160),
+      risks: clip(cell?.risks, profile.maxRiskChars || 180),
+      providerAgreement: cleanText(cell?.providerAgreement),
+      sourceCount: normalizeSourceList(cell?.sources).length,
+    };
+    if (includeFull) out.full = clip(cell?.full, profile.maxFullChars || 300);
+    if (includeArguments) {
+      out.arguments = {
+        supporting: (Array.isArray(cell?.arguments?.supporting) ? cell.arguments.supporting : [])
+          .slice(0, 2)
+          .map((entry) => ({
+            claim: clip(entry?.claim, profile.maxClaimChars || 140),
+            detail: clip(entry?.detail, profile.maxDetailChars || 180),
+          })),
+        limiting: (Array.isArray(cell?.arguments?.limiting) ? cell.arguments.limiting : [])
+          .slice(0, 2)
+          .map((entry) => ({
+            claim: clip(entry?.claim, profile.maxClaimChars || 140),
+            detail: clip(entry?.detail, profile.maxDetailChars || 180),
+          })),
+      };
+    }
+    if (includeSources && sourceLimit > 0) {
+      out.sources = normalizeSourceList(cell?.sources)
+        .slice(0, sourceLimit)
+        .map((source) => compactSource(source, { includeQuote: !!profile.includeSourceQuote }));
+    }
+    return out;
+  };
+
+  const buildCompactMatrixPayload = (profile = {}) => {
+    const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+    const maxCells = Number.isFinite(Number(profile.maxCells))
+      ? Math.max(1, Math.min(cells.length || 1, Number(profile.maxCells)))
+      : cells.length;
+    const compactCells = cells
+      .slice(0, maxCells)
+      .map((cell) => compactCell(cell, profile));
+    return {
+      profile: cleanText(profile.label || "default"),
+      coverage: matrix?.coverage || summarizeCoverage(cells),
+      crossMatrixSummary: clip(matrix?.crossMatrixSummary, profile.maxCrossSummaryChars || 420),
+      subjectSummaries: (Array.isArray(matrix?.subjectSummaries) ? matrix.subjectSummaries : [])
+        .slice(0, 32)
+        .map((entry) => ({
+          subjectId: cleanText(entry?.subjectId),
+          summary: clip(entry?.summary, profile.maxSubjectSummaryChars || 260),
+        })),
+      cells: compactCells,
+    };
+  };
+
+  const estimateTokens = (text = "") => Math.ceil(cleanText(text).length / 4);
+  const targetTokenBudgetRaw = Number(limits?.matrixCriticPromptTokenBudget);
+  const targetTokenBudget = Number.isFinite(targetTokenBudgetRaw)
+    ? Math.max(20000, Math.round(targetTokenBudgetRaw))
+    : 120000;
+  const compactionProfiles = [
+    {
+      label: "rich",
+      includeFull: true,
+      includeArguments: true,
+      includeSources: true,
+      includeSourceQuote: true,
+      sourceLimit: 4,
+      maxFullChars: 900,
+      maxValueChars: 420,
+      maxReasonChars: 320,
+      maxRiskChars: 300,
+      maxClaimChars: 220,
+      maxDetailChars: 260,
+      maxCrossSummaryChars: 760,
+      maxSubjectSummaryChars: 460,
+      maxCells: 240,
+    },
+    {
+      label: "standard",
+      includeFull: true,
+      includeArguments: true,
+      includeSources: true,
+      includeSourceQuote: false,
+      sourceLimit: 2,
+      maxFullChars: 300,
+      maxValueChars: 220,
+      maxReasonChars: 160,
+      maxRiskChars: 180,
+      maxClaimChars: 140,
+      maxDetailChars: 180,
+      maxCells: 200,
+    },
+    {
+      label: "lean",
+      includeFull: false,
+      includeArguments: true,
+      includeSources: true,
+      includeSourceQuote: false,
+      sourceLimit: 1,
+      maxValueChars: 180,
+      maxReasonChars: 120,
+      maxRiskChars: 140,
+      maxClaimChars: 120,
+      maxDetailChars: 140,
+      maxCells: 160,
+    },
+    {
+      label: "minimal",
+      includeFull: false,
+      includeArguments: false,
+      includeSources: true,
+      includeSourceQuote: false,
+      sourceLimit: 1,
+      maxValueChars: 160,
+      maxReasonChars: 100,
+      maxRiskChars: 120,
+      maxCells: 140,
+    },
+  ];
+
   const setupContext = buildResearchSetupContextBlock(researchSetup);
-  return `Research brief:
+  const renderPrompt = (compactMatrix) => `Research brief:
 ${rawInput}
 
 Decision question:
@@ -3328,8 +3480,8 @@ ${subjects.map((subject) => `- ${subject.label}`).join("\n")}
 Attributes:
 ${attributes.map((attr) => `- ${attr.label}`).join("\n")}
 
-Current matrix draft:
-${JSON.stringify(matrix, null, 2)}
+Current matrix draft (compact, bounded for model context):
+${JSON.stringify(compactMatrix, null, 2)}
 
 Audit this matrix and return JSON only:
 {
@@ -3343,11 +3495,48 @@ Audit this matrix and return JSON only:
     }
   ]
 }`;
+
+  let selected = { profile: cleanText(compactionProfiles[0].label), estimatedTokens: 0, chars: 0 };
+  let selectedPrompt = "";
+  let selectedMatrix = buildCompactMatrixPayload(compactionProfiles[0]);
+  for (const profile of compactionProfiles) {
+    const candidateMatrix = buildCompactMatrixPayload(profile);
+    const candidatePrompt = renderPrompt(candidateMatrix);
+    const candidateTokens = estimateTokens(candidatePrompt);
+    selected = {
+      profile: cleanText(profile.label),
+      estimatedTokens: candidateTokens,
+      chars: candidatePrompt.length,
+    };
+    selectedPrompt = candidatePrompt;
+    selectedMatrix = candidateMatrix;
+    if (candidateTokens <= targetTokenBudget) break;
+  }
+  return {
+    promptText: selectedPrompt || renderPrompt(selectedMatrix),
+    compactionMeta: {
+      ...selected,
+      targetTokenBudget,
+      cells: Array.isArray(selectedMatrix?.cells) ? selectedMatrix.cells.length : 0,
+      subjectSummaries: Array.isArray(selectedMatrix?.subjectSummaries) ? selectedMatrix.subjectSummaries.length : 0,
+    },
+  };
 }
 
 function buildMatrixAnalystResponsePrompt({ rawInput, decisionQuestion, subjects, attributes, cells, flags, researchSetup = {} }) {
   const subjectLabel = new Map(subjects.map((s) => [s.id, s.label]));
   const attrLabel = new Map(attributes.map((a) => [a.id, a.label]));
+  const compactSource = (source = {}) => {
+    const normalized = normalizeSourceList([source])[0] || {};
+    return {
+      name: clip(normalized.name, 120),
+      url: clip(normalized.url, 260),
+      sourceType: cleanText(normalized.sourceType),
+      displayStatus: cleanText(normalized.displayStatus || normalized.verificationStatus || ""),
+      verificationNote: clip(normalized.verificationNote, 120),
+      quote: clip(normalized.quote, 120),
+    };
+  };
 
   const contested = flags.map((flag) => {
     const key = buildCellKey(flag.subjectId, flag.attributeId);
@@ -3357,12 +3546,12 @@ function buildMatrixAnalystResponsePrompt({ rawInput, decisionQuestion, subjects
       attributeId: flag.attributeId,
       subject: subjectLabel.get(flag.subjectId) || flag.subjectId,
       attribute: attrLabel.get(flag.attributeId) || flag.attributeId,
-      currentValue: cell.value || "",
+      currentValue: clip(cell.value, 220),
       currentConfidence: cell.confidence || "low",
-      currentReason: cell.confidenceReason || "",
-      currentSources: cell.sources || [],
-      criticNote: flag.note || "",
-      criticSuggestedValue: flag.suggestedValue || "",
+      currentReason: clip(cell.confidenceReason, 180),
+      currentSources: normalizeSourceList(cell.sources).slice(0, 3).map((source) => compactSource(source)),
+      criticNote: clip(flag.note, 220),
+      criticSuggestedValue: clip(flag.suggestedValue, 220),
       criticSuggestedConfidence: flag.suggestedConfidence || "",
     };
   });
@@ -3852,6 +4041,20 @@ async function runMatrixDeepAssistEnrichment({
 }
 
 function buildMatrixConsistencyPrompt({ decisionQuestion, subjects, attributes, matrix }) {
+  const compactMatrix = {
+    coverage: matrix?.coverage || null,
+    crossMatrixSummary: clip(matrix?.crossMatrixSummary, 360),
+    cells: (Array.isArray(matrix?.cells) ? matrix.cells : []).map((cell) => ({
+      subjectId: cleanText(cell?.subjectId),
+      attributeId: cleanText(cell?.attributeId),
+      value: clip(cell?.value, 180),
+      confidence: normalizeConfidence(cell?.confidence),
+      confidenceReason: clip(cell?.confidenceReason, 140),
+      providerAgreement: cleanText(cell?.providerAgreement),
+      sourceCount: normalizeSourceList(cell?.sources).length,
+    })),
+  };
+
   return `You are auditing cross-subject consistency for a completed research matrix.
 
 Decision question:
@@ -3864,7 +4067,7 @@ Attributes:
 ${attributes.map((attribute) => `- ${attribute.label}`).join("\n")}
 
 Matrix:
-${JSON.stringify(matrix, null, 2)}
+${JSON.stringify(compactMatrix, null, 2)}
 
 Task:
 - Compare subjects within each attribute and detect contradictions.
@@ -5596,14 +5799,26 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
       analysisMeta: state.analysisMeta,
     });
 
-    const criticPromptText = buildMatrixCriticPrompt({
+    const criticPromptPayload = buildMatrixCriticPrompt({
       rawInput: state.rawInput,
       decisionQuestion,
       subjects,
       attributes,
       matrix: reconciledMatrix,
       researchSetup,
+      limits: config?.limits || {},
     });
+    const criticPromptText = cleanText(criticPromptPayload?.promptText);
+    appendAnalysisDebugEvent(debugSession, {
+      type: "matrix_prompt_size",
+      phase: "matrix_critic",
+      diagnostics: {
+        chars: criticPromptText.length,
+        estimatedTokens: Math.ceil(cleanText(criticPromptText).length / 4),
+        compaction: criticPromptPayload?.compactionMeta || null,
+      },
+    });
+    state.analysisMeta.criticPromptCompaction = criticPromptPayload?.compactionMeta || null;
 
     const criticRes = await transport.callCritic(
       [{ role: "user", content: criticPromptText }],
@@ -5772,7 +5987,7 @@ export async function runMatrixAnalysis(input, config, callbacks = {}) {
         Math.max(2600, Math.min(4200, criticTokens)),
         {
           ...roleOptions(config, "critic"),
-          liveSearch: true,
+          liveSearch: false,
           includeMeta: true,
         }
       );
