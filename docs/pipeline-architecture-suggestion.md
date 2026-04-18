@@ -28,151 +28,42 @@ Deterministic engine steps (input validation, source verification, quality asses
 
 ```mermaid
 flowchart TD
-    classDef analyst  fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef critic   fill:#fce7f3,stroke:#db2777,color:#831843
-    classDef synth    fill:#ecfdf5,stroke:#059669,color:#065f46
-    classDef engine   fill:#f3f4f6,stroke:#6b7280,color:#111827
+    classDef analyst fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef critic  fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef synth   fill:#ecfdf5,stroke:#059669,color:#065f46
+    classDef engine  fill:#f3f4f6,stroke:#6b7280,color:#111827
 
-    INTAKE{{"#01 · INPUT INTAKE
-    Actor: engine (deterministic)
-    ─────────────────────────────────────
-    Validate and normalize input to stable schema
-    In:  raw user input · config · setup fields
-    Out: NormalizedRequest"}}
-
+    INTAKE{{"#01 INPUT INTAKE\nActor: engine\nValidate and normalize input to stable schema\nIn: raw user input, config, setup fields\nOut: NormalizedRequest"}}
     DISCROUTER{"matrix +\nauto-discover\nsubjects?"}
-
-    SUBJDISC["#01b · SUBJECT DISCOVERY  ⬡ optional
-    Actor: Analyst · Model: gemini-2.5-pro (web)
-    ─────────────────────────────────────
-    Discover, deduplicate, and canonicalize comparison subjects
-    In:  NormalizedRequest
-    Out: NormalizedRequest + canonical subjects list"]
-
-    PLAN["#02 · RESEARCH PLANNING
-    Actor: Analyst · Model: openai:gpt-5.4
-    ─────────────────────────────────────
-    Define scope, per-unit query plan, counterfactual probes
-    In:  NormalizedRequest
-    Out: ResearchPlan"]
-
+    SUBJDISC["#01b SUBJECT DISCOVERY (optional)\nActor: Analyst | Model: gemini-2.5-pro (web)\nDiscover, deduplicate, and canonicalize comparison subjects\nIn: NormalizedRequest\nOut: NormalizedRequest + canonical subjects list"]
+    PLAN["#02 RESEARCH PLANNING\nActor: Analyst | Model: openai:gpt-5.4\nDefine scope, per-unit query plan, counterfactual probes\nIn: NormalizedRequest\nOut: ResearchPlan"]
     EVROUTER{"evidence\nmode?"}
+    MEM_NATIVE["#03a EVIDENCE - MEMORY (native)\nActor: Analyst | Model: openai:gpt-5.4 (no web)\nMemory-grounded draft evidence for all units\nIn: NormalizedRequest, ResearchPlan\nOut: MemoryEvidenceDraft"]
+    WEB_NATIVE["#03b EVIDENCE - WEB (native)\nActor: Analyst | Model: gemini-2.5-pro (web)\nCited web evidence; patches and extends memory draft\nIn: NormalizedRequest, ResearchPlan, MemoryEvidenceDraft\nOut: WebEvidenceDraft"]
+    EVID_DA["#03c EVIDENCE - DEEP ASSIST\nActor: Analyst | Model: gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro (parallel)\nFull evidence packets from three providers in parallel\nIn: NormalizedRequest, ResearchPlan\nOut: DeepAssistProviderDrafts"]
+    MERGE["#04 EVIDENCE MERGE\nActor: Analyst | Model: openai:gpt-5.4-mini + deterministic rules\nBuild unified evidence bundle; record provider agreement per unit\nIn: MemoryEvidenceDraft + WebEvidenceDraft OR DeepAssistProviderDrafts\nOut: EvidenceBundle"]
+    SCORE_CONF["#05 SCORE + CONFIDENCE\nActor: Analyst | Model: openai:gpt-5.4\nScore all units; assign calibrated confidence with explicit reasons\nIn: EvidenceBundle, rubric / attribute definitions\nOut: AssessedStateV1"]
+    VERIFY{{"#06 SOURCE VERIFICATION\nActor: engine\nFetch each URL; check quote / name presence in page content\nIn: AssessedStateV1 sources\nOut: VerifiedStateV1"}}
+    ASSESS{{"#07 SOURCE ASSESSMENT\nActor: engine\nApply quality caps and confidence penalties from verification results\nIn: VerifiedStateV1, quality policy\nOut: QualityAdjustedStateV1"}}
+    RECOVER["#08 TARGETED RECOVERY\nActor: Analyst | Model: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)\nRecover zero-evidence and low-confidence units; coverage-first allocation\nIn: QualityAdjustedStateV1, ResearchPlan\nOut: RecoveredEvidencePatch"]
+    RESCORE["#09 RE-SCORE + RE-CONFIDENCE\nActor: Analyst | Model: openai:gpt-5.4\nUpdate scores, values, and confidence from recovery patch\nIn: QualityAdjustedStateV1, RecoveredEvidencePatch\nOut: AssessedStateV2"]
+    COHERENCE["#10 CONSISTENCY + COHERENCE\nActor: Critic | Model: claude-sonnet-4\nDetect cross-unit contradictions and logic breaks\nIn: AssessedStateV2\nOut: CoherenceFindings"]
+    CHALLENGE["#11 CHALLENGE OVERCLAIMS\nActor: Critic | Model: claude-sonnet-4\nPressure-test strongest claims and overconfident assessments\nIn: AssessedStateV2, CoherenceFindings\nOut: CriticFlags"]
+    COUNTER["#12 COUNTER-CASE + MISSED RISKS\nActor: Critic | Model: claude-sonnet-4 (web)\nSearch for disconfirming evidence and unmodeled risks\nIn: AssessedStateV2, CriticFlags\nOut: CriticCounterPack"]
+    DEFEND["#13 CONCEDE / DEFEND\nActor: Analyst | Model: openai:gpt-5.4\nResolve every critic flag; accept or reject with updated evidence\nIn: AssessedStateV2, CriticFlags, CriticCounterPack\nOut: ResolvedState"]
+    SYNTHESIZE["#14 SYNTHESIZE\nActor: Synthesizer | Model: gemini-2.5-pro\nIndependent executive narrative, decision implication, dissent note\nIn: ResolvedState\nOut: SynthesisArtifact"]
+    FINAL{{"#15 FINALIZE\nActor: Analyst summary (openai:gpt-5.4-mini) + engine gates\nLock final artifact; enforce decision-grade gate; emit reason codes\nIn: ResolvedState, SynthesisArtifact, quality gate config\nOut: FinalResearchArtifact OR abort(reasonCode)"}}
 
-    MEM_NATIVE["#03a · EVIDENCE — MEMORY  (native path)
-    Actor: Analyst · Model: openai:gpt-5.4  (no web)
-    ─────────────────────────────────────
-    Memory-grounded draft evidence for all units
-    In:  NormalizedRequest · ResearchPlan
-    Out: MemoryEvidenceDraft"]
-
-    WEB_NATIVE["#03b · EVIDENCE — WEB  (native path)
-    Actor: Analyst · Model: gemini-2.5-pro  (web)
-    ─────────────────────────────────────
-    Cited web evidence; patches and extends memory draft
-    In:  NormalizedRequest · ResearchPlan · MemoryEvidenceDraft
-    Out: WebEvidenceDraft"]
-
-    EVID_DA["#03c · EVIDENCE — DEEP ASSIST  (deep-assist path)
-    Actor: Analyst · Model: gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro  (parallel)
-    ─────────────────────────────────────
-    Full evidence packets (memory + web) from three providers in parallel
-    In:  NormalizedRequest · ResearchPlan
-    Out: DeepAssistProviderDrafts"]
-
-    MERGE["#04 · EVIDENCE MERGE
-    Actor: Analyst · Model: openai:gpt-5.4-mini + deterministic rules
-    ─────────────────────────────────────
-    Build unified evidence bundle; record provider agreement per unit
-    In:  MemoryEvidenceDraft + WebEvidenceDraft  OR  DeepAssistProviderDrafts
-    Out: EvidenceBundle"]
-
-    SCORE_CONF["#05 · SCORE + CONFIDENCE
-    Actor: Analyst · Model: openai:gpt-5.4
-    ─────────────────────────────────────
-    Score/assess all units; assign calibrated confidence with explicit reasons
-    In:  EvidenceBundle · rubric / attribute definitions
-    Out: AssessedStateV1"]
-
-    VERIFY{{"#06 · SOURCE VERIFICATION
-    Actor: engine (deterministic)
-    ─────────────────────────────────────
-    Fetch each URL; check quote / name presence in page content
-    In:  AssessedStateV1 sources
-    Out: VerifiedStateV1"}}
-
-    ASSESS{{"#07 · SOURCE ASSESSMENT
-    Actor: engine (deterministic)
-    ─────────────────────────────────────
-    Apply quality caps and confidence penalties from verification results
-    In:  VerifiedStateV1 · quality policy
-    Out: QualityAdjustedStateV1"}}
-
-    RECOVER["#08 · TARGETED RECOVERY
-    Actor: Analyst · Model: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)
-    ─────────────────────────────────────
-    Recover zero-evidence and low-confidence units; coverage-first allocation
-    In:  QualityAdjustedStateV1 · ResearchPlan
-    Out: RecoveredEvidencePatch"]
-
-    RESCORE["#09 · RE-SCORE + RE-CONFIDENCE
-    Actor: Analyst · Model: openai:gpt-5.4
-    ─────────────────────────────────────
-    Update scores, values, and confidence from recovery patch
-    In:  QualityAdjustedStateV1 · RecoveredEvidencePatch
-    Out: AssessedStateV2"]
-
-    COHERENCE["#10 · CONSISTENCY + COHERENCE
-    Actor: Critic · Model: claude-sonnet-4
-    ─────────────────────────────────────
-    Detect cross-unit contradictions and logic breaks
-    In:  AssessedStateV2
-    Out: CoherenceFindings"]
-
-    CHALLENGE["#11 · CHALLENGE OVERCLAIMS
-    Actor: Critic · Model: claude-sonnet-4
-    ─────────────────────────────────────
-    Pressure-test strongest claims and overconfident assessments
-    In:  AssessedStateV2 · CoherenceFindings
-    Out: CriticFlags"]
-
-    COUNTER["#12 · COUNTER-CASE + MISSED RISKS
-    Actor: Critic · Model: claude-sonnet-4  (web)
-    ─────────────────────────────────────
-    Search for disconfirming evidence and unmodeled risks
-    In:  AssessedStateV2 · CriticFlags
-    Out: CriticCounterPack"]
-
-    DEFEND["#13 · CONCEDE / DEFEND
-    Actor: Analyst · Model: openai:gpt-5.4
-    ─────────────────────────────────────
-    Resolve every critic flag; accept or reject with updated evidence
-    In:  AssessedStateV2 · CriticFlags · CriticCounterPack
-    Out: ResolvedState"]
-
-    SYNTHESIZE["#14 · SYNTHESIZE
-    Actor: Synthesizer · Model: gemini-2.5-pro
-    ─────────────────────────────────────
-    Independent executive narrative, decision implication, dissent note
-    In:  ResolvedState
-    Out: SynthesisArtifact"]
-
-    FINAL{{"#15 · FINALIZE
-    Actor: Analyst summary (openai:gpt-5.4-mini) + engine gates
-    ─────────────────────────────────────
-    Lock final artifact; enforce decision-grade gate; emit reason codes
-    In:  ResolvedState · SynthesisArtifact · quality gate config
-    Out: FinalResearchArtifact  OR  abort(reasonCode)"}}
-
-    INTAKE       --> DISCROUTER
-    DISCROUTER   -->|yes| SUBJDISC --> PLAN
-    DISCROUTER   -->|no|  PLAN
-    PLAN         --> EVROUTER
-    EVROUTER     -->|native|      MEM_NATIVE --> WEB_NATIVE --> MERGE
-    EVROUTER     -->|deep-assist| EVID_DA    --> MERGE
-    MERGE        --> SCORE_CONF --> VERIFY --> ASSESS
-    ASSESS       --> RECOVER --> RESCORE
-    RESCORE      --> COHERENCE --> CHALLENGE --> COUNTER --> DEFEND
-    DEFEND       --> SYNTHESIZE --> FINAL
+    INTAKE --> DISCROUTER
+    DISCROUTER -->|yes| SUBJDISC --> PLAN
+    DISCROUTER -->|no| PLAN
+    PLAN --> EVROUTER
+    EVROUTER -->|native| MEM_NATIVE --> WEB_NATIVE --> MERGE
+    EVROUTER -->|deep-assist| EVID_DA --> MERGE
+    MERGE --> SCORE_CONF --> VERIFY --> ASSESS
+    ASSESS --> RECOVER --> RESCORE
+    RESCORE --> COHERENCE --> CHALLENGE --> COUNTER --> DEFEND
+    DEFEND --> SYNTHESIZE --> FINAL
 
     class PLAN,MEM_NATIVE,WEB_NATIVE,SUBJDISC,EVID_DA,MERGE,SCORE_CONF,RECOVER,RESCORE,DEFEND analyst
     class COHERENCE,CHALLENGE,COUNTER critic
