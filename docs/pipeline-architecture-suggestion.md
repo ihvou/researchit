@@ -1,84 +1,99 @@
-# Pipeline Architecture Suggestions: Quality-First Without Waste
+# Pipeline Architecture Suggestions
 
-This document proposes model-routing updates that materially improve output completeness/accuracy while avoiding unnecessary spend.
+Suggested model-routing profile to improve reliability and decision-grade quality while keeping spend bounded.
 
-## Why update now
+For current implementation flow see [pipeline-architecture.md](./pipeline-architecture.md).
 
-From debug bundle `analysis-debug-bundle-2026-04-17T17-16-53-859Z.json`:
+---
 
-- One native matrix run took ~77.3 minutes total.
-- The major stall was **matrix_web** (not baseline):
-  - matrix_web total: **3243.4s**
-  - single slow call: **2914.2s** (~48.6 min)
-- Run failed at `matrix_response` due malformed JSON after long execution.
+## Suggested Scorecard Routing
 
-## Current effective routing (observed)
+```mermaid
+flowchart TD
+    INPUT["🔬 User Input\n════════════════════════════════════════════\nResearch description + dimensions + setup\nMode: Native │ Deep Assist"]
 
-- Analyst lane dominates native matrix (`openai:gpt-5.4-mini`) for baseline, web, reconcile, targeted, and response.
-- Critic lane uses `anthropic:claude-sonnet-4-20250514`.
-- Deep Assist lane already uses 3-provider setup (`gpt-5.4`, `claude-sonnet-4`, `gemini-2.5-pro`).
+    QS["① Query Strategist\n════════════════════════════════════════════\nActor: Analyst planner\nSuggested model: gemini-2.5-flash\nGoal: produce targeted + counterfactual query seeds\nWhy: planning quality is sufficient at low cost"]
 
-## Recommended routing profile (Balanced Quality)
+    MODE{"Evidence mode?"}
 
-Use higher-quality models where reasoning quality is highest leverage, keep cheaper models for planning/auxiliary tasks.
+    NATIVE["② Native Evidence Build\n════════════════════════════════════════════\nPass A baseline: openai:gpt-5.4\nPass B web: gemini:gemini-2.5-pro\nPass C reconcile: openai:gpt-5.4\nWhy: better completeness + stronger merge quality"]
 
-### Scorecard
+    DA_COLLECT["②᛫ Deep Assist Collect ×3\n════════════════════════════════════════════\nProviders (parallel):\n  • openai:gpt-5.4\n  • anthropic:claude-sonnet-4-20250514\n  • gemini:gemini-2.5-pro\nGoal: independent provider evidence drafts"]
 
-| Step group | Recommended route | Why |
-| --- | --- | --- |
-| Query strategist + targeted query planning | `gemini:gemini-2.5-flash` | Low-cost planning; quality is sufficient for query generation. |
-| Evidence web passes (Phase 1 web + targeted search harvest) | `gemini:gemini-2.5-pro` | Better retrieval synthesis and web grounding quality than flash/mini. |
-| Baseline scoring + reconcile scoring + phase-3 response | `openai:gpt-5.4` | Higher structured reasoning quality for score integrity and decision framing. |
-| Critic / Red team / Consistency | `anthropic:claude-sonnet-4-20250514` | Strong adversarial review quality. |
-| Synthesizer | `anthropic:claude-sonnet-4-20250514` (or dedicated synthesizer model) | Stable concise synthesis over structured signals. |
-| Discovery suggestions | `openai:gpt-5.4-mini` or `gemini-2.5-flash` | Non-critical recommendation step. |
+    DA_MERGE["②᛫ Deep Assist Merge\n════════════════════════════════════════════\nDeterministic merge (no LLM)\nBest-confidence merge + agreement labels\nTrigger weak dimensions for recovery"]
 
-### Matrix
+    TARGETED["③ Targeted Recovery\n════════════════════════════════════════════\nQuery/search: gemini-2.5-pro\nRescore/adjudicate: openai:gpt-5.4\nBudget: bounded by targetedBudgetUnits\nGoal: fix low-confidence or sparse dimensions"]
 
-| Step group | Recommended route | Why |
-| --- | --- | --- |
-| Subject discovery + strategist/query-plan | `gemini:gemini-2.5-flash` | Cheap planning/discovery where depth is less critical. |
-| Baseline pass | `openai:gpt-5.4` | Better completeness and cleaner structured cell generation. |
-| Web pass | `gemini:gemini-2.5-pro` | Stronger web-grounded evidence extraction and lower OpenAI web tool dependence. |
-| Reconcile pass | `openai:gpt-5.4` | High-leverage merge judgment between baseline/web drafts. |
-| Targeted search harvest | `gemini:gemini-2.5-pro` | Better retrieval depth on weak cells. |
-| Targeted rescore | default `openai:gpt-5.4-mini`; upgrade to `gpt-5.4` for critical attributes | Spend only where scoring risk is highest. |
-| Critic + consistency + red team | `anthropic:claude-sonnet-4-20250514` | Strong challenge quality and cross-cell critique. |
-| Analyst response (contested cells) | `openai:gpt-5.4` | Better JSON reliability and adjudication quality under large contested payloads. |
-| Derived attributes + discovery | `openai:gpt-5.4-mini` | Lower-risk summarization/derivation tasks. |
-| Synthesizer | `anthropic:claude-sonnet-4-20250514` | Consistent executive synthesis. |
+    VERIFY["④ Source Verification + Quality Caps\n════════════════════════════════════════════\nNo LLM calls\nHTTP verification + stale/vendor evidence penalties"]
 
-## Estimated cost impact (from this specific failed run)
+    CRITIC["⑤ Critic Audit\n════════════════════════════════════════════\nActor: Critic\nSuggested model: claude-sonnet-4-20250514\nWeb search enabled\nGoal: challenge overclaims and weak evidence"]
 
-Method: approximate tokens via `chars/4`; pricing based on public list rates. Excludes unknown provider-side search surcharges.
+    RESPONSE["⑥ Analyst Response\n════════════════════════════════════════════\nActor: Analyst\nSuggested model: openai:gpt-5.4\nGoal: concede/defend critic flags with updated evidence"]
 
-- Current observed routing (mostly `gpt-5.4-mini` analyst + Claude critic): **~$1.60** token-cost estimate.
-- Balanced Quality profile above: **~$3.74** token-cost estimate.
-- Full quality-heavy profile (upgrade most analyst reasoning passes): **~$4.61** token-cost estimate.
+    CONSISTENCY["⑦ Consistency + Coherence\n════════════════════════════════════════════\nConsistency: openai:gpt-5.4\nCoherence: claude-sonnet-4-20250514\nGoal: catch score/narrative contradictions"]
 
-Interpretation:
+    REDTEAM["⑧ Red Team\n════════════════════════════════════════════\nActor: Critic\nSuggested model: claude-sonnet-4-20250514\nNo web search\nGoal: strongest counter-case + missed risks"]
 
-- Balanced profile is ~2.3x token spend vs current, but should materially improve matrix completeness and JSON stability.
-- It avoids the most expensive path (running all analyst reasoning on high-tier models).
+    SYNTH["⑨ Synthesizer\n════════════════════════════════════════════\nActor: Synthesizer\nSuggested model: claude-sonnet-4-20250514\nNo web search\nGoal: decision implication + uncertainty summary"]
 
-## Reliability and latency safeguards to apply with routing update
+    OUTPUT["📊 Decision-Grade Scorecard\n════════════════════════════════════════════\nScored dimensions + confidence + verified sources\nCritic/Red Team findings + executive synthesis"]
 
-1. Add step-specific hard timeout + retry split
-- Example: matrix web chunk timeout 90-120s; on timeout split subject chunk and retry.
-- Prevents single 40-50 minute stuck calls.
+    INPUT --> QS --> MODE
+    MODE -->|"Native"| NATIVE --> TARGETED
+    MODE -->|"Deep Assist"| DA_COLLECT --> DA_MERGE --> TARGETED
+    TARGETED --> VERIFY --> CRITIC --> RESPONSE --> CONSISTENCY --> REDTEAM --> SYNTH --> OUTPUT
+```
 
-2. Add phase-level fail-fast on malformed JSON for critical phases
-- If `matrix_response` parse fails after bounded retry, stop with explicit error modal + download debug button.
+---
 
-3. Route web-heavy native matrix steps through retrieval capability explicitly
-- Eliminate accidental OpenAI web-search tool spending when policy intends Gemini web grounding.
+## Suggested Matrix Routing
 
-4. Add per-step model map in config (not hardcoded role-only)
-- Example keys: `matrixBaselineModel`, `matrixWebModel`, `matrixReconcileModel`, `matrixTargetedSearchModel`, `matrixResponseModel`.
-- Makes quality/cost tradeoffs transparent and contributor-friendly.
+```mermaid
+flowchart TD
+    INPUT["🔬 User Input\n════════════════════════════════════════════\nDescription + decision question + subjects + attributes\nMode: Native │ Deep Assist"]
 
-## Suggested default policy
+    DISCOVER["① Subject Discovery (optional)\n════════════════════════════════════════════\nActor: Analyst planner\nSuggested model: gemini-2.5-flash\nGoal: discover/expand subjects when list is incomplete\nGuard: deduplicate names before matrix build"]
 
-- Default mode: **Balanced Quality** profile above.
-- Keep Deep Assist for highest-stakes runs or when native quality gate fails.
+    BASE["② Baseline Matrix Pass\n════════════════════════════════════════════\nActor: Analyst\nSuggested model: openai:gpt-5.4\nNo web search\nGoal: initial full cell coverage"]
 
+    WEB["③ Web Matrix Pass\n════════════════════════════════════════════\nActor: Analyst retrieval\nSuggested model: gemini-2.5-pro\nWeb search enabled\nGoal: cited evidence per cell"]
+
+    RECON["④ Reconcile Baseline + Web\n════════════════════════════════════════════\nActor: Analyst\nSuggested model: openai:gpt-5.4\nGoal: choose stronger evidence and remove conflicts"]
+
+    TARGETED["⑤ Targeted Recovery (coverage-first)\n════════════════════════════════════════════\nQuery/search: gemini-2.5-pro\nRescore: openai:gpt-5.4 (or mini for low-risk cells)\nSelection priority:\n  1) zero-evidence cells\n  2) low-confidence cells\n  3) contradiction cells\nBudget: adaptive by matrix size"]
+
+    MODE{"Evidence mode?"}
+
+    DA_COLLECT["⑤᛫ Deep Assist Matrix Collect ×3\n════════════════════════════════════════════\nProviders (parallel):\n  • openai:gpt-5.4\n  • anthropic:claude-sonnet-4-20250514\n  • gemini:gemini-2.5-pro\nGoal: independent matrix drafts"]
+
+    DA_MERGE["⑤᛫ Deep Assist Merge + Recovery\n════════════════════════════════════════════\nDeterministic merge + provider agreement labels\nTargeted DA recovery on contradictory/sparse cells"]
+
+    VERIFY["⑥ Source Verification + Coverage Gate\n════════════════════════════════════════════\nNo LLM calls\nVerify URLs/quotes + apply evidence quality caps\nAbort early on catastrophic low coverage"]
+
+    CRITIC["⑦ Critic Audit\n════════════════════════════════════════════\nActor: Critic\nSuggested model: claude-sonnet-4-20250514\nWeb search enabled\nGoal: challenge weak/overstated cells"]
+
+    RESPONSE["⑧ Analyst Response\n════════════════════════════════════════════\nActor: Analyst\nSuggested model: openai:gpt-5.4\nGoal: resolve critic flags for contested cells"]
+
+    CONSISTENCY["⑨ Cross-Matrix Consistency\n════════════════════════════════════════════\nActor: Critic\nSuggested model: claude-sonnet-4-20250514\nGoal: detect illogical row/column relationships"]
+
+    REDTEAM["⑩ Red Team\n════════════════════════════════════════════\nActor: Critic\nSuggested model: claude-sonnet-4-20250514\nNo web search\nGoal: strongest counter-case for decision risk"]
+
+    SYNTH["⑪ Synthesizer\n════════════════════════════════════════════\nActor: Synthesizer\nSuggested model: claude-sonnet-4-20250514\nNo web search\nGoal: decision answer, threats, whitespace, key risks"]
+
+    OUTPUT["📊 Decision-Grade Matrix\n════════════════════════════════════════════\nPer-cell evidence + confidence + verified sources\nCoverage metrics + critic/red-team/synthesis outputs"]
+
+    INPUT --> DISCOVER --> BASE --> WEB --> RECON --> TARGETED --> MODE
+    MODE -->|"Native"| VERIFY
+    MODE -->|"Deep Assist"| DA_COLLECT --> DA_MERGE --> VERIFY
+    VERIFY --> CRITIC --> RESPONSE --> CONSISTENCY --> REDTEAM --> SYNTH --> OUTPUT
+```
+
+---
+
+## Practical defaults
+
+- Keep planner/discovery on low-cost models (`gemini-2.5-flash`).
+- Use stronger analyst models (`gpt-5.4`, `gemini-2.5-pro`) for evidence-heavy and adjudication-heavy steps.
+- Keep critic/red-team/synth on `claude-sonnet-4-20250514` for challenge quality and synthesis stability.
+- Prefer adaptive budgets tied to matrix size and prioritize zero-evidence cells first.
+- Fail early when coverage cannot meet decision-grade thresholds instead of spending on late-stage critique/synthesis.
