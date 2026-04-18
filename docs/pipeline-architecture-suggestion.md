@@ -2,6 +2,14 @@
 
 This proposal aligns all runs (Scorecard/Matrix, Native/Deep Assist) to one stage sequence and two LLM actors.
 
+## Why this refactor now
+
+We are doing this refactor because the current pipeline evolved through many incremental fixes and now has structural drift: divergent flow logic between scorecard and matrix paths, inconsistent Native vs Deep Assist stage shapes, and repeated reliability failures under real workloads (token overflows, long-running web stalls, parse failures, and budget starvation). That drift increases implementation risk, slows debugging, and makes quality behavior harder to reason about.
+
+The refactor goal is to replace ad hoc branching with one canonical stage architecture that is easier to maintain, easier to test, and safer to operate under strict quality guarantees.
+
+This spec is intentionally anchored to [quality-bar.md](./quality-bar.md): implementation decisions must prioritize decision-grade output quality, completeness, accuracy, and auditable evidence over convenience behavior.
+
 ## Actor policy
 
 - `Analyst`: plans research, collects evidence, merges evidence, scores/assesses, recovers low-confidence gaps, and defends against Critic flags.
