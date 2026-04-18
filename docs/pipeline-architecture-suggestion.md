@@ -18,7 +18,7 @@ This spec is intentionally anchored to [quality-bar.md](./quality-bar.md): imple
 |-------|---------------|---------------------|
 | `Analyst` | Plans research; collects, merges, scores, and re-scores evidence; recovers low-confidence gaps; defends against Critic flags; produces final summary | OpenAI (strongest route for high-impact steps; mini route for merge/summary) |
 | `Critic` | Checks cross-unit consistency and coherence; challenges overclaims; finds counter-evidence via web search | Anthropic Claude |
-| `Synthesizer` | Independent executive read after the full Analyst+Critic cycle; produces decision implication and dissent note; deliberately uses a **different model family** from the Analyst chain for independence | Gemini (third model family) |
+| `Synthesizer` | Independent executive read after the full Analyst+Critic cycle; produces decision implication and dissent note; uses a **different model family from the Analyst's primary reasoning path** (OpenAI) for independence. Gemini use in Stages 03b and 08 by the Analyst is retrieval-tool use only — it does not produce scored assessments or defend conclusions. The Synthesizer uses Gemini as a reasoning actor, which is the distinct usage that establishes independence. | Gemini (third model family; independent from the OpenAI primary reasoning chain) |
 
 Deterministic engine steps (input validation, source verification, quality assessment, routing, gate enforcement) are **not** LLM actors.
 
@@ -88,7 +88,7 @@ flowchart TD
 - Merge and final summary use a cheaper OpenAI route only where quality impact is proven negligible.
 - Analyst web evidence collection and targeted recovery search route through Gemini.
 - Critic challenge, coherence, and counter-case web search route through Claude.
-- Synthesizer routes through Gemini to ensure model-family independence from the Analyst chain.
+- Synthesizer routes through Gemini to ensure model-family independence from the Analyst's **primary reasoning path** (OpenAI). Gemini use by the Analyst in evidence collection and recovery is retrieval-tool use only and does not compromise this independence.
 - **No silent degraded fallback in strict quality mode.** Failures stop with explicit reason codes and a debug bundle.
 - Pin model snapshot IDs for deterministic reproducibility; use approved latest aliases for best-current quality.
 
@@ -168,7 +168,8 @@ Every stage emits:
 - Output enriches `NormalizedRequest.matrix.subjects` before planning.
 
 ### Stage 02 — Research Planning  _(Analyst)_
-- Produce scoped queries and counterfactual probes for every unit (dimension or attribute).
+- Produce scoped queries and counterfactual probes for every unit.
+- **Unit granularity is fixed:** for scorecard, one plan entry per dimension; for matrix, one plan entry per **attribute** (shared across all subjects). Cell-level planning (`subjectId × attributeId`) is not used at this stage — it would create O(subjects × attributes) plan entries and is reserved for targeted recovery (Stage 08).
 - If plan quality is insufficient, retry once with a stricter schema enforcement prompt.
 - Fail (`critical_units_unresolved`) if any unit has no plan entries after retry.
 
@@ -195,6 +196,7 @@ Every stage emits:
 
 ### Stages 08–09 — Targeted Recovery + Re-score  _(Analyst)_
 - **08 — Recovery:** Coverage-first allocation (see Deterministic Algorithm B). Prioritize zero-evidence units and critical attributes before pressure-based allocation. Gemini web search for retrieval; OpenAI re-assessment.
+  - **Unit granularity for matrix recovery is cell-level** (`subjectId × attributeId`). Each recovery slot targets one specific cell. Bounded cell-groups are only allowed when cells share the same attribute and sequential recovery would exceed the timeout budget; in that case group size `MUST NOT exceed 2` and cells must be from the same attribute.
 - **09 — Re-score:** Update scores, values, and confidence from the recovery patch in a structured update call.
 
 ### Stages 10–12 — Critic cycle  _(Critic)_
@@ -205,7 +207,8 @@ Every stage emits:
 
 ### Stage 13 — Concede / Defend  _(Analyst)_
 - Respond to every critic flag: accept or reject with updated evidence and explicit reasoning.
-- Response must map flag-by-flag; no bulk dismissals without rationale.
+- Response must map flag-by-flag via `CriticFlagOutcome`; no bulk dismissals without rationale (`disposition: "rejected_with_evidence"` requires explicit evidence citation).
+- For every unresolved `severity=high` flag, a `mitigationNote` is required; the gate will fail if this field is absent.
 
 ### Stage 14 — Synthesize  _(Synthesizer)_
 - Produce an independent executive narrative using a different model family than the Analyst chain.
@@ -247,6 +250,8 @@ Before any paid request:
 1. Resolve effective provider/model per stage from config.
 2. Compare against expected actor policy above.
 3. If mismatch: fail immediately with `route_mismatch_preflight` before any LLM calls.
+
+**Stage 03c carve-out (Deep Assist only):** Stage 03c is the sole exception to the single-provider Analyst policy. It intentionally uses three providers in parallel (OpenAI, Anthropic, Gemini) under the Analyst actor. The preflight for Stage 03c `MUST` verify that all three configured deep-assist providers are present and reachable — not that the route matches the single-provider Analyst default. Absence of any configured deep-assist provider `MUST` fail with `route_mismatch_preflight` before any call. No provider may be silently skipped.
 
 ---
 
@@ -369,8 +374,8 @@ Applied at Stage 15. Both scorecard and matrix use the same checks (matrix appli
 1. **Coverage:** `coveredUnits / totalUnits >= minCoverageRatio`
 2. **Confidence:** `lowConfidenceUnits / totalUnits <= maxLowConfidenceRatio`
 3. **Source sufficiency:** each critical unit has `>= minSourcesPerCriticalUnit` sources, of which `>= minIndependentSourcesPerCriticalUnit` are independent
-4. **Critic resolution:** unresolved critic flags `<= maxUnresolvedCriticFlags`
-5. **Red-team severity:** no unresolved `severity=high` flag without an explicit analyst mitigation note
+4. **Critic resolution:** `ResolvedState.flagOutcomes.filter(o => !o.resolved).length <= maxUnresolvedCriticFlags`
+5. **High-severity coverage:** `ResolvedState.unresolvedHighSeverityCount === 0 OR every unresolved high-severity outcome has a non-empty mitigationNote`
 
 Any failure in strict mode → abort with `run_aborted_strict_quality`.
 
@@ -378,7 +383,13 @@ Any failure in strict mode → abort with `run_aborted_strict_quality`.
 
 ## Quality gates and abort criteria
 
-Abort in strict mode when any condition makes decision-grade output unattainable:
+### Strict mode (`strictQuality: true`)
+
+`run_completed_degraded` is **never emitted** in strict mode. The only terminal states are:
+- `run_completed` — all decision-grade gates passed
+- `run_aborted_strict_quality` — any gate failed or any abort condition was met
+
+Abort conditions (strict mode only):
 - unrecoverable parse failures
 - catastrophic post-recovery coverage shortfall
 - unresolved critical evidence minimums
@@ -389,6 +400,17 @@ Expected UX behavior on abort:
 - show failure popup with primary `reasonCode` and a plain-language explanation
 - offer `Download Debug Log` action immediately
 - preserve full run state and diagnostics for troubleshooting
+
+### Non-strict mode (`strictQuality: false`)
+
+`run_completed_degraded` is emitted when the run completes but one or more decision-grade gates fail. The output artifact `MUST` be labeled `qualityGrade: "degraded"` and the UI `MUST` surface a prominent degraded-quality notice with the failing reason codes.
+
+However, even in non-strict mode, the following conditions `MUST` still abort (consistent with quality-bar.md hard-abort policy):
+- route/model preflight mismatch (correctness guarantee, not quality)
+- unrecoverable parse failure with no recoverable state
+- total coverage below the hard-abort floor (e.g., `coveredUnits / totalUnits < hardAbortCoverageFloor`, a lower threshold than the decision-grade gate)
+
+The distinction: non-strict mode tolerates a degraded-but-meaningful artifact; it does not tolerate a meaningless or architecturally broken one.
 
 ---
 
@@ -422,12 +444,18 @@ Required sections:
 
 ## Backward compatibility and migration
 
-1. Preserve old export/import JSON via an adapter layer.
+1. Preserve old export/import JSON via a **strictly isolated** adapter module: `engine/lib/legacy-adapter.js`.
 2. Store `artifactVersion` and `pipelineVersion` in every artifact.
-3. Migration transforms:
+3. Migration transforms performed by the adapter:
    - legacy phase names → canonical stage ids
    - legacy evidence fields → canonical `SourceRef / ArgumentRef`
-   - legacy flags → `CriticFlag`
+   - legacy flags → `CriticFlag` (with inferred `severity: "medium"` and `category: "other"` for flags that predate the typed schema)
+
+**Adapter scope constraints (`MUST` be enforced):**
+- The adapter is called only at artifact **read / import time**, never from stage execution logic.
+- No production pipeline stage `MUST NOT` import from `legacy-adapter.js`; any such import is a build-time error.
+- The adapter carries a `@legacy` JSDoc tag and `LEGACY_ADAPTER_SUNSET` constant; when all stored artifacts have been migrated (verified by a migration script), the adapter file is deleted — not retained as a convenience utility.
+- New fields added to canonical types are not back-ported into the adapter; the adapter only transforms old shapes into canonical ones, never the reverse.
 
 ---
 
@@ -461,7 +489,7 @@ type ResearchPlan = {
   niche?:   string;
   aliases?: string[];
   units: Array<{
-    unitId:               string; // dimensionId (scorecard) or attributeId / cellKey (matrix)
+    unitId:               string; // dimensionId (scorecard) OR attributeId (matrix — always attribute-level, never cellKey)
     supportingQueries:    string[];
     counterfactualQueries: string[];
     sourceTargets:        string[];
@@ -522,13 +550,30 @@ type EvidenceBundle = {
 };
 
 type CriticFlag = {
-  unitKey:            string; // dimensionId  OR  subjectId::attributeId
+  unitKey:            string;      // dimensionId  OR  subjectId::attributeId
   flagged:            boolean;
+  severity:           "high" | "medium" | "low"; // required; drives gate formula #5
+  category:           "overclaim" | "missing_evidence" | "contradiction" | "stale_source" | "missed_risk" | "other";
   note:               string;
   suggestedScore?:    number;
   suggestedValue?:    string;
   suggestedConfidence?: Confidence;
   sources?:           SourceRef[];
+};
+
+type CriticFlagOutcome = {
+  flagId:      string;             // stable id assigned by Critic at flag creation
+  flag:        CriticFlag;
+  resolved:    boolean;
+  disposition: "accepted" | "rejected_with_evidence"; // bulk dismissal without rationale is not allowed
+  analystNote: string;             // required; must reference flag.unitKey and explain accept/reject
+  mitigationNote?: string;         // required when flag.severity === "high" and resolved === false
+};
+
+type ResolvedState = {
+  assessment:   AssessedStateV2;   // final scored state after critic cycle
+  flagOutcomes: CriticFlagOutcome[];
+  unresolvedHighSeverityCount: number; // derived; used directly by gate formula #5
 };
 
 type SynthesisArtifact = {
