@@ -51,7 +51,7 @@ flowchart TD
     CHALLENGE["#11 CHALLENGE OVERCLAIMS\nActor: Critic | Model: claude-sonnet-4\nPressure-test strongest claims and overconfident assessments\nIn: AssessedStateV2, CoherenceFindings\nOut: CriticFlags"]
     COUNTER["#12 COUNTER-CASE + MISSED RISKS\nActor: Critic | Model: claude-sonnet-4 (web)\nSearch for disconfirming evidence and unmodeled risks\nIn: AssessedStateV2, CriticFlags\nOut: CriticCounterPack"]
     DEFEND["#13 CONCEDE / DEFEND\nActor: Analyst | Model: openai:gpt-5.4\nResolve every critic flag; accept or reject with updated evidence\nIn: AssessedStateV2, CriticFlags, CriticCounterPack\nOut: ResolvedState"]
-    SYNTHESIZE["#14 SYNTHESIZE\nActor: Synthesizer | Model: gemini-2.5-pro\nIndependent executive narrative, decision implication, dissent note\nIn: ResolvedState\nOut: SynthesisArtifact"]
+    SYNTHESIZE["#14 SYNTHESIZE\nActor: Synthesizer | Model: gemini-2.5-pro\nIndependent executive narrative, decision implication, dissent note\nIn: ResolvedState + compact critic outcome summary (no raw critic chain)\nOut: SynthesisArtifact"]
     FINAL{{"#15 FINALIZE\nActor: Analyst summary (openai:gpt-5.4-mini) + engine gates\nLock final artifact; enforce decision-grade gate; emit reason codes\nIn: ResolvedState, SynthesisArtifact, quality gate config\nOut: FinalResearchArtifact OR abort(reasonCode)"}}
 
     INTAKE --> DISCROUTER
@@ -210,7 +210,14 @@ Every stage emits:
 ### Stage 14 — Synthesize  _(Synthesizer)_
 - Produce an independent executive narrative using a different model family than the Analyst chain.
 - Output: `executiveSummary`, `decisionImplication`, `dissent` (where the analysis may understate uncertainty).
-- No access to critic flag details; reads only `ResolvedState` to maintain independence.
+- Input includes `ResolvedState` plus a compact critic outcome summary to strengthen executive risk framing.
+- The compact summary `MUST` exclude raw critic chain-of-thought and long intermediate critic text.
+- Allowed compact summary fields:
+  - critic flag counts by severity / category
+  - unresolved vs resolved flag counts
+  - top 3 critic concerns (short labels only)
+  - whether counter-case evidence changed any final units
+- This preserves synthesizer independence while retaining material critique signal.
 
 ### Stage 15 — Finalize  _(Analyst summary + engine gates)_
 - Apply the decision-grade gate (see Decision-Grade Gate Formulas).
