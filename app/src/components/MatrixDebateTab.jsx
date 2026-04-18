@@ -40,6 +40,15 @@ export default function MatrixDebateTab({
   fuLoading,
   onFollowUpCell,
 }) {
+  const phaseInitial = Array.isArray(uc?.debate) ? uc.debate.find((entry) => entry.phase === "initial") : null;
+  const phaseCritique = Array.isArray(uc?.debate) ? uc.debate.find((entry) => entry.phase === "critique") : null;
+  const phaseResponse = Array.isArray(uc?.debate) ? uc.debate.find((entry) => entry.phase === "response") : null;
+  const analystFinalText = cleanText(
+    phaseResponse?.content?.analystResponse
+    || phaseResponse?.content?.response
+    || ""
+  );
+
   const matrix = uc?.matrix || {};
   const subjects = Array.isArray(matrix?.subjects) ? matrix.subjects : [];
   const attributes = Array.isArray(matrix?.attributes) ? matrix.attributes : [];
@@ -68,6 +77,34 @@ export default function MatrixDebateTab({
 
   return (
     <div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+        {phaseInitial && (
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>ANALYST - INITIAL MATRIX ASSESSMENT</div>
+            <p style={{ fontSize: 12, color: "var(--ck-blue-ink)", margin: 0, lineHeight: 1.55 }}>
+              {cleanText(phaseInitial?.content?.note) || "Built initial matrix evidence and confidence across subject-attribute cells."}
+            </p>
+          </div>
+        )}
+        {cleanText(phaseCritique?.content?.overallFeedback) && (
+          <div style={{ background: "var(--ck-warn-bg)", border: "1px solid var(--ck-warn-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>CRITIC - MATRIX REVIEW</div>
+            <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: 0, lineHeight: 1.55 }}>
+              {cleanText(phaseCritique.content.overallFeedback)}
+            </p>
+          </div>
+        )}
+        {phaseResponse && (
+          <div style={{ background: "var(--ck-surface-soft)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 14px" }}>
+            <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 4 }}>ANALYST - FINAL MATRIX RESPONSE</div>
+            <p style={{ fontSize: 12, color: "var(--ck-blue-ink)", margin: 0, lineHeight: 1.55 }}>
+              {analystFinalText || "Resolved critic-raised matrix concerns and updated cell-level evidence where needed."}
+            </p>
+            <SourcesList sources={phaseResponse?.content?.sources} />
+          </div>
+        )}
+      </div>
+
       <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
         Per-Cell Exchanges & Follow-Up Challenges
       </div>
@@ -75,11 +112,24 @@ export default function MatrixDebateTab({
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {cellList.map(({ subject, attribute, cell }) => {
           const threadKey = matrixThreadKey(subject.id, attribute.id);
+          const debateKey = `${subject.id}::${attribute.id}`;
+          const critFromDebate = phaseCritique?.content?.cells?.[debateKey] || null;
+          const responseFromDebate = phaseResponse?.content?.cells?.[debateKey] || null;
           const thread = followUps[threadKey] || [];
           const fuKey = `${uc.id}::${threadKey}`;
           const loading = !!fuLoading[fuKey];
           const sourceCount = Array.isArray(cell?.sources) ? cell.sources.length : 0;
           const subjectSummary = summaryMap.get(subject.id);
+          const criticNote = cleanText(cell?.criticNote || critFromDebate?.critique);
+          const analystNote = cleanText(cell?.analystNote || responseFromDebate?.response);
+          const criticSources = Array.isArray(cell?.criticSources) ? cell.criticSources : (critFromDebate?.sources || []);
+          const analystSources = Array.isArray(cell?.analystSources) ? cell.analystSources : (responseFromDebate?.sources || []);
+          const criticSeverity = cleanText(critFromDebate?.severity || "").toLowerCase();
+          const criticCategory = cleanText(critFromDebate?.category || "");
+          const analystDisposition = cleanText(cell?.analystDecision || responseFromDebate?.disposition || "");
+          const mitigationNote = cleanText(responseFromDebate?.mitigationNote || "");
+          const hasCriticPanel = !!criticNote || !!criticSources?.length;
+          const hasAnalystPanel = !!analystNote || !!analystSources?.length;
 
           return (
             <div key={`${subject.id}::${attribute.id}`} style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, overflow: "hidden" }}>
@@ -140,14 +190,29 @@ export default function MatrixDebateTab({
                     <strong style={{ color: "var(--ck-text)" }}>Risks:</strong> {cleanText(cell.risks)}
                   </div>
                 ) : null}
-                {cell?.contested && cleanText(cell?.criticNote) ? (
+                {hasCriticPanel ? (
                   <div style={{ padding: "8px 10px", border: "1px solid var(--ck-warn-line)", background: "var(--ck-warn-bg)", borderRadius: 2, fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-                    Critic: {cleanText(cell.criticNote)}
+                    <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 3 }}>
+                      CRITIC
+                      {criticSeverity ? ` - ${criticSeverity.toUpperCase()}` : ""}
+                      {criticCategory ? ` - ${criticCategory}` : ""}
+                    </div>
+                    {criticNote || "Flag raised for this cell."}
+                    <SourcesList sources={criticSources} />
                   </div>
                 ) : null}
-                {cleanText(cell?.analystNote) ? (
+                {hasAnalystPanel ? (
                   <div style={{ padding: "8px 10px", border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-                    Analyst: {cleanText(cell.analystNote)}
+                    <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, marginBottom: 3 }}>
+                      ANALYST{analystDisposition ? ` - ${analystDisposition}` : ""}
+                    </div>
+                    {analystNote || "Analyst response recorded for this cell."}
+                    {mitigationNote ? (
+                      <div style={{ marginTop: 4 }}>
+                        <strong style={{ color: "var(--ck-text)" }}>Mitigation:</strong> {mitigationNote}
+                      </div>
+                    ) : null}
+                    <SourcesList sources={analystSources} />
                   </div>
                 ) : null}
                 {sourceCount > 0 ? <SourcesList sources={cell.sources} /> : null}

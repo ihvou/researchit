@@ -453,7 +453,7 @@ Required sections:
 
 **Adapter scope constraints (`MUST` be enforced):**
 - The adapter is called only at artifact **read / import time**, never from stage execution logic.
-- No production pipeline stage `MUST NOT` import from `legacy-adapter.js`; any such import is a build-time error.
+- Production pipeline stages `MUST NOT` import from `legacy-adapter.js`; any such import is a build-time error.
 - The adapter carries a `@legacy` JSDoc tag and `LEGACY_ADAPTER_SUNSET` constant; when all stored artifacts have been migrated (verified by a migration script), the adapter file is deleted — not retained as a convenience utility.
 - New fields added to canonical types are not back-ported into the adapter; the adapter only transforms old shapes into canonical ones, never the reverse.
 

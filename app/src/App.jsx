@@ -617,9 +617,7 @@ export default function App({
     }
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const initialPhase = selectedMode === "matrix"
-      ? "matrix_plan"
-      : (normalizedEvidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline");
+    const initialPhase = "stage_01_intake";
     const blankUC = {
       id, rawInput: desc, status: "analyzing", phase: initialPhase,
       attributes: { title: deriveDraftTitleFromInput(desc) }, dimScores: null, critique: null, finalScores: null,
@@ -1174,6 +1172,24 @@ export default function App({
     matrix_synthesis: "Executive synthesis...",
     matrix_summary: "Summarizing...",
     matrix_discover: "Coverage discover...",
+    stage_01_intake: "Intake...",
+    stage_01b_subject_discovery: "Subject discovery...",
+    stage_02_plan: "Planning...",
+    stage_03a_evidence_memory: "Memory evidence...",
+    stage_03b_evidence_web: "Web evidence...",
+    stage_03c_evidence_deep_assist: "Deep Assist evidence...",
+    stage_04_merge: "Merging evidence...",
+    stage_05_score_confidence: "Scoring...",
+    stage_06_source_verify: "Verifying sources...",
+    stage_07_source_assess: "Assessing source quality...",
+    stage_08_recover: "Targeted recovery...",
+    stage_09_rescore: "Re-scoring...",
+    stage_10_coherence: "Coherence audit...",
+    stage_11_challenge: "Challenging claims...",
+    stage_12_counter_case: "Counter-case search...",
+    stage_13_defend: "Concede/defend...",
+    stage_14_synthesize: "Synthesizing...",
+    stage_15_finalize: "Finalizing...",
   };
 
   return (

@@ -4,7 +4,7 @@ import {
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
 
-const SYNTHESIZER_DEFAULT_MODEL = "gpt-5.4-mini";
+const SYNTHESIZER_DEFAULT_MODEL = "gemini-2.5-pro";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

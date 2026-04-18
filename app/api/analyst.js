@@ -4,7 +4,7 @@ import {
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
 
-const ANALYST_DEFAULT_MODEL = "gpt-5.4-mini";
+const ANALYST_DEFAULT_MODEL = "gpt-5.4";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

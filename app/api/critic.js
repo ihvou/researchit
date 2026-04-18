@@ -4,7 +4,7 @@ import {
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
 
-const CRITIC_DEFAULT_MODEL = "gpt-5.4";
+const CRITIC_DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

@@ -8,8 +8,8 @@ import {
 const SHARED_MODELS = {
   analyst: {
     provider: "openai",
-    model: "gpt-5.4-mini",
-    webSearchModel: "gpt-5.4-mini",
+    model: "gpt-5.4",
+    webSearchModel: "gpt-5.4",
   },
   critic: {
     provider: "anthropic",
@@ -18,8 +18,13 @@ const SHARED_MODELS = {
   },
   retrieval: {
     provider: "gemini",
-    model: "gemini-2.5-flash",
-    webSearchModel: "gemini-2.5-flash",
+    model: "gemini-2.5-pro",
+    webSearchModel: "gemini-2.5-pro",
+  },
+  synthesizer: {
+    provider: "gemini",
+    model: "gemini-2.5-pro",
+    webSearchModel: "gemini-2.5-pro",
   },
 };
 

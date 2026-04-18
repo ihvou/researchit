@@ -1,0 +1,558 @@
+import { REASON_CODES } from "./reason-codes.js";
+
+function clean(value) {
+  return String(value || "").trim();
+}
+
+function normalizeOutputType(value) {
+  return clean(value).toLowerCase() === "matrix" ? "matrix" : "scorecard";
+}
+
+function normalizeEvidenceMode(value) {
+  return clean(value).toLowerCase() === "deep-assist" ? "deep-assist" : "native";
+}
+
+function slugify(value, fallback = "item") {
+  const normalized = clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function normalizeScorecardDimensions(config = {}) {
+  const dims = Array.isArray(config?.dimensions) ? config.dimensions : [];
+  return dims.map((dim, idx) => ({
+    id: clean(dim?.id) || `dim-${idx + 1}`,
+    label: clean(dim?.label) || `Dimension ${idx + 1}`,
+    weight: Number.isFinite(Number(dim?.weight)) ? Number(dim.weight) : 0,
+    rubric: clean(dim?.fullDef || dim?.rubric),
+    brief: clean(dim?.brief || dim?.shortDef),
+    enabled: dim?.enabled !== false,
+  }));
+}
+
+function normalizeMatrixAttributes(config = {}) {
+  const attrs = Array.isArray(config?.attributes) ? config.attributes : [];
+  return attrs.map((attr, idx) => ({
+    id: clean(attr?.id) || `attr-${idx + 1}`,
+    label: clean(attr?.label) || `Attribute ${idx + 1}`,
+    brief: clean(attr?.brief || attr?.description),
+    derived: !!attr?.derived,
+    enabled: attr?.enabled !== false,
+  }));
+}
+
+function normalizeMatrixSubjectsFromList(values = []) {
+  return (Array.isArray(values) ? values : [])
+    .map((item, idx) => {
+      if (typeof item === "string") {
+        const label = clean(item);
+        return label ? { id: slugify(label, `subject-${idx + 1}`), label, aliases: [] } : null;
+      }
+      const label = clean(item?.label || item?.name || item?.id);
+      if (!label) return null;
+      const aliases = Array.isArray(item?.aliases)
+        ? [...new Set(item.aliases.map((alias) => clean(alias)).filter(Boolean))]
+        : [];
+      return {
+        id: clean(item?.id) || slugify(label, `subject-${idx + 1}`),
+        label,
+        aliases,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeMatrixSubjects(input = {}, config = {}) {
+  const direct = normalizeMatrixSubjectsFromList(input?.options?.matrixSubjects || []);
+  if (direct.length) return direct;
+  return normalizeMatrixSubjectsFromList(config?.subjects || []);
+}
+
+function normalizeResearchSetup(raw = {}) {
+  const setup = raw && typeof raw === "object" ? raw : {};
+  return {
+    decisionContext: clean(setup.decisionContext),
+    userRoleContext: clean(setup.userRoleContext),
+  };
+}
+
+export function createNormalizedRequest(input = {}, config = {}) {
+  const outputType = normalizeOutputType(config?.outputMode);
+  const evidenceMode = normalizeEvidenceMode(input?.options?.evidenceMode);
+  const setup = normalizeResearchSetup(input?.options?.researchSetup || {});
+
+  const request = {
+    outputType,
+    evidenceMode,
+    researchConfigId: clean(config?.id) || "default",
+    titleHint: clean(config?.name),
+    objective: clean(input?.description),
+    decisionQuestion: setup.decisionContext || "",
+    scopeContext: "",
+    roleContext: setup.userRoleContext || "",
+  };
+
+  if (outputType === "matrix") {
+    request.matrix = {
+      subjects: normalizeMatrixSubjects(input, config),
+      attributes: normalizeMatrixAttributes(config).filter((item) => item.enabled !== false),
+    };
+  } else {
+    request.scorecard = {
+      dimensions: normalizeScorecardDimensions(config).filter((item) => item.enabled !== false),
+    };
+  }
+
+  return request;
+}
+
+function makeSourceUniverse() {
+  return {
+    cited: 0,
+    corroborating: 0,
+    unverified: 0,
+    excludedMarketing: 0,
+    excludedStale: 0,
+    total: 0,
+  };
+}
+
+export function createRunState({ input = {}, config = {}, runId = "" } = {}) {
+  const request = createNormalizedRequest(input, config);
+  const strictFromInput = input?.options?.strictQuality;
+  const strictFromConfig = config?.quality?.strictFailFast;
+  const strictQuality = strictFromInput != null
+    ? ["true", "1", "yes", "on"].includes(clean(strictFromInput).toLowerCase())
+    : !!strictFromConfig;
+
+  return {
+    runId: clean(runId) || clean(input?.id) || `run-${Date.now()}`,
+    mode: request.evidenceMode,
+    outputType: request.outputType,
+    strictQuality,
+    pipelineVersion: "v2-canonical",
+    artifactVersion: 2,
+    request,
+    plan: null,
+    evidence: null,
+    assessment: null,
+    critique: null,
+    resolved: null,
+    synthesis: null,
+    quality: {
+      strictQuality,
+      qualityGrade: "decision-grade",
+      reasonCodes: [],
+      coverage: {
+        totalUnits: 0,
+        coveredUnits: 0,
+        lowConfidenceUnits: 0,
+        zeroEvidenceUnits: 0,
+      },
+      sourceUniverse: makeSourceUniverse(),
+    },
+    diagnostics: {
+      run: {
+        id: clean(runId) || clean(input?.id) || `run-${Date.now()}`,
+        mode: request.evidenceMode,
+        outputType: request.outputType,
+        configId: clean(config?.id),
+        configName: clean(config?.name),
+        startedAt: new Date().toISOString(),
+        finishedAt: "",
+      },
+      routing: [],
+      stages: [],
+      io: [],
+      quality: {},
+      cost: {
+        estimatedByStage: {},
+        estimatedByProvider: {},
+        totalEstimated: 0,
+      },
+      progress: [],
+      reasonCodes: [],
+    },
+    ui: {
+      rawInput: clean(input?.description),
+      origin: input?.origin || null,
+      researchSetup: normalizeResearchSetup(input?.options?.researchSetup || {}),
+      status: "analyzing",
+      phase: "stage_01_intake",
+      errorMsg: null,
+      followUps: {},
+    },
+    options: {
+      downloadDebugLog: !!input?.options?.downloadDebugLog,
+      deepAssist: input?.options?.deepAssist && typeof input.options.deepAssist === "object"
+        ? input.options.deepAssist
+        : {},
+    },
+    config,
+  };
+}
+
+function scorecardDimScoresFromAssessment(assessment = {}, request = {}) {
+  const dims = Array.isArray(request?.scorecard?.dimensions) ? request.scorecard.dimensions : [];
+  const byId = assessment?.scorecard?.byId && typeof assessment.scorecard.byId === "object"
+    ? assessment.scorecard.byId
+    : {};
+  const out = {};
+  dims.forEach((dim) => {
+    const unit = byId[dim.id] || {};
+    out[dim.id] = {
+      id: dim.id,
+      score: Number.isFinite(Number(unit.score)) ? Number(unit.score) : null,
+      confidence: clean(unit.confidence) || "low",
+      confidenceReason: clean(unit.confidenceReason),
+      brief: clean(unit.brief),
+      full: clean(unit.full),
+      sources: Array.isArray(unit.sources) ? unit.sources : [],
+      arguments: unit.arguments && typeof unit.arguments === "object"
+        ? unit.arguments
+        : { supporting: [], limiting: [] },
+      risks: clean(unit.risks),
+      missingEvidence: clean(unit.missingEvidence),
+      providerAgreement: clean(unit.providerAgreement),
+    };
+  });
+  return out;
+}
+
+function scorecardFinalDimensionsFromResolved(resolved = {}, request = {}, critique = {}) {
+  const dims = Array.isArray(request?.scorecard?.dimensions) ? request.scorecard.dimensions : [];
+  const outcomes = Array.isArray(resolved?.flagOutcomes) ? resolved.flagOutcomes : [];
+  const criticByUnit = critique?.flagsByUnit && typeof critique.flagsByUnit === "object"
+    ? critique.flagsByUnit
+    : {};
+  const assessmentById = resolved?.assessment?.scorecard?.byId && typeof resolved.assessment.scorecard.byId === "object"
+    ? resolved.assessment.scorecard.byId
+    : {};
+
+  const out = {};
+  dims.forEach((dim) => {
+    const unit = assessmentById[dim.id] || {};
+    const relatedOutcomes = outcomes.filter((item) => clean(item?.flag?.unitKey) === dim.id);
+    out[dim.id] = {
+      score: Number.isFinite(Number(unit.score)) ? Number(unit.score) : null,
+      confidence: clean(unit.confidence) || "low",
+      confidenceReason: clean(unit.confidenceReason),
+      brief: clean(unit.brief),
+      response: clean(relatedOutcomes.map((item) => item?.analystNote).filter(Boolean).join("\n")),
+      sources: Array.isArray(unit.sources) ? unit.sources : [],
+      arguments: unit.arguments && typeof unit.arguments === "object"
+        ? unit.arguments
+        : { supporting: [], limiting: [] },
+      critic: criticByUnit[dim.id] || null,
+    };
+  });
+  return out;
+}
+
+function toCoverageSummary(cells = []) {
+  const list = Array.isArray(cells) ? cells : [];
+  const low = list.filter((cell) => clean(cell?.confidence).toLowerCase() === "low").length;
+  return {
+    totalCells: list.length,
+    lowConfidenceCells: low,
+    contestedCells: list.filter((cell) => clean(cell?.contested).toLowerCase() === "true").length,
+  };
+}
+
+function enrichMatrixCellsWithDebate(cells = [], critique = {}, resolved = {}) {
+  const flags = Array.isArray(critique?.flags) ? critique.flags : [];
+  const outcomes = Array.isArray(resolved?.flagOutcomes) ? resolved.flagOutcomes : [];
+  const flagsByKey = new Map();
+  flags.forEach((flag) => {
+    const key = clean(flag?.unitKey);
+    if (!key) return;
+    const existing = flagsByKey.get(key) || [];
+    existing.push(flag);
+    flagsByKey.set(key, existing);
+  });
+  const outcomesByKey = new Map();
+  outcomes.forEach((outcome) => {
+    const key = clean(outcome?.flag?.unitKey);
+    if (!key) return;
+    const existing = outcomesByKey.get(key) || [];
+    existing.push(outcome);
+    outcomesByKey.set(key, existing);
+  });
+
+  return (Array.isArray(cells) ? cells : []).map((cell) => {
+    const key = `${cell.subjectId}::${cell.attributeId}`;
+    const cellFlags = flagsByKey.get(key) || [];
+    const cellOutcomes = outcomesByKey.get(key) || [];
+    const criticNote = clean(cell?.criticNote)
+      || clean(cellFlags.map((flag) => clean(flag?.note)).filter(Boolean).join(" | "));
+    const analystNote = clean(cell?.analystNote)
+      || clean(cellOutcomes.map((outcome) => clean(outcome?.analystNote)).filter(Boolean).join(" | "));
+    const analystDecision = clean(cell?.analystDecision)
+      || clean(cellOutcomes.slice(-1)?.[0]?.disposition || "");
+    const criticSources = cellFlags.flatMap((flag) => (Array.isArray(flag?.sources) ? flag.sources : []));
+    const analystSources = cellOutcomes.flatMap((outcome) => (Array.isArray(outcome?.sources) ? outcome.sources : []));
+    const contested = cell?.contested || cellFlags.length > 0;
+
+    return {
+      ...cell,
+      contested: !!contested,
+      criticNote,
+      analystNote,
+      analystDecision,
+      criticSources,
+      analystSources,
+    };
+  });
+}
+
+function matrixFromState(state = {}) {
+  const request = state?.request || {};
+  const assessment = state?.resolved?.assessment || state?.assessment || {};
+  const cellsRaw = Array.isArray(assessment?.matrix?.cells) ? assessment.matrix.cells : [];
+  const cells = enrichMatrixCellsWithDebate(cellsRaw, state?.critique || {}, state?.resolved || {});
+  return {
+    layout: clean(state?.config?.matrixLayout) || "auto",
+    subjects: Array.isArray(request?.matrix?.subjects) ? request.matrix.subjects : [],
+    attributes: Array.isArray(request?.matrix?.attributes) ? request.matrix.attributes : [],
+    cells,
+    coverage: toCoverageSummary(cells),
+    crossMatrixSummary: clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
+    subjectSummaries: Array.isArray(state?.synthesis?.subjectSummaries) ? state.synthesis.subjectSummaries : [],
+    executiveSummary: state?.synthesis?.matrixExecutiveSummary && typeof state.synthesis.matrixExecutiveSummary === "object"
+      ? state.synthesis.matrixExecutiveSummary
+      : {
+        decisionAnswer: clean(state?.synthesis?.executiveSummary),
+        decisionImplications: clean(state?.synthesis?.decisionImplication),
+        uncertaintyNotes: clean(state?.synthesis?.dissent),
+      },
+    discovery: state?.discovery || null,
+    redTeam: state?.redTeam || {},
+  };
+}
+
+function scorecardDebateFromState(state = {}) {
+  const initialById = state?.assessment?.scorecard?.byId || {};
+  const criticById = state?.critique?.flagsByUnit || {};
+  const finalById = state?.resolved?.assessment?.scorecard?.byId || state?.assessment?.scorecard?.byId || {};
+  return [
+    {
+      phase: "initial",
+      content: {
+        dimensions: initialById,
+      },
+    },
+    {
+      phase: "critique",
+      content: {
+        dimensions: criticById,
+        overallFeedback: clean(state?.critique?.overallFeedback),
+        sources: Array.isArray(state?.critique?.sources) ? state.critique.sources : [],
+      },
+    },
+    {
+      phase: "response",
+      content: {
+        dimensions: finalById,
+        analystResponse: clean(state?.resolved?.analystSummary),
+        sources: Array.isArray(state?.resolved?.responseSources) ? state.resolved.responseSources : [],
+      },
+    },
+  ];
+}
+
+function matrixDebateFromState(state = {}) {
+  const flags = Array.isArray(state?.critique?.flags) ? state.critique.flags : [];
+  const outcomes = Array.isArray(state?.resolved?.flagOutcomes) ? state.resolved.flagOutcomes : [];
+
+  const critiqueCells = {};
+  flags.forEach((flag) => {
+    const key = clean(flag?.unitKey);
+    if (!key) return;
+    critiqueCells[key] = {
+      critique: clean(flag?.note),
+      severity: clean(flag?.severity) || "medium",
+      category: clean(flag?.category) || "other",
+      sources: Array.isArray(flag?.sources) ? flag.sources : [],
+    };
+  });
+
+  const responseCells = {};
+  outcomes.forEach((outcome) => {
+    const key = clean(outcome?.flag?.unitKey);
+    if (!key) return;
+    responseCells[key] = {
+      response: clean(outcome?.analystNote),
+      disposition: clean(outcome?.disposition),
+      resolved: !!outcome?.resolved,
+      mitigationNote: clean(outcome?.mitigationNote),
+      sources: Array.isArray(outcome?.sources) ? outcome.sources : [],
+    };
+  });
+
+  return [
+    {
+      phase: "initial",
+      content: {
+        note: "Initial matrix evidence and confidence assessment completed.",
+      },
+    },
+    {
+      phase: "critique",
+      content: {
+        overallFeedback: clean(state?.critique?.overallFeedback),
+        cells: critiqueCells,
+      },
+    },
+    {
+      phase: "response",
+      content: {
+        analystResponse: clean(state?.resolved?.analystSummary),
+        cells: responseCells,
+        sources: Array.isArray(state?.resolved?.responseSources) ? state.resolved.responseSources : [],
+      },
+    },
+  ];
+}
+
+function toSourceUniverseSummary(sourceUniverse = {}) {
+  const summary = {
+    cited: Number(sourceUniverse?.cited || 0),
+    corroborating: Number(sourceUniverse?.corroborating || 0),
+    unverified: Number(sourceUniverse?.unverified || 0),
+    excludedMarketing: Number(sourceUniverse?.excludedMarketing || 0),
+    excludedStale: Number(sourceUniverse?.excludedStale || 0),
+  };
+  summary.total = Object.values(summary).reduce((acc, value) => acc + Number(value || 0), 0);
+  return summary;
+}
+
+export function toUseCaseState(state = {}) {
+  const outputMode = state?.outputType === "matrix" ? "matrix" : "scorecard";
+  const qualityGrade = clean(state?.quality?.qualityGrade) || "decision-grade";
+  const sourceVerification = state?.quality?.sourceVerification && typeof state.quality.sourceVerification === "object"
+    ? state.quality.sourceVerification
+    : {};
+  const providerContributions = Array.isArray(state?.evidence?.providerContributions)
+    ? state.evidence.providerContributions
+    : [];
+  const analysisMeta = {
+    analysisMode: outputMode === "matrix"
+      ? (state?.mode === "deep-assist" ? "matrix-deep-assist" : "matrix")
+      : (state?.mode === "deep-assist" ? "deep-assist" : "hybrid"),
+    evidenceMode: state?.mode,
+    strictQuality: !!state?.strictQuality,
+    qualityGrade: qualityGrade === "decision-grade" ? "standard" : qualityGrade,
+    degradedReasons: (state?.quality?.reasonCodes || []).map((code) => ({ code, detail: code })),
+    terminalReasonCodes: state?.quality?.reasonCodes || [],
+    completionState: state?.ui?.status === "complete"
+      ? (qualityGrade === "decision-grade" ? "complete" : "complete_with_gaps")
+      : (state?.ui?.status === "error" ? "failed" : "running"),
+    sourceUniverse: toSourceUniverseSummary(state?.quality?.sourceUniverse || {}),
+    sourceVerificationChecked: Number(sourceVerification?.checked || 0),
+    sourceVerificationVerified: Number(sourceVerification?.verified || 0),
+    sourceVerificationNotFound: Number(sourceVerification?.notFound || 0),
+    sourceVerificationFetchFailed: Number(sourceVerification?.fetchFailed || 0),
+    sourceVerificationInvalidUrl: Number(sourceVerification?.invalidUrl || 0),
+    sourceVerificationPartialMatch: Number(sourceVerification?.partial || 0),
+    sourceVerificationNameOnly: Number(sourceVerification?.nameOnly || 0),
+    criticFlagsRaised: Number(state?.critique?.flags?.length || 0),
+    webSearchCalls: Number(providerContributions?.length || 0),
+    criticWebSearchCalls: 0,
+    discoveryWebSearchCalls: 0,
+    lowConfidenceTargetedWebSearchCalls: 0,
+    redTeamCallMade: Number(Object.keys(state?.redTeam?.cells || {}).length || 0) > 0,
+    redTeamHighSeverityCount: Number(
+      Object.values(state?.redTeam?.cells || {}).filter((entry) => String(entry?.severityIfWrong || "").toLowerCase() === "high").length
+    ),
+    synthesizerCallMade: !!clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
+    synthesizerModel: clean(state?.diagnostics?.stages?.find((entry) => entry?.stage === "stage_14_synthesize")?.modelRoute?.model || ""),
+    decisionGradeGate: state?.decisionGate || null,
+    decisionGradePassed: !!state?.decisionGradePassed,
+    decisionGradeFailureReason: clean(state?.decisionGradeFailureReason),
+    pipelineVersion: state?.pipelineVersion,
+    artifactVersion: state?.artifactVersion,
+  };
+
+  const base = {
+    id: state?.runId,
+    rawInput: state?.ui?.rawInput || "",
+    status: state?.ui?.status || "analyzing",
+    phase: state?.ui?.phase || "stage_01_intake",
+    origin: state?.ui?.origin || null,
+    researchSetup: state?.ui?.researchSetup || {},
+    errorMsg: state?.ui?.errorMsg || null,
+    followUps: state?.ui?.followUps || {},
+    outputMode,
+    analysisMeta,
+    researchConfigId: clean(state?.request?.researchConfigId) || null,
+    researchConfigName: clean(state?.config?.name) || null,
+    diagnostics: state?.diagnostics || null,
+  };
+
+  if (outputMode === "matrix") {
+    return {
+      ...base,
+      matrix: matrixFromState(state),
+      attributes: {
+        title: clean(state?.request?.titleHint) || clean(state?.ui?.rawInput),
+      },
+      dimScores: null,
+      critique: state?.critique || null,
+      finalScores: null,
+      debate: matrixDebateFromState(state),
+      discover: null,
+    };
+  }
+
+  const dimScores = scorecardDimScoresFromAssessment(state?.assessment, state?.request);
+  const finalDimensions = scorecardFinalDimensionsFromResolved(state?.resolved, state?.request, state?.critique);
+
+  return {
+    ...base,
+    attributes: {
+      title: clean(state?.request?.titleHint) || clean(state?.ui?.rawInput),
+      inputFrame: {
+        objective: state?.request?.objective || "",
+        decisionQuestion: state?.request?.decisionQuestion || "",
+        scopeContext: state?.request?.scopeContext || "",
+        roleContext: state?.request?.roleContext || "",
+      },
+    },
+    dimScores,
+    critique: state?.critique || null,
+    finalScores: {
+      dimensions: finalDimensions,
+      conclusion: clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
+      redTeam: state?.redTeam || {},
+    },
+    debate: scorecardDebateFromState(state),
+    discover: state?.discovery || null,
+    matrix: null,
+  };
+}
+
+export function ensureRequiredRequestInputs(state = {}) {
+  const request = state?.request || {};
+  if (!clean(request?.objective)) {
+    const err = new Error("Missing objective input.");
+    err.reasonCode = REASON_CODES.MISSING_REQUIRED_INPUT;
+    throw err;
+  }
+  if (request.outputType === "scorecard") {
+    const dimensions = Array.isArray(request?.scorecard?.dimensions) ? request.scorecard.dimensions : [];
+    if (!dimensions.length) {
+      const err = new Error("No scorecard dimensions configured.");
+      err.reasonCode = REASON_CODES.INVALID_CONFIG_SCHEMA;
+      throw err;
+    }
+  } else {
+    const attributes = Array.isArray(request?.matrix?.attributes) ? request.matrix.attributes : [];
+    if (!attributes.length) {
+      const err = new Error("No matrix attributes configured.");
+      err.reasonCode = REASON_CODES.INVALID_CONFIG_SCHEMA;
+      throw err;
+    }
+  }
+}

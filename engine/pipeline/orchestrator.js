@@ -1,0 +1,349 @@
+import {
+  createRunState,
+  toUseCaseState,
+} from "./contracts/run-state.js";
+import { REASON_CODES, normalizeReasonCodes } from "./contracts/reason-codes.js";
+import { runRoutePreflight } from "../lib/routing/route-preflight.js";
+import {
+  createStageRecord,
+  completeStageRecord,
+  appendStageRecord,
+  appendIoRecord,
+  appendProgressRecord,
+  pushReasonCodes,
+} from "../lib/diagnostics/stage-logger.js";
+import { buildDebugBundle } from "../lib/diagnostics/debug-bundle.js";
+
+import { runStage as run01, STAGE_ID as STAGE_01_ID, STAGE_TITLE as STAGE_01_TITLE } from "./stages/01-intake.js";
+import { runStage as run01b, STAGE_ID as STAGE_01B_ID, STAGE_TITLE as STAGE_01B_TITLE } from "./stages/01b-subject-discovery.js";
+import { runStage as run02, STAGE_ID as STAGE_02_ID, STAGE_TITLE as STAGE_02_TITLE } from "./stages/02-plan.js";
+import { runStage as run03a, STAGE_ID as STAGE_03A_ID, STAGE_TITLE as STAGE_03A_TITLE } from "./stages/03a-evidence-memory.js";
+import { runStage as run03b, STAGE_ID as STAGE_03B_ID, STAGE_TITLE as STAGE_03B_TITLE } from "./stages/03b-evidence-web.js";
+import { runStage as run03c, STAGE_ID as STAGE_03C_ID, STAGE_TITLE as STAGE_03C_TITLE } from "./stages/03c-evidence-deep-assist.js";
+import { runStage as run04, STAGE_ID as STAGE_04_ID, STAGE_TITLE as STAGE_04_TITLE } from "./stages/04-merge.js";
+import { runStage as run05, STAGE_ID as STAGE_05_ID, STAGE_TITLE as STAGE_05_TITLE } from "./stages/05-score-confidence.js";
+import { runStage as run06, STAGE_ID as STAGE_06_ID, STAGE_TITLE as STAGE_06_TITLE } from "./stages/06-source-verify.js";
+import { runStage as run07, STAGE_ID as STAGE_07_ID, STAGE_TITLE as STAGE_07_TITLE } from "./stages/07-source-assess.js";
+import { runStage as run08, STAGE_ID as STAGE_08_ID, STAGE_TITLE as STAGE_08_TITLE } from "./stages/08-recover.js";
+import { runStage as run09, STAGE_ID as STAGE_09_ID, STAGE_TITLE as STAGE_09_TITLE } from "./stages/09-rescore.js";
+import { runStage as run10, STAGE_ID as STAGE_10_ID, STAGE_TITLE as STAGE_10_TITLE } from "./stages/10-coherence.js";
+import { runStage as run11, STAGE_ID as STAGE_11_ID, STAGE_TITLE as STAGE_11_TITLE } from "./stages/11-challenge.js";
+import { runStage as run12, STAGE_ID as STAGE_12_ID, STAGE_TITLE as STAGE_12_TITLE } from "./stages/12-counter.js";
+import { runStage as run13, STAGE_ID as STAGE_13_ID, STAGE_TITLE as STAGE_13_TITLE } from "./stages/13-defend.js";
+import { runStage as run14, STAGE_ID as STAGE_14_ID, STAGE_TITLE as STAGE_14_TITLE } from "./stages/14-synthesize.js";
+import { runStage as run15, STAGE_ID as STAGE_15_ID, STAGE_TITLE as STAGE_15_TITLE } from "./stages/15-finalize.js";
+
+function clean(value) {
+  return String(value || "").trim();
+}
+
+function isPlainObject(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMerge(base, patch) {
+  if (!isPlainObject(base)) return patch;
+  if (!isPlainObject(patch)) return patch;
+
+  const out = { ...base };
+  Object.keys(patch).forEach((key) => {
+    const next = patch[key];
+    const current = out[key];
+    if (Array.isArray(next)) {
+      out[key] = next;
+      return;
+    }
+    if (isPlainObject(next) && isPlainObject(current)) {
+      out[key] = deepMerge(current, next);
+      return;
+    }
+    out[key] = next;
+  });
+  return out;
+}
+
+function applyStatePatch(state = {}, patch = {}) {
+  if (!isPlainObject(patch)) return state;
+  const next = { ...state };
+  Object.keys(patch).forEach((key) => {
+    if (isPlainObject(patch[key]) && isPlainObject(next[key])) {
+      next[key] = deepMerge(next[key], patch[key]);
+    } else {
+      next[key] = patch[key];
+    }
+  });
+  return next;
+}
+
+const STAGE_BUDGETS = {
+  [STAGE_01B_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 4000 },
+  [STAGE_02_ID]: { timeoutMs: 45000, retryMax: 1, tokenBudget: 4000 },
+  [STAGE_03A_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 10000 },
+  [STAGE_03B_ID]: { timeoutMs: 120000, retryMax: 2, tokenBudget: 12000 },
+  [STAGE_03C_ID]: { timeoutMs: 20 * 60 * 1000, retryMax: 0, tokenBudget: 12000 },
+  [STAGE_04_ID]: { timeoutMs: 45000, retryMax: 1, tokenBudget: 6000 },
+  [STAGE_05_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_06_ID]: { timeoutMs: 60000, retryMax: 0, tokenBudget: 0 },
+  [STAGE_07_ID]: { timeoutMs: 15000, retryMax: 0, tokenBudget: 0 },
+  [STAGE_08_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 8000 },
+  [STAGE_09_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 6000 },
+  [STAGE_10_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_11_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_12_ID]: { timeoutMs: 90000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_13_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_14_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 6000 },
+  [STAGE_15_ID]: { timeoutMs: 45000, retryMax: 1, tokenBudget: 4000 },
+};
+
+const STAGES = [
+  { id: STAGE_01_ID, title: STAGE_01_TITLE, run: run01, optional: false },
+  { id: STAGE_01B_ID, title: STAGE_01B_TITLE, run: run01b, optional: true },
+  { id: STAGE_02_ID, title: STAGE_02_TITLE, run: run02, optional: false },
+  { id: STAGE_03A_ID, title: STAGE_03A_TITLE, run: run03a, optional: false, mode: "native" },
+  { id: STAGE_03B_ID, title: STAGE_03B_TITLE, run: run03b, optional: false, mode: "native" },
+  { id: STAGE_03C_ID, title: STAGE_03C_TITLE, run: run03c, optional: false, mode: "deep-assist" },
+  { id: STAGE_04_ID, title: STAGE_04_TITLE, run: run04, optional: false },
+  { id: STAGE_05_ID, title: STAGE_05_TITLE, run: run05, optional: false },
+  { id: STAGE_06_ID, title: STAGE_06_TITLE, run: run06, optional: false },
+  { id: STAGE_07_ID, title: STAGE_07_TITLE, run: run07, optional: false },
+  { id: STAGE_08_ID, title: STAGE_08_TITLE, run: run08, optional: false },
+  { id: STAGE_09_ID, title: STAGE_09_TITLE, run: run09, optional: false },
+  { id: STAGE_10_ID, title: STAGE_10_TITLE, run: run10, optional: false },
+  { id: STAGE_11_ID, title: STAGE_11_TITLE, run: run11, optional: false },
+  { id: STAGE_12_ID, title: STAGE_12_TITLE, run: run12, optional: false },
+  { id: STAGE_13_ID, title: STAGE_13_TITLE, run: run13, optional: false },
+  { id: STAGE_14_ID, title: STAGE_14_TITLE, run: run14, optional: false },
+  { id: STAGE_15_ID, title: STAGE_15_TITLE, run: run15, optional: false },
+];
+
+function stageEnabled(stage = {}, state = {}) {
+  if (!stage?.mode) return true;
+  if (stage.mode === "native") return clean(state?.mode).toLowerCase() === "native";
+  if (stage.mode === "deep-assist") return clean(state?.mode).toLowerCase() === "deep-assist";
+  return true;
+}
+
+function shouldAbortOnError(state = {}, reasonCodes = [], stage = {}) {
+  const codes = normalizeReasonCodes(reasonCodes);
+  const strict = !!state?.strictQuality;
+  if (strict) return true;
+  if (!stage?.optional) return true;
+
+  const hardAbortInNonStrict = new Set([
+    REASON_CODES.ROUTE_MISMATCH_PREFLIGHT,
+    REASON_CODES.RESPONSE_PARSE_FAILED,
+    REASON_CODES.COVERAGE_CATASTROPHIC,
+  ]);
+  return codes.some((code) => hardAbortInNonStrict.has(code));
+}
+
+function emitProgress(state, callbacks = {}) {
+  const onProgress = typeof callbacks?.onProgress === "function" ? callbacks.onProgress : null;
+  if (!onProgress) return;
+  const uiState = toUseCaseState(state);
+  onProgress(uiState.phase, uiState);
+}
+
+function appendRoutingDiagnostics(state = {}, routes = []) {
+  state.diagnostics.routing = Array.isArray(routes) ? routes : [];
+  return state;
+}
+
+function appendQualityReasonCodes(state = {}, reasonCodes = []) {
+  const merged = normalizeReasonCodes([
+    ...(Array.isArray(state?.quality?.reasonCodes) ? state.quality.reasonCodes : []),
+    ...(Array.isArray(reasonCodes) ? reasonCodes : []),
+  ]);
+  state.quality = {
+    ...(state.quality || {}),
+    reasonCodes: merged,
+  };
+  return state;
+}
+
+export async function runCanonicalPipeline(input, config, callbacks = {}) {
+  const transport = callbacks?.transport;
+  if (!transport?.callAnalyst || !transport?.callCritic || !transport?.callSynthesizer) {
+    throw new Error("runCanonicalPipeline requires transport with analyst, critic, and synthesizer calls.");
+  }
+
+  let state = createRunState({ input, config, runId: input?.id });
+  state = applyStatePatch(state, {
+    ui: {
+      status: "analyzing",
+      phase: STAGE_01_ID,
+    },
+  });
+
+  const runtime = {
+    transport,
+    config,
+    prompts: {
+      analyst: config?.prompts?.analyst,
+      critic: config?.prompts?.critic,
+      analystResponse: config?.prompts?.analystResponse,
+      synthesizer: config?.prompts?.synthesizer,
+      followUp: config?.prompts?.followUp,
+    },
+    budgets: STAGE_BUDGETS,
+  };
+
+  appendProgressRecord(state, {
+    stageId: STAGE_01_ID,
+    title: STAGE_01_TITLE,
+    status: "started",
+  });
+  emitProgress(state, callbacks);
+
+  try {
+    const preflight = runRoutePreflight({ state, config });
+    appendRoutingDiagnostics(state, preflight.routes);
+  } catch (err) {
+    const reasonCode = clean(err?.reasonCode) || REASON_CODES.ROUTE_MISMATCH_PREFLIGHT;
+    appendQualityReasonCodes(state, [reasonCode, REASON_CODES.RUN_ABORTED_STRICT_QUALITY]);
+    state = applyStatePatch(state, {
+      ui: {
+        status: "error",
+        phase: STAGE_01_ID,
+        errorMsg: clean(err?.message) || "Route preflight failed.",
+      },
+    });
+    pushReasonCodes(state, [reasonCode, REASON_CODES.RUN_ABORTED_STRICT_QUALITY]);
+
+    const debugBundle = buildDebugBundle(state, { status: "error", error: err });
+    if (typeof callbacks?.onDebugSession === "function") {
+      callbacks.onDebugSession(debugBundle, { downloadRequested: !!input?.options?.downloadDebugLog });
+    }
+    emitProgress(state, callbacks);
+    throw err;
+  }
+
+  let pipelineError = null;
+
+  for (const stage of STAGES) {
+    if (!stageEnabled(stage, state)) continue;
+
+    const stageRecord = createStageRecord(stage.id, { title: stage.title });
+    appendProgressRecord(state, {
+      stageId: stage.id,
+      title: stage.title,
+      status: "started",
+    });
+
+    try {
+      const result = await stage.run({ state, runtime, callbacks });
+      const reasonCodes = normalizeReasonCodes(result?.reasonCodes || []);
+      const statePatch = result?.statePatch && typeof result.statePatch === "object"
+        ? result.statePatch
+        : {};
+
+      state = applyStatePatch(state, statePatch);
+      state = applyStatePatch(state, {
+        ui: { phase: stage.id },
+      });
+      appendQualityReasonCodes(state, reasonCodes);
+      pushReasonCodes(state, reasonCodes);
+
+      if (result?.io) appendIoRecord(state, { stageId: stage.id, ...result.io });
+
+      const completedRecord = completeStageRecord(stageRecord, {
+        status: result?.stageStatus || "ok",
+        reasonCodes,
+        retries: Number(result?.retries || 0),
+        modelRoute: result?.modelRoute || stageRecord.modelRoute,
+        tokens: result?.tokens || null,
+        diagnostics: result?.diagnostics || {},
+      });
+      appendStageRecord(state, completedRecord);
+
+      appendProgressRecord(state, {
+        stageId: stage.id,
+        title: stage.title,
+        status: result?.stageStatus || "ok",
+        reasonCodes,
+      });
+
+      emitProgress(state, callbacks);
+    } catch (err) {
+      pipelineError = err;
+      const reasonCodes = normalizeReasonCodes([
+        ...(Array.isArray(err?.reasonCodes) ? err.reasonCodes : []),
+        clean(err?.reasonCode),
+      ]);
+
+      const completedRecord = completeStageRecord(stageRecord, {
+        status: "failed",
+        reasonCodes,
+        retries: Number(err?.attempts || 0),
+        diagnostics: {
+          error: clean(err?.message),
+        },
+      });
+      appendStageRecord(state, completedRecord);
+      appendQualityReasonCodes(state, reasonCodes);
+      pushReasonCodes(state, reasonCodes);
+      appendProgressRecord(state, {
+        stageId: stage.id,
+        title: stage.title,
+        status: "failed",
+        reasonCodes,
+      });
+
+      const abort = shouldAbortOnError(state, reasonCodes, stage);
+      if (abort) {
+        const failureCodes = state?.strictQuality
+          ? normalizeReasonCodes([...reasonCodes, REASON_CODES.RUN_ABORTED_STRICT_QUALITY])
+          : reasonCodes;
+
+        appendQualityReasonCodes(state, failureCodes);
+        pushReasonCodes(state, failureCodes);
+
+        state = applyStatePatch(state, {
+          ui: {
+            status: "error",
+            phase: stage.id,
+            errorMsg: clean(err?.message) || `Stage failed: ${stage.id}`,
+          },
+        });
+        emitProgress(state, callbacks);
+        break;
+      }
+
+      state = applyStatePatch(state, {
+        ui: { phase: stage.id },
+      });
+      emitProgress(state, callbacks);
+    }
+  }
+
+  if (state?.ui?.status !== "error" && clean(state?.ui?.status) !== "complete") {
+    state = applyStatePatch(state, {
+      ui: {
+        status: "complete",
+        phase: STAGE_15_ID,
+      },
+    });
+  }
+
+  state.diagnostics.run.finishedAt = new Date().toISOString();
+  const debugBundle = buildDebugBundle(state, {
+    status: state?.ui?.status,
+    error: pipelineError,
+  });
+  if (typeof callbacks?.onDebugSession === "function") {
+    callbacks.onDebugSession(debugBundle, {
+      downloadRequested: !!input?.options?.downloadDebugLog,
+    });
+  }
+
+  const output = toUseCaseState(state);
+  emitProgress(state, callbacks);
+
+  if (state?.ui?.status === "error") {
+    const error = pipelineError || new Error(state?.ui?.errorMsg || "Pipeline failed.");
+    error.reasonCodes = normalizeReasonCodes(state?.quality?.reasonCodes || []);
+    throw error;
+  }
+
+  return output;
+}
