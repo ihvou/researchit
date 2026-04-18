@@ -4,55 +4,53 @@ This proposal aligns all runs (Scorecard/Matrix, Native/Deep Assist) to one stag
 
 ## Actor policy
 
-- `Analyst`: plans research, collects evidence, merges, scores/assesses, recovers low-confidence gaps, and defends against Critic flags.
-- `Critic`: challenges weak claims, finds counter-evidence, and tests decision robustness.
-- Deterministic engine steps (verification, quality caps, routing, finalization) are not additional actors.
+- `Analyst`: plans research, collects evidence, merges evidence, scores/assesses, recovers low-confidence gaps, and defends against Critic flags.
+- `Critic`: challenges weak claims, finds counter-evidence, and pressure-tests decision robustness.
+- Deterministic engine steps (verification, source assessment, routing, gates/finalization) are not additional actors.
 
 ## Canonical Pipeline (applies to all flows)
 
 ```mermaid
 flowchart TD
-    INTAKE["1) Input Intake\nGoal: normalize request into a stable schema\nActor: deterministic engine\nModel: N/A\nInput: raw user input + selected research type + setup fields\nRequest: N/A\nResponse: N/A\nOutput: normalizedRequest"]
+    INTAKE["PROCESS: Input Intake\nGOAL: normalize request into stable schema\nACTOR: deterministic engine\nMODEL: N/A\nINPUT: raw user input + selected type + setup fields\nREQUEST: N/A\nRESPONSE: N/A\nOUTPUT: normalizedRequest"]
 
-    PLAN["2) Research Planning\nGoal: define scope, search plan, and counterfactual probes\nActor: Analyst\nModel: gemini-2.5-flash (planning default)\nInput: normalizedRequest + research config\nRequest: one structured planning call\nResponse: plan JSON (queries, source targets, risk probes)\nOutput: researchPlan"]
+    PLAN["PROCESS: Research Planning\nGOAL: define scope, query plan, counterfactual probes\nACTOR: Analyst\nMODEL: gemini-2.5-flash (planning default)\nINPUT: normalizedRequest + research config\nREQUEST: one structured planning call\nRESPONSE: plan JSON (queries, source targets, risk probes)\nOUTPUT: researchPlan"]
 
-    ROUTER{"Evidence Collection Mode Router\nGoal: select Native or Deep Assist collection path\nActor: deterministic engine\nModel: N/A\nInput: normalizedRequest.evidenceMode\nRequest: N/A\nResponse: N/A\nOutput: selected path"}
+    ROUTER{"PROCESS: Evidence Mode Routing\nGOAL: choose Native or Deep Assist collection\nACTOR: deterministic engine\nMODEL: N/A\nINPUT: normalizedRequest.evidenceMode\nREQUEST: N/A\nRESPONSE: N/A\nOUTPUT: selectedCollectionPath"}
 
-    MEM_NATIVE["3) Evidence Collection (Memory, Native)\nGoal: produce memory-only draft evidence\nActor: Analyst\nModel: openai:gpt-5.4 (or strongest OpenAI available)\nInput: normalizedRequest + researchPlan\nRequest: structured evidence call, no web search\nResponse: draft evidence objects\nOutput: memoryEvidenceDraft"]
+    MEM_NATIVE["PROCESS: Evidence Collection (Memory, Native)\nGOAL: create memory-grounded draft evidence\nACTOR: Analyst\nMODEL: openai:gpt-5.4 (or strongest OpenAI available)\nINPUT: normalizedRequest + researchPlan\nREQUEST: structured evidence call (no web search)\nRESPONSE: draft evidence objects\nOUTPUT: memoryEvidenceDraft"]
 
-    MEM_DA["3) Evidence Collection (Memory, Deep Assist)\nGoal: collect independent memory-grounded drafts\nActor: Analyst\nModel: openai:gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro\nInput: normalizedRequest + researchPlan\nRequest: parallel deep-research style structured calls\nResponse: provider drafts with confidence + rationale\nOutput: memoryEvidenceProviders"]
+    WEB_NATIVE["PROCESS: Evidence Collection (Web, Native)\nGOAL: gather cited web evidence for uncovered/weak claims\nACTOR: Analyst\nMODEL: gemini-2.5-pro (web default)\nINPUT: normalizedRequest + researchPlan + memoryEvidenceDraft\nREQUEST: structured web-search evidence call\nRESPONSE: cited findings with source metadata\nOUTPUT: webEvidenceDraft"]
 
-    WEB_NATIVE["4) Evidence Collection (Web, Native)\nGoal: gather cited web evidence for uncovered/weak claims\nActor: Analyst\nModel: gemini-2.5-pro (web default)\nInput: normalizedRequest + researchPlan + memory evidence\nRequest: structured web-search evidence call\nResponse: cited findings with source metadata\nOutput: webEvidenceDraft"]
+    EVID_DA["PROCESS: Evidence Collection (Deep Assist)\nGOAL: gather full evidence packets (memory + web) from multiple providers\nACTOR: Analyst\nMODEL: openai:gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro\nINPUT: normalizedRequest + researchPlan\nREQUEST: parallel deep-research style calls with provider-side web research\nRESPONSE: per-provider evidence drafts with citations/confidence\nOUTPUT: deepAssistEvidenceProviders"]
 
-    WEB_DA["4) Evidence Collection (Web, Deep Assist)\nGoal: collect independent web-grounded drafts\nActor: Analyst\nModel: openai:gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro\nInput: normalizedRequest + researchPlan + provider memory drafts\nRequest: parallel deep-research style web-grounded calls\nResponse: provider web drafts with citations\nOutput: webEvidenceProviders"]
+    MERGE["PROCESS: Evidence Merge\nGOAL: build one unified evidence bundle\nACTOR: Analyst\nMODEL: openai:gpt-5.4-mini (or stronger if quality requires)\nINPUT: native drafts OR deep-assist provider drafts\nREQUEST: merge/adjudication call and deterministic merge policy\nRESPONSE: merged evidence + agreement signals\nOUTPUT: evidenceBundleV1"]
 
-    MERGE["5) Evidence Merge\nGoal: build one unified evidence bundle\nActor: Analyst\nModel: openai:gpt-5.4-mini (or stronger when needed)\nInput: memory + web drafts (native or provider-based)\nRequest: merge/adjudication call or deterministic merge policy\nResponse: merged evidence with agreement signals\nOutput: evidenceBundleV1"]
+    SCORE["PROCESS: Scoring / Assessment (if applicable)\nGOAL: map evidence to rubric scores or matrix values\nACTOR: Analyst\nMODEL: openai:gpt-5.4\nINPUT: evidenceBundleV1 + rubric/attribute definitions\nREQUEST: structured scoring call\nRESPONSE: scored dimensions or matrix cells\nOUTPUT: scoredStateV1"]
 
-    SCORE["6) Scoring / Assessment (if applicable)\nGoal: map evidence to rubric scores or matrix values\nActor: Analyst\nModel: openai:gpt-5.4\nInput: evidenceBundleV1 + rubric/attribute definitions\nRequest: structured scoring call\nResponse: scored dimensions or matrix cells\nOutput: scoredStateV1"]
+    CONF["PROCESS: Confidence Assessment\nGOAL: assign calibrated confidence with reasons\nACTOR: Analyst\nMODEL: openai:gpt-5.4-mini\nINPUT: scoredStateV1 + evidence quality indicators\nREQUEST: confidence calibration call\nRESPONSE: confidence levels + confidence reasons\nOUTPUT: assessedStateV1"]
 
-    CONF["7) Confidence Assessment\nGoal: assign calibrated confidence with reasons\nActor: Analyst\nModel: openai:gpt-5.4-mini\nInput: scoredStateV1 + evidence quality indicators\nRequest: confidence calibration call\nResponse: confidence levels + confidence reasons\nOutput: assessedStateV1"]
+    VERIFY["PROCESS: Source Verification\nGOAL: verify URLs/quotes and set verification status\nACTOR: deterministic engine\nMODEL: N/A\nINPUT: assessedStateV1 sources\nREQUEST: HTTP fetch + quote/name matching\nRESPONSE: fetch/match results per source\nOUTPUT: verifiedStateV1"]
 
-    VERIFY["8) Source Verification\nGoal: verify URLs/quotes and classify verification status\nActor: deterministic engine\nModel: N/A\nInput: assessedStateV1 sources\nRequest: HTTP fetch + quote/name matching\nResponse: fetch/match results per source\nOutput: verifiedStateV1"]
+    ASSESS["PROCESS: Source Assessment\nGOAL: apply quality caps/penalties from verification results\nACTOR: deterministic engine\nMODEL: N/A\nINPUT: verifiedStateV1 + quality policy\nREQUEST: N/A\nRESPONSE: N/A\nOUTPUT: qualityAdjustedStateV1"]
 
-    ASSESS["9) Source Assessment\nGoal: apply quality caps/penalties using verification results\nActor: deterministic engine\nModel: N/A\nInput: verifiedStateV1 + quality policy\nRequest: N/A\nResponse: N/A\nOutput: qualityAdjustedStateV1"]
+    COHERENCE["PROCESS: Consistency + Coherence Check\nGOAL: detect cross-item contradictions and logic breaks\nACTOR: Critic\nMODEL: claude-sonnet-4-0 (recommended alias)\nINPUT: qualityAdjustedStateV1\nREQUEST: structured consistency/coherence review call\nRESPONSE: contradiction flags + suggested corrections\nOUTPUT: coherenceFindings"]
 
-    COHERENCE["10) Consistency + Coherence Check\nGoal: detect cross-item contradictions and logic breaks\nActor: Critic\nModel: claude-sonnet-4-20250514\nInput: qualityAdjustedStateV1\nRequest: structured consistency/coherence review call\nResponse: contradiction flags + suggested corrections\nOutput: coherenceFindings"]
+    RECOVER["PROCESS: Extra Evidence for Low Confidence\nGOAL: recover low-confidence or sparse-evidence areas\nACTOR: Analyst\nMODEL: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)\nINPUT: qualityAdjustedStateV1 + coherenceFindings + researchPlan\nREQUEST: targeted plan + web search + focused reassessment\nRESPONSE: incremental evidence patches\nOUTPUT: recoveredEvidencePatch"]
 
-    RECOVER["11) Extra Evidence for Low Confidence\nGoal: recover low-confidence or sparse-evidence areas\nActor: Analyst\nModel: gemini-2.5-pro (search) + openai:gpt-5.4 (rescore)\nInput: qualityAdjustedStateV1 + coherenceFindings + researchPlan\nRequest: targeted query plan + web search + focused reassessment\nResponse: incremental evidence patches\nOutput: recoveredEvidencePatch"]
+    RESCORE["PROCESS: Re-score + Confidence Re-assessment\nGOAL: update scores/values/confidence after recovery\nACTOR: Analyst\nMODEL: openai:gpt-5.4\nINPUT: qualityAdjustedStateV1 + recoveredEvidencePatch\nREQUEST: structured update call\nRESPONSE: updated scoring + confidence\nOUTPUT: assessedStateV2"]
 
-    RESCORE["12) Re-score + Confidence Re-assessment\nGoal: update scores/values/confidence after recovery\nActor: Analyst\nModel: openai:gpt-5.4\nInput: qualityAdjustedStateV1 + recoveredEvidencePatch\nRequest: structured update call\nResponse: updated scoring + confidence\nOutput: assessedStateV2"]
+    CHALLENGE["PROCESS: Challenge Overclaims + Weak Evidence\nGOAL: pressure-test strongest claims and overconfidence\nACTOR: Critic\nMODEL: claude-sonnet-4-0 (recommended alias)\nINPUT: assessedStateV2\nREQUEST: structured challenge/audit call\nRESPONSE: critic flags with rationale\nOUTPUT: criticFlags"]
 
-    CHALLENGE["13) Challenge Overclaims and Weak Evidence\nGoal: stress-test strongest claims and overconfidence\nActor: Critic\nModel: claude-sonnet-4-20250514\nInput: assessedStateV2\nRequest: structured challenge/audit call\nResponse: critic flags with rationale\nOutput: criticFlags"]
+    COUNTER["PROCESS: Counter-case + Missed Risks (Web)\nGOAL: find disconfirming evidence and unmodeled risks\nACTOR: Critic\nMODEL: claude-sonnet-4-0 (web enabled)\nINPUT: assessedStateV2 + criticFlags\nREQUEST: targeted web-search counter-case call\nRESPONSE: counter-evidence + missed-risk findings\nOUTPUT: criticCounterPack"]
 
-    COUNTER["14) Counter-case + Missed Risks (Web)\nGoal: find disconfirming evidence and unmodeled risks\nActor: Critic\nModel: claude-sonnet-4-20250514 (web enabled)\nInput: assessedStateV2 + criticFlags\nRequest: targeted web-search counter-case call\nResponse: counter-evidence + missed-risk findings\nOutput: criticCounterPack"]
+    DEFEND["PROCESS: Concede / Defend with Updated Evidence\nGOAL: resolve critic objections explicitly\nACTOR: Analyst\nMODEL: openai:gpt-5.4\nINPUT: assessedStateV2 + criticFlags + criticCounterPack\nREQUEST: structured concede/defend adjudication call\nRESPONSE: accepted/rejected flags + revised reasoning\nOUTPUT: resolvedState"]
 
-    DEFEND["15) Concede / Defend with Updated Evidence\nGoal: resolve critic objections explicitly\nActor: Analyst\nModel: openai:gpt-5.4\nInput: assessedStateV2 + criticFlags + criticCounterPack\nRequest: structured concede/defend adjudication call\nResponse: accepted/rejected flags + revised reasoning\nOutput: resolvedState"]
-
-    FINAL["16) Final Confidence + Final Scores/Values\nGoal: lock final output and decision-grade status\nActor: Analyst + deterministic engine\nModel: openai:gpt-5.4-mini (summary) + deterministic gates\nInput: resolvedState + quality gates\nRequest: final summarization call + deterministic gate checks\nResponse: final narrative + decision implications\nOutput: finalResearchArtifact"]
+    FINAL["PROCESS: Final Confidence + Final Scores/Values\nGOAL: lock final output and decision-grade status\nACTOR: Analyst + deterministic engine\nMODEL: openai:gpt-5.4-mini (summary) + deterministic gates\nINPUT: resolvedState + quality gates\nREQUEST: final summarization call + deterministic checks\nRESPONSE: final narrative + decision implications\nOUTPUT: finalResearchArtifact"]
 
     INTAKE --> PLAN --> ROUTER
     ROUTER -->|Native| MEM_NATIVE --> WEB_NATIVE --> MERGE
-    ROUTER -->|Deep Assist| MEM_DA --> WEB_DA --> MERGE
+    ROUTER -->|Deep Assist| EVID_DA --> MERGE
     MERGE --> SCORE --> CONF --> VERIFY --> ASSESS --> COHERENCE --> RECOVER --> RESCORE --> CHALLENGE --> COUNTER --> DEFEND --> FINAL
 ```
 
@@ -66,12 +64,13 @@ flowchart TD
   - Matrix: cross-row/cross-column logic and comparability.
 - Stage `11` recovery target unit:
   - Scorecard: dimension.
-  - Matrix: cell (or bounded cell-group where quality-equivalent).
+  - Matrix: cell (or bounded cell-group when quality-equivalent).
 
 ## Model selection principles (quality-bar aligned)
 
 - High-impact reasoning steps use stronger models.
-- Planning/merge/calibration use cheaper models only when quality is not materially reduced.
+- Planning/merge/calibration can use cheaper models only when quality is not materially reduced.
 - Analyst web collection routes through Gemini.
-- Critic challenge and critic web counter-case route through Claude by default.
+- Critic challenge and counter-case web search route through Claude by default.
 - No silent degraded fallback in strict quality mode; failures should stop with explicit diagnostics.
+- For deterministic reproducibility, pin snapshots; for best-current quality, use approved latest aliases.
