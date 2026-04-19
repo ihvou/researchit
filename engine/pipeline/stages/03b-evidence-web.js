@@ -137,6 +137,9 @@ ${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(at
 
 Rules:
 - Cover every listed subject x attribute cell.
+- Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
+- For each non-empty source, include a valid https URL, a concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If evidence is unavailable, keep "sources" empty, use low confidence, and explain what is missing in "missingEvidence".
 
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
@@ -272,6 +275,9 @@ ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${
 
 Rules:
 - Use sources that can be cited with specific URLs when possible.
+- Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
+- For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is unavailable, keep "sources" empty and explain the gap in "missingEvidence".
 
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;

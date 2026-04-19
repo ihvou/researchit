@@ -120,6 +120,83 @@ function groupMatrixSelections(items = []) {
   return groups;
 }
 
+function computeMatrixAdaptiveBudget(state = {}, runtime = {}) {
+  const limits = runtime?.config?.limits || {};
+  const cells = ensureArray(state?.assessment?.matrix?.cells);
+  const totalCells = cells.length;
+  if (!totalCells) {
+    return {
+      requestedBudget: 0,
+      diagnostics: {
+        totalCells: 0,
+        lowConfidenceCells: 0,
+        ratioTarget: 0,
+        floorTarget: 0,
+        configuredMax: 0,
+        lowConfidenceDeficit: 0,
+        criticalSourceDeficit: 0,
+      },
+    };
+  }
+
+  const ratioTarget = Math.max(0, Number(limits?.matrixAdaptiveTargetedRatio || 0.7));
+  const floorTarget = Math.max(1, Number(limits?.matrixAdaptiveTargetedFloor || 12));
+  const configuredMax = Math.max(1, Number(limits?.matrixAdaptiveTargetedMax || 36));
+  const decisionGate = limits?.matrixDecisionGradeGate && typeof limits.matrixDecisionGradeGate === "object"
+    ? limits.matrixDecisionGradeGate
+    : {};
+
+  const lowConfidenceCells = cells.filter((cell) => clean(cell?.confidence).toLowerCase() === "low").length;
+  const maxLowRatio = Number(decisionGate?.maxLowConfidenceRatio);
+  const maxAllowedLow = Number.isFinite(maxLowRatio)
+    ? Math.max(0, Math.floor(totalCells * Math.max(0, maxLowRatio)))
+    : 0;
+  const lowConfidenceDeficit = Number.isFinite(maxLowRatio)
+    ? Math.max(0, lowConfidenceCells - maxAllowedLow)
+    : 0;
+
+  const minSourcesPerCriticalCell = Math.max(
+    1,
+    Number(decisionGate?.minSourcesPerCriticalCell || decisionGate?.minSourcesPerCriticalUnit || 2)
+  );
+  const criticalAttributeIds = new Set(
+    ensureArray(decisionGate?.criticalAttributeIds)
+      .map((id) => clean(id))
+      .filter(Boolean)
+  );
+  const criticalCells = criticalAttributeIds.size
+    ? cells.filter((cell) => criticalAttributeIds.has(clean(cell?.attributeId)))
+    : cells;
+  const criticalSourceDeficit = criticalCells.filter((cell) => ensureArray(cell?.sources).length < minSourcesPerCriticalCell).length;
+
+  const ratioBudget = Math.ceil(totalCells * ratioTarget);
+  let requestedBudget = Math.max(floorTarget, ratioBudget, lowConfidenceDeficit, criticalSourceDeficit);
+  if (state?.strictQuality) {
+    requestedBudget = Math.max(requestedBudget, lowConfidenceCells, criticalSourceDeficit);
+  }
+
+  const cap = state?.strictQuality ? totalCells : configuredMax;
+  requestedBudget = Math.max(1, Math.min(totalCells, Math.min(requestedBudget, cap)));
+
+  return {
+    requestedBudget,
+    diagnostics: {
+      totalCells,
+      lowConfidenceCells,
+      ratioTarget,
+      floorTarget,
+      configuredMax,
+      strictQuality: !!state?.strictQuality,
+      maxLowRatio: Number.isFinite(maxLowRatio) ? maxLowRatio : null,
+      maxAllowedLow: Number.isFinite(maxLowRatio) ? maxAllowedLow : null,
+      lowConfidenceDeficit,
+      minSourcesPerCriticalCell,
+      criticalSourceDeficit,
+      criticalCellCount: criticalCells.length,
+    },
+  };
+}
+
 function selectMatrixUnits(state = {}, budget = 12) {
   const subjects = ensureArray(state?.request?.matrix?.subjects);
   const attributes = ensureArray(state?.request?.matrix?.attributes);
@@ -222,8 +299,8 @@ export async function runStage(context = {}) {
   const reasonCodes = [];
 
   if (state?.outputType === "matrix") {
-    const adaptiveBudget = Number(runtime?.config?.limits?.matrixAdaptiveTargetedMax || 16);
-    const selection = selectMatrixUnits(state, adaptiveBudget);
+    const budgetPlan = computeMatrixAdaptiveBudget(state, runtime);
+    const selection = selectMatrixUnits(state, budgetPlan.requestedBudget);
     const { selected, groups } = selection;
     if (!selected.length) {
       reasonCodes.push(REASON_CODES.RECOVERY_BUDGET_STARVED);
@@ -252,6 +329,9 @@ ${group.map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${ite
 
 Rules:
 - Focus on what is weak for each listed cell.
+- Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, or reputable news) over vendor claims.
+- For each non-empty source, include a valid https URL, a concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is still unavailable, keep "sources" empty and describe the missing data in "missingEvidence".
 
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
@@ -305,6 +385,7 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         requestedBudget: selection.requestedBudget,
         effectiveBudget: selection.effectiveBudget,
         attributeCoverageFloorReserved: selection.floorReserved,
+        adaptiveBudget: budgetPlan.diagnostics,
         retries: totalRetries,
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
@@ -344,6 +425,9 @@ ${selected.map((item) => `- ${item.key}: ${item.label}
 
 Rules:
 - Focus on closing the specific weakness for each target.
+- Use high-quality sources whenever possible; prefer independent evidence (government, research, analyst, reputable news).
+- For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is still unavailable, keep "sources" empty and state what remains missing in "missingEvidence".
 
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;

@@ -133,6 +133,8 @@ ${ensureArray(state?.request?.matrix?.attributes).map((attribute) => `- ${attrib
 Rules:
 - Cover every listed subject x attribute cell.
 - Cite real named sources with URLs wherever possible; prefer independent, third-party sources.
+- For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is unavailable after searching, keep "sources" empty, use low confidence, and record the gap in "missingEvidence".
 
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
@@ -152,6 +154,8 @@ ${ensureArray(state?.request?.scorecard?.dimensions).map((dim) => `- ${dim.id}: 
 Rules:
 - Ground each unit in concrete, source-backed evidence with real named sources and URLs.
 - Prefer independent, third-party sources; flag vendor claims appropriately.
+- For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is unavailable after searching, keep "sources" empty and explain the gap in "missingEvidence".
 
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
