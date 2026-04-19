@@ -123,9 +123,10 @@ Return JSON:
           actor: "analyst",
           systemPrompt: runtime?.prompts?.analyst || "You produce memory-only matrix evidence.",
           userPrompt: prompt,
-          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 10000,
-          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-          maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
+          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
+          // Matrix chunk loop handles retry-via-halving; inner retries would compound exponentially.
+          maxRetries: 0,
           liveSearch: false,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });

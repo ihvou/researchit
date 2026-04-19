@@ -167,9 +167,10 @@ async function gatherMatrixWeb({
           actor: "analyst",
           systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
           userPrompt: prompt,
-          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 12000,
-          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
-          maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
+          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
+          // Queue loop handles retry-via-splitting; inner retries would compound exponentially.
+          maxRetries: 0,
           liveSearch: true,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
