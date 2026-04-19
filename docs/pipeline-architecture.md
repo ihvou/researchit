@@ -47,26 +47,26 @@ flowchart TD
     classDef critic  fill:#fce7f3,stroke:#db2777,color:#831843
     classDef engine  fill:#f3f4f6,stroke:#6b7280,color:#111827
 
-    INTAKE{{"#01 INPUT INTAKE\nActor: engine\nValidate and normalize request input\nOut: NormalizedRequest"}}
+    INTAKE{{"#01 INPUT INTAKE\nGoal: validate and normalize request\nActor: engine\nIn: raw API request\nOut: NormalizedRequest"}}
     DISCROUTER{"matrix +\nauto-discover\nsubjects?"}
-    SUBJDISC["#01b SUBJECT DISCOVERY (optional)\nActor: Analyst | Model: gemini-2.5-pro (web)\nDiscover and canonicalize matrix subjects\nOut: canonical subject set"]
-    PLAN["#02 RESEARCH PLANNING\nActor: Analyst | Model: openai:gpt-5.4\nDefine per-unit scope and research plan\nOut: ResearchPlan"]
+    SUBJDISC["#01b SUBJECT DISCOVERY (optional)\nGoal: discover and canonicalize matrix subjects\nActor: Analyst | Model: gemini-2.5-pro\nIn: objective + matrix config\nReq: discover subjects for objective\nResp: subject list + canonical names\nOut: canonical subject set"]
+    PLAN["#02 RESEARCH PLANNING\nGoal: define per-unit scope, queries, source strategy\nActor: Analyst | Model: openai:gpt-5.4\nIn: objective + unit definitions\nReq: build per-unit research plan\nResp: queries, source targets, gap hypotheses\nOut: ResearchPlan"]
     EVROUTER{"evidence\nmode?"}
-    MEM_NATIVE["#03a EVIDENCE - MEMORY (native)\nActor: Analyst | Model: openai:gpt-5.4 (no web)\nMemory-grounded initial evidence"]
-    WEB_NATIVE["#03b EVIDENCE - WEB (native)\nActor: Analyst | Model: gemini-2.5-pro (web)\nWeb-cited evidence to patch/extend memory draft"]
-    EVID_DA["#03c EVIDENCE - DEEP ASSIST\nActor: Analyst | Model: gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro (parallel)\nParallel provider evidence drafts"]
-    MERGE["#04 EVIDENCE MERGE\nActor: Analyst | Model: openai:gpt-5.4-mini\nUnify evidence and preserve provenance"]
-    SCORE_CONF["#05 SCORE + CONFIDENCE\nActor: Analyst | Model: openai:gpt-5.4\nAssess units against rubric; assign confidence with rationale"]
-    VERIFY{{"#06 SOURCE VERIFICATION\nActor: engine\nFetch and verify cited sources"}}
-    ASSESS{{"#07 SOURCE ASSESSMENT\nActor: engine\nApply source-quality adjustments"}}
-    RECOVER["#08 TARGETED RECOVERY\nActor: Analyst | Model: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)\nRecover weak/low-confidence coverage"]
-    RESCORE["#09 RE-SCORE + RE-CONFIDENCE\nActor: Analyst | Model: openai:gpt-5.4\nUpdate assessments after recovery"]
-    COHERENCE["#10 CONSISTENCY + COHERENCE\nActor: Critic | Model: claude-sonnet-4\nFind cross-unit contradictions"]
-    CHALLENGE["#11 CHALLENGE OVERCLAIMS\nActor: Critic | Model: claude-sonnet-4\nPressure-test strongest claims"]
-    COUNTER["#12 COUNTER-CASE + MISSED RISKS\nActor: Critic | Model: claude-sonnet-4 (web)\nSearch disconfirming evidence"]
-    DEFEND["#13 CONCEDE / DEFEND\nActor: Analyst | Model: openai:gpt-5.4\nResolve every critic flag"]
-    SYNTHESIZE["#14 SYNTHESIZE\nActor: Analyst | Model: gemini-2.5-pro\nExecutive narrative, decision implication, dissent note"]
-    FINAL{{"#15 FINALIZE\nActor: engine + Analyst (openai:gpt-5.4-mini for summary)\nApply quality gates, emit terminal outcome"}}
+    MEM_NATIVE["#03a EVIDENCE - MEMORY\nGoal: produce memory-grounded first-pass evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: ResearchPlan + unit briefs\nReq: generate evidence per unit (no web)\nResp: per-unit evidence, scores, sources\nOut: memory evidence bundle"]
+    WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro\nIn: memory bundle + ResearchPlan\nReq: web search + extend evidence per unit\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
+    EVID_DA["#03c EVIDENCE - DEEP ASSIST\nGoal: parallel provider evidence for cross-validation\nActor: Analyst | Model: gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro\nIn: ResearchPlan + unit briefs\nReq: evidence collection x3 providers (parallel)\nResp: 3 evidence drafts per unit\nOut: merged evidence bundle"]
+    MERGE["#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: Analyst | Model: openai:gpt-5.4-mini\nIn: evidence bundle(s)\nReq: merge and deduplicate with provenance\nResp: unified evidence per unit\nOut: EvidenceBundle"]
+    SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units against rubric, assign confidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: EvidenceBundle + scoring rubric\nReq: score each unit against rubric criteria\nResp: per-unit score, confidence, rationale\nOut: AssessedState"]
+    VERIFY{{"#06 SOURCE VERIFICATION\nGoal: fetch and verify cited sources\nActor: engine\nIn: AssessedState with cited URLs\nOut: sources tagged with verificationStatus"}}
+    ASSESS{{"#07 SOURCE ASSESSMENT\nGoal: apply source-quality confidence adjustments\nActor: engine\nIn: AssessedState + verificationStatus\nOut: confidence adjustments applied"}}
+    RECOVER["#08 TARGETED RECOVERY\nGoal: recover weak and low-confidence coverage\nActor: Analyst | Model: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)\nIn: AssessedState (weak units prioritized)\nReq: web search + re-assess per weak unit\nResp: new evidence + revised assessments\nOut: enriched AssessedState"]
+    RESCORE["#09 RE-SCORE + RE-CONFIDENCE\nGoal: recompute assessments with recovery evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: enriched AssessedState + recovery evidence\nReq: rescore units using recovery evidence\nResp: updated scores, confidence, rationale\nOut: updated AssessedState"]
+    COHERENCE["#10 CONSISTENCY + COHERENCE\nGoal: find cross-unit contradictions\nActor: Critic | Model: claude-sonnet-4\nIn: AssessedState (all units)\nReq: audit units for contradictions\nResp: contradiction flags with severity\nOut: CriticFlags (coherence)"]
+    CHALLENGE["#11 CHALLENGE OVERCLAIMS\nGoal: pressure-test strongest claims\nActor: Critic | Model: claude-sonnet-4\nIn: AssessedState + coherence flags\nReq: identify overclaims and miscalibration\nResp: overclaim flags with severity\nOut: CriticFlags (overclaims)"]
+    COUNTER["#12 COUNTER-CASE + MISSED RISKS\nGoal: gather disconfirming evidence and missed risks\nActor: Critic | Model: claude-sonnet-4\nIn: AssessedState + all flags so far\nReq: web search for counter-evidence\nResp: disconfirming flags and missed risks\nOut: CriticFlags (all combined)"]
+    DEFEND["#13 CONCEDE / DEFEND\nGoal: resolve every critic flag with evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: AssessedState + CriticFlags\nReq: respond to each flag with evidence or concession\nResp: per-flag disposition + revised scores\nOut: ResolvedState"]
+    SYNTHESIZE["#14 SYNTHESIZE\nGoal: write executive narrative and decision brief\nActor: Analyst | Model: gemini-2.5-pro\nIn: ResolvedState + flag outcomes\nReq: executive synthesis from final state\nResp: decision answer, implications, dissent\nOut: Synthesis"]
+    FINAL{{"#15 FINALIZE\nGoal: enforce quality gates, emit terminal outcome\nActor: engine + Analyst (openai:gpt-5.4-mini)\nIn: ResolvedState + Synthesis\nReq: generate run summary\nResp: concise run summary\nOut: run_completed or run_aborted"}}
 
     INTAKE --> DISCROUTER
     DISCROUTER -->|yes| SUBJDISC --> PLAN
