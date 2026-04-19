@@ -10,15 +10,79 @@ Priority scale: P0 = reliability blocker / correctness bug, P1 = strong quality 
 
 Root cause analysis on a 9×8 enterprise healthcare matrix run: 88% of 249 sources failed verification (156 fetchFailed, 63 404), collapsing 65/72 cells to low-confidence and failing the decision gate. The cell reasoning content was substantively accurate — the failure is entirely in the sourcing and confidence layer. Core findings: (1) 175 of those sources were Gemini grounding redirect URLs (vertexaisearch.cloud.google.com/grounding-api-redirect/…) which are ephemeral session tokens that expire before the verifier fetches them; (2) URL verification is being used as a proxy for fact verification, which it isn't — a cell can be 100% accurate with no verifiable URL; (3) confident factual cells are being confidence-penalised for HTTP reachability, not knowledge quality.
 
-| ID | Type | Problem | Solution | Impact | Priority |
-|----|------|---------|----------|--------|----------|
-| SQ-01 | fix | **Confidence scoring conflated with URL verification.** 88% URL failure rate collapsed accurate cells to low-confidence. URL reachability ≠ factual accuracy, especially for well-documented enterprise products. | Decouple: confidence reflects knowledge depth and evidence specificity (model-expressed). URL verification produces a separate `citationStatus` field (verified / unverifiable / not_found). Decision gate treats citation coverage as its own dimension, not as a confidence multiplier. A cell can be `confidence: high` + `citationStatus: unverifiable` — that is useful signal, not a failure. | Eliminates the primary failure mode: accurate cells penalised for HTTP reachability. Most impactful single change in the pipeline. | **P0** |
-| SQ-02 | fix | **Gemini grounding redirect URLs are ephemeral.** Stage 03b stores 175 `vertexaisearch.cloud.google.com/grounding-api-redirect/…` session tokens as source URLs. They work when generated but fail when the verifier fetches them minutes later — causing the majority of "fetchFailed" errors. | Two-part fix: (1) At 03b call time, immediately follow redirect chains for any `vertexaisearch.*` or grounding-redirect URLs and store the resolved canonical URL instead. (2) Update Gemini system prompt in 03b to explicitly request canonical page URLs rather than grounding redirects. Both are needed — Gemini doesn't reliably comply with prompt instructions for grounding citations. | Fixes the majority of 03b's source verification failures directly. | **P0** |
-| SQ-03 | fix | **Source verification applies the same penalty to all source types.** A failed KLAS analyst report URL (paywalled), a vendor case study (login-gated, JS-rendered), and a hallucinated URL all produce the same "fetchFailed" penalty. | Tiered verification rules by sourceType: `research` / `government` → verify aggressively, penalise failure; `vendor` / `press_release` / `marketing` → verify for existence only, do not penalise if unreachable (login walls expected); `analyst` (KLAS, Gartner) → mark as `paywalled` rather than `failed`; `news` → standard verification. | Eliminates false-positive failures for legitimately inaccessible but valid sources. | **P0** |
-| SQ-04 | improvement | **Prompts imply sources are required for confidence, causing hallucinated citations.** Models generate plausible-looking URLs to satisfy the schema rather than acknowledging honest uncertainty. | Update 03a/03b system prompts for enterprise product research: lead with "state specific known facts with confidence; cite only if you are certain the URL is publicly accessible; omitting a citation is preferable to inventing one." Make explicit that a well-reasoned low-confidence acknowledgement is more useful for decision-making than a fabricated URL. | Reduces hallucinated citations; improves honest confidence calibration for well-documented products. | **P1** |
-| SQ-05 | improvement | **Critic validates logical coherence but not factual accuracy.** Claude runs as critic across all cells (stages 10-12) but is currently prompted for logical/structural challenges, not factual verification. Cross-model fact-checking is essentially free since the critic call already runs. | Expand critic prompt to include a factual accuracy pass: for each cell, flag specific claims that appear imprecise, overstated, or inconsistent with known public information. Critic should challenge facts, not just reasoning structure. This gives cross-model fact verification at zero extra API cost. Note: asking another model's memory is NOT a substitute for fact-checking (models share training biases and agree on hallucinations). | Cross-model factual scrutiny on every cell at no added cost. | **P1** |
-| SQ-06 | improvement | **Low-confidence cells get URL verification of their sources, but not verification of their actual claims.** A cell can fail URL verification while the claims are accurate; or pass URL verification while citing a page that doesn't actually contain the stated fact. | For cells still low-confidence after stage 08 recovery, extract 2-3 key specific claims and run targeted web searches to corroborate or contradict them (e.g. search "Innovaccer 600 hospital customers" rather than checking a URL). Update `claimVerificationStatus` from search results. Targeted and bounded — only applies to recovery-stage stragglers. | True evidence-grounded confidence for specific facts. More expensive, keep strictly bounded to post-recovery low-confidence cells. | **P2** |
-| SQ-07 | improvement | **03a chunk timeout forces re-chunking for large enterprise subjects, degrading evidence depth.** 2-minute timeout with chunk size 4 is marginal for complex subjects (Epic, Oracle) and causes forced splits that process some subjects with less depth. | Increase 03a default `timeoutMs` to 180s. For matrices with >8 attributes, reduce `chunkSizeStart` from 4 to 2 — smaller initial chunks succeed reliably and still run in parallel, so wall-clock impact is minimal. | More consistent evidence depth across all subjects regardless of complexity. | **P2** |
+#### SQ-01 — Decouple confidence scoring from URL verification · P0 · fix
+
+**Problem:** Confidence is penalised when URLs fail HTTP verification, even when the cell content is substantively accurate. 88% URL failure rate collapsed 65/72 cells to low-confidence and failed the decision gate. URL reachability ≠ factual accuracy, especially for well-documented enterprise products.
+
+**Solution:** Confidence reflects knowledge depth and evidence specificity (model-expressed). URL verification produces a separate `citationStatus` field (`verified` / `unverifiable` / `not_found`). Add a `confidenceSource: model | verification_penalty` field so downstream diagnostics can distinguish model-stated uncertainty from HTTP-driven downgrades. Decision gate treats citation coverage as its own dimension, not a confidence multiplier. A cell can be `confidence: high` + `citationStatus: unverifiable` — that is useful signal, not a failure.
+
+**Acceptance:** Decision gate confidence failures occur only when the model itself expressed uncertainty (`confidenceSource: model`), never because sources failed to fetch. No cells should have `confidenceSource: verification_penalty` after this ships. Integration test: run on well-documented enterprise products — decision gate may still fail on genuine knowledge gaps, but not on fetchability.
+
+---
+
+#### SQ-02 — Fix Gemini grounding redirect URLs · P0 · fix
+
+**Problem:** Stage 03b stored 175 `vertexaisearch.cloud.google.com/grounding-api-redirect/…` session tokens as source URLs in a single test run. These are ephemeral — valid when Gemini generates them, expired by the time the verifier fetches them minutes later. Primary cause of the 156 "fetchFailed" errors.
+
+**Solution:** Two-part fix — both needed since Gemini doesn't reliably comply with prompt instructions for grounding citations: (1) At 03b call time, immediately follow redirect chains for any `vertexaisearch.*` or grounding-redirect URLs and store the resolved canonical URL before writing to state. (2) Update Gemini system prompt in 03b to explicitly request canonical page URLs rather than grounding redirects.
+
+**Acceptance:** `vertexaisearch.*` URL count in stored source objects should be near zero after a 03b run. Measure: grep source URLs in debug bundle for `vertexaisearch.cloud.google.com` — target ≤2% of total sources (allowing for prompt non-compliance edge cases caught by the resolve step).
+
+---
+
+#### SQ-03 — Tiered source verification by sourceType · P0 · fix
+
+**Problem:** A failed KLAS analyst report (paywalled), a vendor case study (login-gated, JS-rendered), and a hallucinated URL all produce the same "fetchFailed" penalty. The verifier cannot distinguish legitimately inaccessible sources from fabricated ones.
+
+**Solution:** Tiered verification rules by sourceType: `research` / `government` → verify aggressively, penalise failure; `vendor` / `press_release` / `marketing` → verify for existence only (HEAD request), do not penalise if unreachable; `analyst` (KLAS, Gartner) → mark as `paywalled` rather than `failed`; `news` → standard verification.
+
+**Acceptance:** After SQ-01 and SQ-03 together, decision gate failures on well-documented enterprise products must not be dominated by fetchability. Specifically: cells with `sourceType: vendor` or `sourceType: analyst` should not have their confidence downgraded due to fetch failures. `fetchFailed` count in stage 06 diagnostics should drop by >50% relative to baseline run.
+
+---
+
+#### SQ-04 — Fact-first prompting to reduce hallucinated citations · P1 · improvement
+
+**Problem:** Prompts implicitly require sources to justify confidence. Models generate plausible-looking but non-existent URLs to satisfy the schema rather than acknowledging honest uncertainty.
+
+**Solution:** Update 03a/03b system prompts: lead with "state specific known facts with confidence; cite only if you are certain the URL is publicly accessible; omitting a citation is preferable to inventing one." Make explicit that a well-reasoned low-confidence acknowledgement is more useful for decision-making than a fabricated URL.
+
+**Acceptance:** 404 rate (truly non-existent URLs) should drop measurably — target below 15% of total sources, down from 25% baseline. Note: `fetchFailed` rate may stay similar or rise slightly as models stop inventing URLs and start citing real but gated pages — that is the correct direction. Do not use `fetchFailed` as the success metric for this task; use 404 specifically.
+
+---
+
+#### SQ-05 — Expand critic mandate to include factual accuracy challenges · P1 · improvement
+
+**Problem:** Claude runs as critic across all cells (stages 10-12) but is prompted for logical/structural challenges only — coherence, source coverage, overclaims. Factual accuracy is not challenged. Cross-model fact-checking is essentially free since the critic call already runs.
+
+**Solution:** Expand critic system prompt to include a factual accuracy pass: for each cell, flag specific claims that appear imprecise, overstated, or inconsistent with known public information, with a reference to what the correct or more accurate information is. Add `flagType: factual | coherence | coverage | structural` to critic flag objects so the split is measurable in diagnostics. Note: asking another model's memory is not a substitute — both models share training biases and agree on hallucinations. This works because Claude and GPT have meaningfully different knowledge and framing on enterprise vendor facts.
+
+**Acceptance:** Manual review on first 3-5 post-ship runs: critic output must include at least some flags of type `factual` with specific evidence references (e.g. "This claim about X appears overstated — known public information suggests Y") when factual issues exist, not only structural observations like "this cell lacks sufficient sources." Automated: `flagType: factual` should appear in >20% of runs with non-trivial content.
+
+---
+
+#### SQ-06 — Targeted claim verification via web search · P2 · improvement
+
+**Problem:** URL verification confirms a page is accessible but not that it contains the cited claim. A cell can fail URL verification while its claims are accurate; or pass verification while citing a page that doesn't support the stated fact.
+
+**Solution:** For cells still low-confidence after stage 08 recovery, extract 2-3 key specific claims and run targeted web searches to corroborate or contradict them (search for the claim itself, e.g. "Innovaccer 600 hospital customers", rather than checking a URL). Update a `claimVerificationStatus` field. Strictly bounded — only post-recovery low-confidence stragglers.
+
+**Acceptance:** At least 30% of targeted cells should see confidence upgraded after claim search corroborates the key claim. Track `claimVerificationStatus` distribution in diagnostics.
+
+---
+
+#### SQ-07 — Tune 03a chunk timeout and start size · P2 · improvement
+
+**Problem:** 2-minute timeout with chunk size 4 is marginal for complex enterprise subjects (Epic, Oracle). Forced splits degrade evidence depth for the largest, most important vendors in the matrix.
+
+**Solution:** Increase 03a default `timeoutMs` to 180s. For matrices with >8 attributes, reduce `chunkSizeStart` from 4 to 2 — smaller initial chunks succeed reliably and still run in parallel, so wall-clock impact is minimal.
+
+**Acceptance:** Zero timeout-driven splits in stage 03a diagnostics for a 9×8 matrix under normal API conditions. All initial chunks should complete without splitting.
+
+---
+
+#### Integration acceptance (SQ-01 through SQ-04 combined)
+
+A run on a 9×8 matrix of well-documented large enterprise products (e.g. Epic, Oracle, Innovaccer, Arcadia) must pass the decision gate. Individual guardrails verify the mechanisms; passing the gate verifies the combined effect. This is the real end-to-end test.
 
 ---
 
