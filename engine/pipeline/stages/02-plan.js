@@ -104,6 +104,8 @@ function summarizePlanInputDiagnostics(parsed = {}, fallbackUnits = [], outputTy
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const units = planUnitsFromRequest(state?.request || {});
+  const plannerSystemPrompt = runtime?.prompts?.planner
+    || "You are a strategic research planner. Return concise, strict JSON only.";
 
   const prompt = `Build a research plan for this objective.
 Objective: ${clean(state?.request?.objective)}
@@ -139,7 +141,7 @@ Return JSON:
     runtime,
     stageId: STAGE_ID,
     actor: "analyst",
-    systemPrompt: runtime?.prompts?.analyst || "You are a research planner.",
+    systemPrompt: plannerSystemPrompt,
     userPrompt: prompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 4000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 45000,

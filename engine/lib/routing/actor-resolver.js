@@ -50,6 +50,6 @@ export function resolveActorRoute({ actor = "", stageId = "", config = {}, mode 
     model,
     webSearchModel,
     family,
-    mode: clean(mode).toLowerCase() === "deep-assist" ? "deep-assist" : "native",
+    mode: (() => { const m = clean(mode).toLowerCase(); return (m === "deep-research-x3" || m === "deep-assist") ? "deep-research-x3" : "native"; })(),
   };
 }

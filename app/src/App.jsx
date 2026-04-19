@@ -97,7 +97,7 @@ function validatePinnedModelRoutes(config = {}, evidenceMode = "native") {
     checkModel(cfg.webSearchModel, "webSearchModel");
   });
 
-  if (String(evidenceMode || "").toLowerCase() === "deep-assist") {
+  if (["deep-research-x3", "deep-assist"].includes(String(evidenceMode || "").toLowerCase())) {
     const providers = config?.deepAssist?.providers && typeof config.deepAssist.providers === "object"
       ? config.deepAssist.providers
       : {};
@@ -365,11 +365,10 @@ export default function App({
   const [setupNotice, setSetupNotice] = useState("");
   const [runErrorModal, setRunErrorModal] = useState({ open: false, message: "" });
   const [showInputPanel, setShowInputPanel] = useState(false);
-  const [evidenceMode, setEvidenceMode] = useState(() => (
-    String(draftState?.evidenceMode || "").trim().toLowerCase() === "deep-assist"
-      ? "deep-assist"
-      : "native"
-  ));
+  const [evidenceMode, setEvidenceMode] = useState(() => {
+    const savedMode = String(draftState?.evidenceMode || "").trim().toLowerCase();
+    return (savedMode === "deep-research-x3" || savedMode === "deep-assist") ? "deep-research-x3" : "native";
+  });
   const [showDimsPanel, setShowDimsPanel] = useState(false);
   const [showDetailsPanel, setShowDetailsPanel] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
@@ -594,8 +593,9 @@ export default function App({
     })();
     const selectedMode = String(selectedConfig?.outputMode || "scorecard").trim().toLowerCase();
     const normalizedSetup = normalizeResearchSetup(researchSetup || setupByConfig[selectedConfig.id] || {});
-    const normalizedEvidenceMode = String(evidenceMode || "").trim().toLowerCase() === "deep-assist"
-      ? "deep-assist"
+    const rawEvMode = String(evidenceMode || "").trim().toLowerCase();
+    const normalizedEvidenceMode = (rawEvMode === "deep-research-x3" || rawEvMode === "deep-assist")
+      ? "deep-research-x3"
       : "native";
     const deepAssistDefaults = selectedConfig?.deepAssist?.defaults || {};
     const deepAssistRunOptions = {
@@ -641,8 +641,8 @@ export default function App({
         : null,
       analysisMeta: {
         analysisMode: selectedMode === "matrix"
-          ? (normalizedEvidenceMode === "deep-assist" ? "matrix-deep-assist" : "matrix")
-          : (normalizedEvidenceMode === "deep-assist" ? "deep-assist" : INTERNAL_ANALYSIS_MODE),
+          ? (normalizedEvidenceMode === "deep-research-x3" ? "matrix-deep-assist" : "matrix")
+          : (normalizedEvidenceMode === "deep-research-x3" ? "deep-assist" : INTERNAL_ANALYSIS_MODE),
         evidenceMode: normalizedEvidenceMode,
         strictQuality,
         liveSearchRequested: true,
@@ -676,7 +676,7 @@ export default function App({
         decisionGradePassed: false,
         decisionGradeFailureReason: "",
         decisionGradeGate: null,
-        deepAssistProvidersRequested: normalizedEvidenceMode === "deep-assist"
+        deepAssistProvidersRequested: normalizedEvidenceMode === "deep-research-x3"
           ? deepAssistRunOptions.providers.length
           : 0,
         deepAssistProvidersSucceeded: 0,
@@ -702,7 +702,7 @@ export default function App({
         matrixSubjects,
         researchSetup: normalizedSetup,
         evidenceMode: normalizedEvidenceMode,
-        deepAssist: normalizedEvidenceMode === "deep-assist" ? deepAssistRunOptions : null,
+        deepAssist: normalizedEvidenceMode === "deep-research-x3" ? deepAssistRunOptions : null,
         strictQuality,
         initialState: stampedBlankUC,
       });
@@ -1152,8 +1152,8 @@ export default function App({
     analyst_baseline: "Baseline pass...",
     analyst_web: "Web pass...",
     analyst_reconcile: "Reconcile pass...",
-    deep_assist_collect: "Deep Assist collect...",
-    deep_assist_merge: "Deep Assist merge...",
+    deep_assist_collect: "Deep Research ×3 collecting...",
+    deep_assist_merge: "Deep Research ×3 merging...",
     analyst_targeted: "Low-confidence deep search...",
     critic: "Critic review...",
     finalizing: "Debate...",
@@ -1162,7 +1162,7 @@ export default function App({
     matrix_baseline: "Baseline pass...",
     matrix_web: "Web pass...",
     matrix_reconcile: "Reconcile pass...",
-    matrix_deep_assist: "Deep Assist merge...",
+    matrix_deep_assist: "Deep Research ×3 merging...",
     matrix_targeted: "Low-confidence deep search...",
     matrix_evidence: "Matrix evidence...",
     matrix_critic: "Critic audit...",
@@ -1177,7 +1177,7 @@ export default function App({
     stage_02_plan: "Planning...",
     stage_03a_evidence_memory: "Memory evidence...",
     stage_03b_evidence_web: "Web evidence...",
-    stage_03c_evidence_deep_assist: "Deep Assist evidence...",
+    stage_03c_evidence_deep_assist: "Deep Research ×3 evidence...",
     stage_04_merge: "Merging evidence...",
     stage_05_score_confidence: "Scoring...",
     stage_06_source_verify: "Verifying sources...",
@@ -1656,26 +1656,26 @@ export default function App({
                   fontSize: 12,
                   fontWeight: 700,
                 }}>
-                Native
+                Research Team
               </button>
               <button
                 type="button"
-                onClick={() => setEvidenceMode("deep-assist")}
+                onClick={() => setEvidenceMode("deep-research-x3")}
                 style={{
-                  border: `1px solid ${evidenceMode === "deep-assist" ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
-                  background: evidenceMode === "deep-assist" ? "var(--ck-surface-soft)" : "var(--ck-surface)",
+                  border: `1px solid ${evidenceMode === "deep-research-x3" ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
+                  background: evidenceMode === "deep-research-x3" ? "var(--ck-surface-soft)" : "var(--ck-surface)",
                   color: "var(--ck-text)",
                   padding: "6px 10px",
                   fontSize: 12,
                   fontWeight: 700,
                 }}>
-                Deep Assist
+                Deep Research ×3
               </button>
             </div>
             <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
-              {evidenceMode === "deep-assist"
-                ? "Deep Assist runs multi-provider evidence collection and agreement checks before finalization."
-                : "Native uses the default analyst/critic pipeline with live web evidence and targeted recovery."}
+              {evidenceMode === "deep-research-x3"
+                ? "Runs ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel, then merges their independent findings for maximum depth and cross-validation."
+                : "An AI analyst team — memory + web evidence, targeted recovery, critic debate, and synthesis — delivering calibrated, decision-ready research."}
             </div>
           </div>
           <textarea
@@ -2173,7 +2173,7 @@ export default function App({
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", color: "var(--ck-muted)", fontSize: 11 }}>
                         {uc.attributes?.vertical ? <span>{uc.attributes.vertical}</span> : null}
                         {uc.attributes?.buyerPersona ? <span>| {uc.attributes.buyerPersona}</span> : null}
-                        {uc.analysisMeta?.evidenceMode === "deep-assist" ? <span>| Deep Assist</span> : null}
+                        {(uc.analysisMeta?.evidenceMode === "deep-research-x3" || uc.analysisMeta?.evidenceMode === "deep-assist") ? <span>| Deep Research ×3</span> : null}
                         {uc.analysisMeta?.qualityGrade === "degraded" ? <span>| degraded quality</span> : null}
                         {uc.origin?.type === "discover" ? <span>| related</span> : null}
                       </div>

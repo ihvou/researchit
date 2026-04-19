@@ -47,8 +47,8 @@ Expected default routing:
 - Analyst retrieval-heavy stages (subject discovery/web/recovery/synthesis): Gemini
 - Critic stages: Anthropic
 
-Deep-assist carve-out:
-- Stage `03c` requires all configured deep-assist providers (OpenAI + Anthropic + Gemini lanes by default) and fails preflight if any required lane is missing.
+Deep Research ×3 carve-out:
+- Stage `03c` requires all configured Deep Research providers (OpenAI o3 + Anthropic claude-sonnet-4 + Gemini gemini-2.5-pro) and fails preflight if any required lane is missing.
 
 ## 3. Canonical Stage Sequence
 

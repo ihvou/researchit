@@ -10,7 +10,7 @@ Quality policy is defined in [quality-bar.md](./quality-bar.md). If any tradeoff
 
 ## Design Goals
 
-- One canonical stage sequence for all run types (scorecard, matrix; native, deep-assist).
+- One canonical stage sequence for all run types (scorecard, matrix; Research Team, Deep Research ×3).
 - Two reasoning actors: `Analyst` and `Critic`. Deterministic engine steps are not actors.
 - Strict, non-negotiable model routing per stage — no dynamic provider picking, no failover.
 - Shared scorecard/matrix behavior after evidence collection.
@@ -26,6 +26,28 @@ Quality policy is defined in [quality-bar.md](./quality-bar.md). If any tradeoff
 | `Analyst` | Plans research; collects, merges, scores, and re-scores evidence; recovers low-confidence gaps; defends against Critic flags; writes the final executive synthesis. The Analyst uses different models for different steps — OpenAI for reasoning-heavy steps, Gemini for web retrieval and final synthesis — but is always the same conceptual actor: the person responsible for the research output. |
 | `Critic` | Independently audits the Analyst's work: coherence check, overclaim challenge, counter-case search. Uses Claude throughout for model-family separation from the Analyst's primary reasoning chain. |
 | `engine` | Deterministic steps: input normalization, source fetch/verification, quality assessment, gate enforcement. No LLM calls. |
+
+---
+
+## Evidence Modes
+
+### Research Team (`native`)
+The Analyst uses a two-pass hybrid approach: Stage 03a generates memory-grounded evidence (OpenAI gpt-5.4, no web) and Stage 03b extends it with live web evidence (Gemini 2.5 Pro + Google Search grounding). Recovery, critic debate, and synthesis follow.
+
+### Deep Research ×3 (`deep-research-x3`)
+Stage 03c invokes the **Deep Research product feature** from all three major providers simultaneously — this is exactly what a user gets when they click the "+" Deep Research/Research button in ChatGPT, Claude, or Gemini:
+
+| Provider | Deep Research mode | Implementation |
+|---|---|---|
+| **ChatGPT** | Deep Research | OpenAI `o3` via Responses API with `web_search_preview` tool — o3's autonomous multi-step research loop |
+| **Claude** | Research | Anthropic `claude-sonnet-4` with `web_search_20250305` tool (max 20 uses) — Claude's Research mode |
+| **Gemini** | Deep Research | Google `gemini-2.5-pro` with `google_search` grounding and `thinkingConfig { thinkingBudget: -1 }` (unlimited extended thinking) — Gemini's Deep Research mode |
+
+All three run in parallel. Their independent evidence drafts are forwarded to Stage 04 (merge), which reconciles findings, preserves provenance, and resolves conflicts before the shared critic/defend/synthesis pipeline.
+
+The goal: capture the deepest research each frontier model can produce, then apply ResearchIt's own quality cycle (source verification, critic, concede/defend, executive synthesis) on top.
+
+---
 
 There is no separate "Synthesizer" actor. Stage 14 (executive synthesis) is an Analyst step. It uses Gemini as its model to bring a fresh model-family perspective after the OpenAI-heavy scoring and defense chain — the same reason Gemini is used for web evidence (03b) and recovery search (08). The independence is in the model selection, not in a fictional third role.
 
@@ -63,7 +85,7 @@ Router diamonds (`{"..."}`) stay minimal — they are control-flow only, not dat
 **Routing policy:**
 - Each stage declares one exact provider and model. The pipeline does not pick the first available key, does not fall through to env-var defaults, and does not failover to another provider.
 - If a stage's declared route is unreachable, the run fails with `route_mismatch_preflight` before any token spend.
-- Stage 03c is the only exception: it runs three providers in parallel under the Analyst actor (gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro). Preflight must verify all three are present and reachable. Absence of any one fails `route_mismatch_preflight`. No provider may be silently skipped.
+- Stage 03c is the only exception: it runs three providers in parallel under the Analyst actor (o3 + claude-sonnet-4 + gemini-2.5-pro). Preflight must verify all three are present and reachable. Absence of any one fails `route_mismatch_preflight`. No provider may be silently skipped.
 - `resolveProviderOrder` / "pick first provider with a valid key" must not be used for any pipeline stage call.
 
 ```mermaid
@@ -79,7 +101,7 @@ flowchart TD
     EVROUTER{"evidence\nmode?"}
     MEM_NATIVE["#03a EVIDENCE - MEMORY\nGoal: produce memory-grounded first-pass evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: ResearchPlan + unit briefs\nReq: generate evidence per unit (no web)\nResp: per-unit evidence, scores, sources\nOut: memory evidence bundle"]
     WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro\nIn: memory bundle + ResearchPlan\nReq: web search + extend evidence per unit\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
-    EVID_DA["#03c EVIDENCE - DEEP ASSIST\nGoal: parallel Deep Research calls to 3 providers for cross-validation\nActor: Analyst | Model: openai:o3 + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: Deep Research per provider in parallel — OpenAI: o3 + web_search_preview (Responses API); Anthropic: claude-sonnet-4 + web_search tool (max 20 uses); Gemini: gemini-2.5-pro + google_search + thinkingConfig (unlimited budget)\nResp: 3 independent deep-researched evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
+    EVID_DA["#03c EVIDENCE - DEEP RESEARCH ×3\nGoal: parallel Deep Research calls to 3 providers for cross-validation\nActor: Analyst | Model: openai:o3 + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: ChatGPT Deep Research (o3 + web_search_preview, Responses API); Claude Research (claude-sonnet-4 + web_search, max 20 uses); Gemini Deep Research (gemini-2.5-pro + google_search + thinkingConfig unlimited budget) — all three in parallel\nResp: 3 independent deep-researched evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
     MERGE["#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: Analyst | Model: openai:gpt-5.4-mini\nIn: evidence bundle(s)\nReq: merge and deduplicate with provenance\nResp: unified evidence per unit\nOut: EvidenceBundle"]
     SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units against rubric, assign confidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: EvidenceBundle + scoring rubric\nReq: score each unit against rubric criteria\nResp: per-unit score, confidence, rationale\nOut: AssessedState"]
     VERIFY{{"#06 SOURCE VERIFICATION\nGoal: fetch and verify cited sources\nActor: engine\nIn: AssessedState with cited URLs\nOut: sources tagged with verificationStatus"}}
@@ -98,7 +120,7 @@ flowchart TD
     DISCROUTER -->|no| PLAN
     PLAN --> EVROUTER
     EVROUTER -->|native| MEM_NATIVE --> WEB_NATIVE --> MERGE
-    EVROUTER -->|deep-assist| EVID_DA --> MERGE
+    EVROUTER -->|deep-research-x3| EVID_DA --> MERGE
     MERGE --> SCORE_CONF --> VERIFY --> ASSESS
     ASSESS --> RECOVER --> RESCORE
     RESCORE --> COHERENCE --> CHALLENGE --> COUNTER --> DEFEND
@@ -122,7 +144,7 @@ This breakdown and wording is the source-of-truth reference for Progress tab sta
 | `stage_02_plan` | Stage 02 - Planning | Build scoped research plan and coverage intent per unit. |
 | `stage_03a_evidence_memory` | Stage 03a - Memory evidence | Produce memory-grounded first-pass evidence. |
 | `stage_03b_evidence_web` | Stage 03b - Web evidence | Add cited web evidence and patch memory gaps. |
-| `stage_03c_evidence_deep_assist` | Stage 03c - Deep Assist evidence | Run parallel provider evidence collection for deep-assist mode. |
+| `stage_03c_evidence_deep_assist` | Stage 03c - Deep Research ×3 evidence | Run ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel for deep-research-x3 mode. |
 | `stage_04_merge` | Stage 04 - Evidence merge | Merge evidence drafts into one provenance-preserving bundle. |
 | `stage_05_score_confidence` | Stage 05 - Score + confidence | Assess each unit against rubric and assign confidence with explicit rationale. |
 | `stage_06_source_verify` | Stage 06 - Source verification | Deterministically verify source fetchability and citation matches. |
@@ -143,7 +165,7 @@ This breakdown and wording is the source-of-truth reference for Progress tab sta
 Both modes use the same stage graph.
 
 - Stage 01b runs only for matrix + auto-discover (subjects not pre-provided). The orchestrator skips it entirely; the stage is not invoked.
-- Native evidence mode uses `03a + 03b`; deep-assist mode uses `03c`.
+- Research Team evidence mode (`native`) uses `03a + 03b`; Deep Research ×3 mode (`deep-research-x3`) uses `03c`.
 - After Stage 04, scorecard and matrix share the same quality, critic, defend, synthesize, and finalize flow.
 - Planning (Stage 02) is attribute-level for matrix (one plan entry per attribute, not per cell).
 - Recovery (Stage 08) is cell-level for matrix; bounded cell-groups max 2 cells, same attribute only.

@@ -1,5 +1,6 @@
 import {
   SYS_ANALYST,
+  SYS_ANALYST_DEEP_RESEARCH,
   SYS_CRITIC,
   SYS_ANALYST_RESPONSE,
   SYS_ANALYST_SYNTHESIS,
@@ -103,6 +104,7 @@ const SHARED_LIMITS = {
 
 const BASE_PROMPTS = {
   analyst: SYS_ANALYST,
+  analystDeepResearch: SYS_ANALYST_DEEP_RESEARCH,
   critic: SYS_CRITIC,
   analystResponse: SYS_ANALYST_RESPONSE,
   analystSynthesis: SYS_ANALYST_SYNTHESIS,

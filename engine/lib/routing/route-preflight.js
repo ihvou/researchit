@@ -59,7 +59,8 @@ export function runRoutePreflight({ state = {}, config = {} } = {}) {
     output.routes.push(route);
   });
 
-  if (clean(state?.mode).toLowerCase() === "deep-assist") {
+  const preflightMode = clean(state?.mode).toLowerCase();
+  if (preflightMode === "deep-research-x3" || preflightMode === "deep-assist") {
     const providers = normalizeDeepAssistProviders(config?.deepAssist || state?.config?.deepAssist || {});
     const required = ["chatgpt", "claude", "gemini"];
     const missing = required.filter((provider) => !providers.includes(provider));

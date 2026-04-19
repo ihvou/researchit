@@ -24,7 +24,7 @@ const PHASE_LABELS = {
   matrix_web: "Running web-assisted matrix pass...",
   matrix_reconcile: "Reconciling baseline and web drafts...",
   matrix_targeted: "Running targeted low-confidence recovery...",
-  matrix_deep_assist: "Merging Deep Assist provider evidence...",
+  matrix_deep_assist: "Merging Deep Research ×3 provider evidence...",
   matrix_evidence: "Collecting matrix evidence...",
   matrix_critic: "Critic auditing matrix...",
   matrix_response: "Analyst responding to critic flags...",
@@ -34,14 +34,14 @@ const PHASE_LABELS = {
   matrix_synthesis: "Building executive synthesis...",
   matrix_summary: "Finalizing matrix...",
   matrix_discover: "Discovering missing subjects/attributes...",
-  deep_assist_collect: "Collecting Deep Assist evidence...",
-  deep_assist_merge: "Merging Deep Assist provider outputs...",
+  deep_assist_collect: "Collecting Deep Research ×3 evidence...",
+  deep_assist_merge: "Merging Deep Research ×3 provider outputs...",
   stage_01_intake: "Validating and normalizing input...",
   stage_01b_subject_discovery: "Discovering matrix subjects...",
   stage_02_plan: "Planning research queries...",
   stage_03a_evidence_memory: "Collecting memory-grounded evidence...",
   stage_03b_evidence_web: "Collecting web-grounded evidence...",
-  stage_03c_evidence_deep_assist: "Collecting Deep Assist provider evidence...",
+  stage_03c_evidence_deep_assist: "Collecting Deep Research ×3 provider evidence...",
   stage_04_merge: "Merging evidence drafts...",
   stage_05_score_confidence: "Scoring units and calibrating confidence...",
   stage_06_source_verify: "Verifying cited sources...",
@@ -71,7 +71,7 @@ export default function ExpandedRow({
   outputMode = "scorecard",
 }) {
   const isMatrixMode = outputMode === "matrix";
-  const isDeepAssist = uc?.analysisMeta?.evidenceMode === "deep-assist";
+  const isDeepAssist = uc?.analysisMeta?.evidenceMode === "deep-research-x3" || uc?.analysisMeta?.evidenceMode === "deep-assist";
   const matrixCriticFlags = Number(uc?.analysisMeta?.criticFlagsRaised || uc?.matrix?.coverage?.contestedCells || 0);
   const defaultTab = isMatrixMode ? "summary" : "dimensions";
   const [tab, setTab] = useState("progress");
@@ -132,10 +132,10 @@ export default function ExpandedRow({
           <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
             {isMatrixMode
               ? (isDeepAssist
-                ? "Matrix pipeline + Deep Assist enrichment | Per-cell provider agreement and confidence calibration"
+                ? "Matrix pipeline + Deep Research ×3 enrichment | Per-cell provider agreement and confidence calibration"
                 : "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence")
               : (isDeepAssist
-                ? "Deep Assist scorecard flow | Multi-provider evidence merge before critic and finalization"
+                ? "Deep Research ×3 scorecard flow | ChatGPT + Claude + Gemini Deep Research merged before critic and finalization"
                 : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence")}
             {!isMatrixMode && uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>

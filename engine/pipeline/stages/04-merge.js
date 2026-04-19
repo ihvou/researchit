@@ -226,7 +226,8 @@ export async function runStage(context = {}) {
   let merged;
   let reasonCodes = [];
 
-  if (clean(state?.mode).toLowerCase() === "deep-assist") {
+  const mergeMode = clean(state?.mode).toLowerCase();
+  if (mergeMode === "deep-research-x3" || mergeMode === "deep-assist") {
     const providers = ensureArray(state?.evidenceDrafts?.deepAssist?.providers);
     merged = state?.outputType === "matrix"
       ? mergeDeepAssistMatrix(providers, thresholds)

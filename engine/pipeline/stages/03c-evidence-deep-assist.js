@@ -102,7 +102,8 @@ function buildPlanContext(plan = {}, unitIds = []) {
 
 export async function runStage(context = {}) {
   const { state, runtime } = context;
-  if (clean(state?.mode).toLowerCase() !== "deep-assist") {
+  const mode = clean(state?.mode).toLowerCase();
+  if (mode !== "deep-research-x3" && mode !== "deep-assist") {
     return {
       stageStatus: "ok",
       reasonCodes: [],
@@ -163,7 +164,7 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       runtime,
       stageId: STAGE_ID,
       actor: "analyst",
-      systemPrompt: runtime?.prompts?.analyst || "You are a senior research analyst. Use web search to find real, current, source-backed evidence.",
+      systemPrompt: runtime?.prompts?.analystDeepResearch || runtime?.prompts?.analyst || "You are a senior research analyst conducting independent deep research. Use your web search capability to find comprehensive, current, authoritative evidence.",
       userPrompt: prompt,
       // Deep research responses are comprehensive — 32k gives adequate room.
       tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 32000,

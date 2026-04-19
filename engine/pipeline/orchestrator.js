@@ -78,7 +78,7 @@ function applyStatePatch(state = {}, patch = {}) {
 
 const STAGE_BUDGETS = {
   [STAGE_01B_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 4000 },
-  [STAGE_02_ID]: { timeoutMs: 45000, retryMax: 1, tokenBudget: 4000 },
+  [STAGE_02_ID]: { timeoutMs: 90000, retryMax: 1, tokenBudget: 3000 },
   [STAGE_03A_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 10000 },
   [STAGE_03B_ID]: { timeoutMs: 120000, retryMax: 2, tokenBudget: 12000 },
   [STAGE_03C_ID]: { timeoutMs: 20 * 60 * 1000, retryMax: 0, tokenBudget: 12000 },
@@ -102,7 +102,7 @@ const STAGES = [
   { id: STAGE_02_ID, title: STAGE_02_TITLE, run: run02, optional: false },
   { id: STAGE_03A_ID, title: STAGE_03A_TITLE, run: run03a, optional: false, mode: "native" },
   { id: STAGE_03B_ID, title: STAGE_03B_TITLE, run: run03b, optional: false, mode: "native" },
-  { id: STAGE_03C_ID, title: STAGE_03C_TITLE, run: run03c, optional: false, mode: "deep-assist" },
+  { id: STAGE_03C_ID, title: STAGE_03C_TITLE, run: run03c, optional: false, mode: "deep-research-x3" },
   { id: STAGE_04_ID, title: STAGE_04_TITLE, run: run04, optional: false },
   { id: STAGE_05_ID, title: STAGE_05_TITLE, run: run05, optional: false },
   { id: STAGE_06_ID, title: STAGE_06_TITLE, run: run06, optional: false },
@@ -120,7 +120,10 @@ const STAGES = [
 function stageEnabled(stage = {}, state = {}) {
   if (!stage?.mode) return true;
   if (stage.mode === "native") return clean(state?.mode).toLowerCase() === "native";
-  if (stage.mode === "deep-assist") return clean(state?.mode).toLowerCase() === "deep-assist";
+  if (stage.mode === "deep-research-x3") {
+    const m = clean(state?.mode).toLowerCase();
+    return m === "deep-research-x3" || m === "deep-assist";
+  }
   return true;
 }
 

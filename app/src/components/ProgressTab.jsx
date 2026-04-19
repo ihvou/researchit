@@ -38,9 +38,9 @@ const HYBRID_FLOW = [
   {
     key: "stage_03c_evidence_deep_assist",
     phase: "stage_03c_evidence_deep_assist",
-    title: "Stage 03c - Deep Assist evidence",
-    detail: "Runs OpenAI, Claude, and Gemini evidence passes in parallel.",
-    modes: ["deep-assist"],
+    title: "Stage 03c - Deep Research ×3 evidence",
+    detail: "Runs ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel.",
+    modes: ["deep-research-x3", "deep-assist"],
   },
   {
     key: "stage_04_merge",
@@ -164,9 +164,9 @@ const MATRIX_FLOW = [
   {
     key: "stage_03c_evidence_deep_assist",
     phase: "stage_03c_evidence_deep_assist",
-    title: "Stage 03c - Deep Assist evidence",
-    detail: "Runs three-provider parallel matrix evidence collection.",
-    modes: ["deep-assist"],
+    title: "Stage 03c - Deep Research ×3 evidence",
+    detail: "Runs three-provider parallel Deep Research evidence collection.",
+    modes: ["deep-research-x3", "deep-assist"],
   },
   {
     key: "stage_04_merge",
@@ -357,6 +357,20 @@ function stateLabel(state) {
   if (state === "active") return "In progress";
   if (state === "failed") return "Blocked";
   return "Pending";
+}
+
+function skipReasonLabel(reason, diagnostics = {}) {
+  const value = String(reason || "").trim();
+  if (!value) return "Skipped by runtime guard.";
+  if (value === "subjects_provided") {
+    const count = Number(diagnostics?.subjectCount || 0);
+    return count > 0
+      ? `Skipped: subjects already provided (${count}).`
+      : "Skipped: subjects already provided.";
+  }
+  if (value === "scorecard_mode") return "Skipped: scorecard run does not require this stage.";
+  if (value === "native_mode") return "Skipped: native evidence mode selected.";
+  return `Skipped: ${value.replace(/_/g, " ")}.`;
 }
 
 function stateColor(state) {
@@ -653,8 +667,9 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
 }
 
 export default function ProgressTab({ uc, outputMode = "scorecard" }) {
-  const evidenceMode = String(uc?.analysisMeta?.evidenceMode || "native").trim().toLowerCase() === "deep-assist"
-    ? "deep-assist"
+  const rawEMode = String(uc?.analysisMeta?.evidenceMode || "native").trim().toLowerCase();
+  const evidenceMode = (rawEMode === "deep-research-x3" || rawEMode === "deep-assist")
+    ? "deep-research-x3"
     : "native";
   const flow = flowByEvidenceMode(outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW, evidenceMode);
   const rank = phaseRankMap(flow);
@@ -669,11 +684,11 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
       </div>
       <p style={{ fontSize: 12, color: "var(--ck-muted)", margin: "0 0 12px", lineHeight: 1.55 }}>
         {outputMode === "matrix"
-          ? (evidenceMode === "deep-assist"
-            ? "Live view of the canonical matrix pipeline: intake, planning, Deep Assist collection, shared QA gates, critic cycle, defend, synthesis, and finalize."
+          ? (evidenceMode === "deep-research-x3"
+            ? "Live view of the canonical matrix pipeline: intake, planning, Deep Research ×3 collection, shared QA gates, critic cycle, defend, synthesis, and finalize."
             : "Live view of the canonical matrix pipeline: intake, planning, memory/web evidence, shared QA gates, critic cycle, defend, synthesis, and finalize.")
-          : (evidenceMode === "deep-assist"
-            ? "Live view of the canonical scorecard pipeline: intake, planning, Deep Assist evidence, shared QA gates, critic cycle, defend, synthesis, and finalize."
+          : (evidenceMode === "deep-research-x3"
+            ? "Live view of the canonical scorecard pipeline: intake, planning, Deep Research ×3 evidence, shared QA gates, critic cycle, defend, synthesis, and finalize."
             : "Live view of the canonical scorecard pipeline: intake, planning, memory/web evidence, shared QA gates, critic cycle, defend, synthesis, and finalize.")}
       </p>
 
@@ -682,10 +697,15 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
           const state = getStepState(step, idx, currentIdx, uc);
           const isActive = state === "active";
           const stageRecord = stageRecords.get(step.phase) || null;
+          const skipped = !!stageRecord?.diagnostics?.skipped;
+          const skipReason = skipped
+            ? skipReasonLabel(stageRecord?.diagnostics?.reason, stageRecord?.diagnostics || {})
+            : "";
           const shouldShowCost = SHOW_PROGRESS_COSTS && String(step.phase || "").startsWith("stage_");
           const costSummary = shouldShowCost
             ? (stageCostSummary(stageRecord) || { tokensLabel: "-", priceLabel: "-", costLabel: "-" })
             : null;
+          const badgeStateLabel = skipped ? "Skipped" : stateLabel(state);
           return (
             <div
               key={step.key}
@@ -704,11 +724,16 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                   <Spinner size={10} color="var(--ck-text)" />
                 </div>
               ) : (
-                <input type="checkbox" checked={state === "done"} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
+                <input type="checkbox" checked={state === "done" || skipped} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
               )}
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>{step.title}</div>
                 <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{step.detail}</div>
+                {skipReason ? (
+                  <div style={{ fontSize: 10, color: "var(--ck-muted-soft)", marginTop: 4, lineHeight: 1.35 }}>
+                    {skipReason}
+                  </div>
+                ) : null}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                 <span
@@ -725,8 +750,8 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                     alignItems: "center",
                     gap: 5,
                   }}>
-                  {isActive ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                  {stateLabel(state)}
+                  {isActive && !skipped ? <Spinner size={9} color="var(--ck-text)" /> : null}
+                  {badgeStateLabel}
                 </span>
                 {costSummary ? (
                   <div style={{ fontSize: 10, color: "var(--ck-muted)", textAlign: "right", lineHeight: 1.35 }}>

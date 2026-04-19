@@ -9,7 +9,8 @@ function normalizeOutputType(value) {
 }
 
 function normalizeEvidenceMode(value) {
-  return clean(value).toLowerCase() === "deep-assist" ? "deep-assist" : "native";
+  const v = clean(value).toLowerCase();
+  return (v === "deep-research-x3" || v === "deep-assist") ? "deep-research-x3" : "native";
 }
 
 function slugify(value, fallback = "item") {
@@ -488,8 +489,8 @@ export function toUseCaseState(state = {}) {
   const webSearchCounts = collectWebSearchCounters(state);
   const analysisMeta = {
     analysisMode: outputMode === "matrix"
-      ? (state?.mode === "deep-assist" ? "matrix-deep-assist" : "matrix")
-      : (state?.mode === "deep-assist" ? "deep-assist" : "hybrid"),
+      ? (state?.mode === "deep-research-x3" ? "matrix-deep-assist" : "matrix")
+      : (state?.mode === "deep-research-x3" ? "deep-assist" : "hybrid"),
     evidenceMode: state?.mode,
     strictQuality: !!state?.strictQuality,
     qualityGrade: qualityGrade === "decision-grade" ? "standard" : qualityGrade,
