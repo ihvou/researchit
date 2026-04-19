@@ -1659,7 +1659,7 @@ export default function App({
                   fontSize: 12,
                   fontWeight: 700,
                 }}>
-                Research Team: ChatGPT + Gemini + Claude
+                Research Team: ChatGPT + Gemini
               </button>
               <button
                 type="button"
@@ -1677,8 +1677,8 @@ export default function App({
             </div>
             <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
               {evidenceMode === "deep-research-x3"
-                ? "Runs ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel, then merges their independent findings for maximum depth and cross-validation."
-                : "ChatGPT: memory evidence, scoring, and analysis. Gemini: live web search, recovery, and synthesis. Claude: independent critic review. Includes source verification and targeted recovery on weak coverage."}
+                ? <><strong style={{ color: "var(--ck-text)" }}>ChatGPT</strong> Deep Research, <strong style={{ color: "var(--ck-text)" }}>Claude</strong> Research, and <strong style={{ color: "var(--ck-text)" }}>Gemini</strong> Deep Research run in parallel for maximum evidence depth. Findings are merged, then <strong style={{ color: "var(--ck-text)" }}>Claude</strong> applies independent critic review, <strong style={{ color: "var(--ck-text)" }}>ChatGPT</strong> defends or concedes each flag, and <strong style={{ color: "var(--ck-text)" }}>Gemini</strong> writes the final synthesis.</>
+                : <><strong style={{ color: "var(--ck-text)" }}>ChatGPT</strong> generates memory-grounded evidence, handles scoring, analysis, and defends against critic flags. <strong style={{ color: "var(--ck-text)" }}>Gemini</strong> runs live web search, targeted recovery, and writes the final synthesis. <strong style={{ color: "var(--ck-text)" }}>Claude</strong> independently reviews all claims as Critic — coherence, overclaims, and counter-cases.</>}
             </div>
           </div>
           <textarea
