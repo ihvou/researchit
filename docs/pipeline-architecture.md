@@ -33,7 +33,32 @@ There is no separate "Synthesizer" actor. Stage 14 (executive synthesis) is an A
 
 ## Canonical Pipeline Diagram
 
-The diagram is the source of truth for stage sequence, actor assignment, and per-stage model routing. Each node shows `Actor | Model` — that is the exact, non-negotiable route for that stage.
+The diagram is the **single source of truth** for stage sequence, actor assignment, per-stage model routing, and the data contract between stages. Keep it current whenever any of these change. Do not let the code drift from it silently — if you change a stage's model, input, output, or LLM contract, update the corresponding node here first.
+
+### Node structure (required for every node)
+
+Every LLM stage node must contain all seven fields in this order:
+
+```
+#NN TITLE
+Goal:   one-line description of what this stage achieves
+Actor:  Analyst | Model: provider:model-name
+        Critic  | Model: provider:model-name
+        engine              (no model line for engine-only stages)
+In:     short phrase — what this stage receives as input
+Req:    short phrase — what is asked of the LLM            (LLM stages only)
+Resp:   short phrase — what the LLM returns                (LLM stages only)
+Out:    short phrase — what this stage emits to the next stage
+```
+
+Engine-only stages (no LLM call) omit `Req:` and `Resp:`.
+Router diamonds (`{"..."}`) stay minimal — they are control-flow only, not data stages.
+
+**When updating a node:**
+- If the model changes → update `Actor | Model` here AND update the corresponding route in `engine/lib/routing/actor-resolver.js` and `engine/lib/routing/route-preflight.js`.
+- If the input/output contract changes → update `In:` / `Out:` here AND verify the upstream stage emits that type and the downstream stage consumes it.
+- If the LLM prompt shape changes → update `Req:` / `Resp:` here.
+- Never leave a node with partial fields. A node missing `Goal`, `In`, or `Out` is incomplete and must be fixed before merging.
 
 **Routing policy:**
 - Each stage declares one exact provider and model. The pipeline does not pick the first available key, does not fall through to env-var defaults, and does not failover to another provider.
