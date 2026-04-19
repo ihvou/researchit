@@ -305,6 +305,13 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
       title: stage.title,
       status: "started",
     });
+    state = applyStatePatch(state, {
+      ui: { phase: stage.id },
+    });
+    emitProgress(state, callbacks);
+    emitDebugSnapshot(state, callbacks, { status: state?.ui?.status || "analyzing" }, {
+      incremental: true,
+    });
 
     try {
       const result = await stage.run({ state, runtime, callbacks });

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Side-by-side comparison of Researchit (Native and Deep Assist) against ChatGPT Deep Research, Claude Research, and Gemini Deep Research on identical prompts. Goal: identify where Researchit wins, where it loses, and what to fix.
+Side-by-side comparison of Researchit (Research Team and Deep Research ×3) against ChatGPT Deep Research, Claude Research, and Gemini Deep Research on identical prompts. Goal: identify where Researchit wins, where it loses, and what to fix.
 
 ## Test Cases
 
@@ -47,8 +47,8 @@ For each test case, run **5 variants**:
 
 | # | System | Mode | What to capture |
 |---|--------|------|-----------------|
-| 1 | **Researchit Native** | Scorecard or Matrix | Full export (JSON + HTML/PDF) |
-| 2 | **Researchit Deep Assist** | Same research type | Full export (JSON + HTML/PDF) |
+| 1 | **Researchit Research Team** | Scorecard or Matrix | Full export (JSON + HTML/PDF) |
+| 2 | **Researchit Deep Research ×3** | Same research type | Full export (JSON + HTML/PDF) |
 | 3 | **ChatGPT Deep Research** | Same prompt (verbatim) | Copy full output + sources list |
 | 4 | **Claude Research** | Same prompt (verbatim) | Copy full output + sources list |
 | 5 | **Gemini Deep Research** | Same prompt (verbatim) | Copy full output + sources list |
@@ -126,8 +126,8 @@ Date: [YYYY-MM-DD]
 
                         | Accuracy | Sources | Depth | Decision | Contradiction | Structure | Recency | Weighted |
                         | (25%)    | (20%)   | (15%) | (15%)    | (10%)         | (10%)     | (5%)    | Total    |
-Researchit Native       |          |         |       |          |               |           |         |          |
-Researchit Deep Assist  |          |         |       |          |               |           |         |          |
+Researchit Research Team    |          |         |       |          |               |           |         |          |
+Researchit Deep Research ×3 |          |         |       |          |               |           |         |          |
 ChatGPT Deep Research   |          |         |       |          |               |           |         |          |
 Claude Research         |          |         |       |          |               |           |         |          |
 Gemini Deep Research    |          |         |       |          |               |           |         |          |
@@ -144,8 +144,8 @@ Weighted total formula: `(Accuracy * 0.25) + (Sources * 0.20) + (Depth * 0.15) +
 ## What to Upload for Review
 
 For each test case, share with Claude:
-1. Researchit Native export (JSON preferred, HTML/PDF also fine)
-2. Researchit Deep Assist export
+1. Researchit Research Team export (JSON preferred, HTML/PDF also fine)
+2. Researchit Deep Research ×3 export
 3. ChatGPT output (copy-paste or screenshot)
 4. Claude Research output (copy-paste or screenshot)
 5. Gemini output (copy-paste or screenshot)
@@ -155,22 +155,22 @@ For each test case, share with Claude:
 
 Based on current implementation state:
 
-**Where Researchit Native should win:**
+**Where Researchit Research Team should win:**
 - Structure & Completeness (structured matrix/scorecard vs prose)
 - Contradiction & Uncertainty Handling (confidence calibration, polarity guards, critic monitoring)
 - Decision Utility (decision context injection, executive synthesis)
 
-**Where Researchit Native might lose:**
+**Where Researchit Research Team might lose:**
 - Evidence Depth on hard topics (single web_search pass vs deep research's extended browsing)
 - Recency on fast-moving topics (web_search snippet quality varies)
 - Source Quality when retrieval returns thin results for niche domains
 
-**Where Deep Assist should win over Native:**
-- Evidence Depth (3 providers searching independently)
-- Source Quality (more sources, cross-validated)
+**Where Deep Research ×3 should win over Research Team:**
+- Evidence Depth (3 providers independently invoking ChatGPT/Claude/Gemini Deep Research)
+- Source Quality (more sources, cross-validated across providers)
 - Factual Accuracy (provider agreement catches hallucination)
 
-**Where Deep Assist might still lose vs mainstream:**
+**Where Deep Research ×3 might still lose vs mainstream:**
 - DA-02 (quality recovery loop) is not implemented yet — thin/contradictory cells aren't retried
 - DA-03 (safety guardrails) is not implemented — no per-step timeouts
 - The merge is "pick best provider per cell" — not a true synthesis of all 3
@@ -180,5 +180,5 @@ Based on current implementation state:
 Use results to:
 1. Validate or adjust priorities in TASKS.md
 2. Identify if RQ-02 (Red Team) or RQ-05 (Counterfactual Evidence) would have changed outcomes
-3. Decide whether Deep Assist merge strategy needs rework before DA-02
+3. Decide whether Deep Research ×3 merge strategy needs rework before DA-02
 4. Feed specific weak cases into FR-02 benchmark suite when it's built

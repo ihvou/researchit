@@ -55,9 +55,9 @@ All run types share this stage order:
 1. `stage_01_intake`
 2. `stage_01b_subject_discovery` (matrix optional)
 3. `stage_02_plan`
-4. `stage_03a_evidence_memory` (native)
-5. `stage_03b_evidence_web` (native)
-6. `stage_03c_evidence_deep_assist` (deep-assist)
+4. `stage_03a_evidence_memory` (Research Team)
+5. `stage_03b_evidence_web` (Research Team)
+6. `stage_03c_evidence_deep_assist` (Deep Research ×3)
 7. `stage_04_merge`
 8. `stage_05_score_confidence`
 9. `stage_06_source_verify`
@@ -71,7 +71,7 @@ All run types share this stage order:
 17. `stage_14_synthesize`
 18. `stage_15_finalize`
 
-Native vs deep-assist differs only inside Stage 03 (03a/03b vs 03c); downstream stages are shared.
+Research Team vs Deep Research ×3 differs only inside Stage 03 (03a/03b vs 03c); all downstream stages are shared.
 
 For the canonical pipeline architecture and stage breakdown, see [docs/pipeline-architecture.md](docs/pipeline-architecture.md).
 

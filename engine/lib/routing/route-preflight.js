@@ -65,7 +65,7 @@ export function runRoutePreflight({ state = {}, config = {} } = {}) {
     const required = ["chatgpt", "claude", "gemini"];
     const missing = required.filter((provider) => !providers.includes(provider));
     if (missing.length) {
-      const err = new Error(`Stage 03c preflight failed; missing deep-assist providers: ${missing.join(", ")}.`);
+      const err = new Error(`Stage 03c preflight failed; missing Deep Research ×3 providers: ${missing.join(", ")}.`);
       err.reasonCode = REASON_CODES.ROUTE_MISMATCH_PREFLIGHT;
       throw err;
     }

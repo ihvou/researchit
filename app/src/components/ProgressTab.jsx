@@ -694,10 +694,12 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {flow.map((step, idx) => {
-          const state = getStepState(step, idx, currentIdx, uc);
+          const baseState = getStepState(step, idx, currentIdx, uc);
+          const state = baseState;
           const isActive = state === "active";
           const stageRecord = stageRecords.get(step.phase) || null;
           const skipped = !!stageRecord?.diagnostics?.skipped;
+          const showActiveSpinner = isActive && !skipped;
           const skipReason = skipped
             ? skipReasonLabel(stageRecord?.diagnostics?.reason, stageRecord?.diagnostics || {})
             : "";
@@ -719,7 +721,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                 border: `1px solid ${isActive ? "var(--ck-line-strong)" : "var(--ck-line)"}`,
                 background: "var(--ck-surface-soft)",
               }}>
-              {isActive ? (
+              {showActiveSpinner ? (
                 <div style={{ marginTop: 2, display: "grid", placeItems: "center" }}>
                   <Spinner size={10} color="var(--ck-text)" />
                 </div>
@@ -750,7 +752,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                     alignItems: "center",
                     gap: 5,
                   }}>
-                  {isActive && !skipped ? <Spinner size={9} color="var(--ck-text)" /> : null}
+                  {showActiveSpinner ? <Spinner size={9} color="var(--ck-text)" /> : null}
                   {badgeStateLabel}
                 </span>
                 {costSummary ? (

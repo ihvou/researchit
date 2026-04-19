@@ -61,7 +61,7 @@ The canonical sequence is shared by scorecard and matrix runs.
 | `stage_02_plan` | Query and unit planning | Analyst |
 | `stage_03a_evidence_memory` | Native memory draft evidence | Analyst |
 | `stage_03b_evidence_web` | Native web-grounded evidence | Analyst |
-| `stage_03c_evidence_deep_assist` | Deep-assist provider evidence lanes | Analyst |
+| `stage_03c_evidence_deep_assist` | Deep Research ×3 provider evidence lanes | Analyst |
 | `stage_04_merge` | Merge evidence into unified bundle | Analyst + deterministic rules |
 | `stage_05_score_confidence` | Unit scoring + confidence assignment | Analyst |
 | `stage_06_source_verify` | URL fetch/verification checks | engine |
@@ -76,8 +76,8 @@ The canonical sequence is shared by scorecard and matrix runs.
 | `stage_15_finalize` | Coverage + decision gates, final status | engine (+ analyst summary route) |
 
 Mode differences:
-- native mode runs `03a + 03b`
-- deep-assist mode runs `03c`
+- Research Team mode (`native`) runs `03a + 03b`
+- Deep Research ×3 mode (`deep-research-x3`) runs `03c`
 - all downstream stages are identical
 
 ## 4. Contracts and State
@@ -87,7 +87,7 @@ Core run state and output shaping are in:
 - `engine/pipeline/contracts/reason-codes.js`
 
 Key state properties:
-- `mode`: `native` or `deep-assist`
+- `mode`: `native` or `deep-research-x3`
 - `outputType`: `scorecard` or `matrix`
 - `strictQuality`: strict gate behavior
 - `quality.reasonCodes`: normalized machine codes

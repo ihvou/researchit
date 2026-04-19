@@ -36,7 +36,7 @@ configs/
 ## Key Architecture
 
 - **Two output modes**: Scorecard (per-dimension scores) and Matrix (subject × attribute grid)
-- **Two evidence modes**: "Verified Research" (native hybrid) and "Deep Research ×3" (3 external providers cross-validated)
+- **Two evidence modes**: "Research Team" (`native` — memory + web hybrid, critic debate, recovery) and "Deep Research ×3" (`deep-research-x3` — ChatGPT + Claude + Gemini Deep Research in parallel, then merged)
 - **Transport is injected**: engine never calls APIs directly; `app/api/` routes resolve providers
 - **Provider routing**: providerConfig.js resolves role → provider → model via strict precedence; routes are pinned and fail-fast (no automatic provider/model failover)
 - **ACTIVE_RUNTIME global** in analysis.js — mutable state, unsafe for concurrent runs (flagged as ENG-02)
