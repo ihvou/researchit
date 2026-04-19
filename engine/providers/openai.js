@@ -225,8 +225,14 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
   };
 }
 
-async function callResponsesWithWebSearch({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl }) {
-  const toolTypes = ["web_search", "web_search_preview"];
+async function callResponsesWithWebSearch({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl, deepResearch = false }) {
+  // Deep Research: prefer web_search_preview first — this is the tool used by
+  // ChatGPT Deep Research with o-series models (o3, o4-mini). The o-series model
+  // + web_search_preview combination is what powers the ChatGPT Deep Research product.
+  // Regular liveSearch: try web_search first (stable), fall back to web_search_preview.
+  const toolTypes = deepResearch
+    ? ["web_search_preview", "web_search"]
+    : ["web_search", "web_search_preview"];
   let lastErr;
 
   for (const toolType of toolTypes) {
@@ -284,6 +290,7 @@ export async function callOpenAI({
   systemPrompt,
   maxTokens = 5000,
   liveSearch = false,
+  deepResearch = false,
   baseUrl = "https://api.openai.com",
 }) {
   if (!apiKey) throw new Error("OpenAI API key is required");
@@ -303,6 +310,7 @@ export async function callOpenAI({
       systemPrompt,
       maxTokens,
       baseUrl,
+      deepResearch,
     });
   }
 

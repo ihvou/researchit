@@ -35,8 +35,11 @@ const SHARED_DEEP_ASSIST = {
     chatgpt: {
       analyst: {
         provider: "openai",
-        model: "gpt-5.4",
-        webSearchModel: "gpt-5.4",
+        // o3 is the model powering ChatGPT Deep Research. Combined with
+        // web_search_preview in the Responses API it runs multi-step autonomous
+        // research — distinct from gpt-5.4 which is a single-pass chat model.
+        model: "o3",
+        webSearchModel: "o3",
       },
     },
     claude: {

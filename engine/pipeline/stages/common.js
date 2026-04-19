@@ -162,6 +162,7 @@ export async function callActorJson({
   timeoutMs = 60000,
   maxRetries = 1,
   liveSearch = false,
+  deepResearch = false,
   routeOverride = {},
   schemaHint = "",
 } = {}) {
@@ -198,6 +199,7 @@ export async function callActorJson({
     model: route.model,
     webSearchModel: route.webSearchModel,
     liveSearch: !!liveSearch,
+    deepResearch: !!deepResearch,
     includeMeta: true,
     retry: { maxRetries: 0 },
     timeoutMs,

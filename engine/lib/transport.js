@@ -221,6 +221,7 @@ export function createTransport(callFn, transportOptions = {}) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        deepResearch: !!options.deepResearch,
         stageId: typeof options.stageId === "string" ? options.stageId : undefined,
         provider: typeof options.provider === "string" ? options.provider : undefined,
         model: typeof options.model === "string" ? options.model : undefined,

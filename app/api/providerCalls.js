@@ -78,6 +78,7 @@ async function callAnthropic({
   systemPrompt,
   maxTokens,
   liveSearch = false,
+  deepResearch = false,
   baseUrl = "",
 }) {
   if (!apiKey) throw new Error("Anthropic API key is required");
@@ -92,6 +93,9 @@ async function callAnthropic({
     anthropicMessages.push({ role: "user", content: "Continue." });
   }
 
+  // Deep Research uses more search iterations to match Claude's Research mode.
+  const searchMaxUses = deepResearch ? 20 : 6;
+
   const makeRequest = async (withSearch) => {
     const body = {
       model: resolvedModel,
@@ -103,7 +107,7 @@ async function callAnthropic({
           tools: [{
             type: "web_search_20250305",
             name: "web_search",
-            max_uses: 6,
+            max_uses: searchMaxUses,
           }],
         }
         : {}),
@@ -218,6 +222,7 @@ async function callGemini({
   systemPrompt,
   maxTokens,
   liveSearch = false,
+  deepResearch = false,
   baseUrl = "",
 }) {
   if (!apiKey) throw new Error("Gemini API key is required");
@@ -237,6 +242,10 @@ async function callGemini({
         : {}),
       generationConfig: {
         maxOutputTokens: Math.max(256, Number(maxTokens) || 4000),
+        // Deep Research: enable extended thinking (thinkingBudget: -1 = unlimited).
+        // This activates Gemini 2.5 Pro's multi-step reasoning loop, matching
+        // the behaviour of Gemini Deep Research in the UI.
+        ...(deepResearch ? { thinkingConfig: { thinkingBudget: -1 } } : {}),
       },
       ...(withSearch ? { tools: [{ google_search: {} }] } : {}),
     };
@@ -287,6 +296,7 @@ export async function callProviderModel({
   systemPrompt,
   maxTokens = 5000,
   liveSearch = false,
+  deepResearch = false,
   baseUrl = "",
 }) {
   const provider = cleanText(providerId).toLowerCase();
@@ -298,6 +308,7 @@ export async function callProviderModel({
       systemPrompt,
       maxTokens,
       liveSearch,
+      deepResearch,
       baseUrl,
     });
   }
@@ -309,6 +320,7 @@ export async function callProviderModel({
       systemPrompt,
       maxTokens,
       liveSearch,
+      deepResearch,
       baseUrl,
     });
   }
@@ -320,6 +332,7 @@ export async function callProviderModel({
     systemPrompt,
     maxTokens,
     liveSearch,
+    deepResearch,
     baseUrl,
   });
 }

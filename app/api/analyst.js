@@ -22,6 +22,7 @@ export default async function handler(req, res) {
     systemPrompt,
     maxTokens = 5000,
     liveSearch = false,
+    deepResearch = false,
     provider,
     model,
     webSearchModel,
@@ -75,6 +76,7 @@ export default async function handler(req, res) {
       systemPrompt,
       maxTokens,
       liveSearch,
+      deepResearch,
       baseUrl: resolved.baseUrl,
     });
     return res.status(200).json({

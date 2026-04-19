@@ -57,7 +57,7 @@ For full architecture see `docs/architecture.md`; for high-level pipeline overvi
 10. **Synthesizer (RQ-09)** — independent executive narrative via different model, produces decisionImplication + dissent
 11. **Discovery** — suggests related research threads
 
-Deep Research ×3 inserts after step 2: three providers run in parallel → merge best per dimension → DA-02 recovery loop for weak dimensions → then continues from step 4.
+Deep Research ×3 inserts after step 2: three providers run **Deep Research** in parallel — OpenAI **o3** via Responses API + `web_search_preview` (ChatGPT Deep Research product); Anthropic **claude-sonnet-4** + `web_search_20250305` tool with up to 20 searches (Claude Research product); Gemini **gemini-2.5-pro** + `google_search` grounding + `thinkingConfig.thinkingBudget: -1` (extended reasoning, Gemini Deep Research equivalent) — then merge best per dimension → DA-02 recovery loop for weak dimensions → continues from step 4.
 
 ### Matrix Pipeline (matrix.js → `runMatrixAnalysis`)
 
@@ -75,7 +75,7 @@ Deep Research ×3 inserts after step 2: three providers run in parallel → merg
 12. **Coverage SLA** — validates minimum source/evidence thresholds
 13. **Discovery** — suggests additional subjects/attributes
 
-Deep Research ×3 inserts after step 5: three providers run in parallel → merge/reconcile → DA-02 recovery for conflicting cells → re-verify sources → then continues from step 6.
+Deep Research ×3 inserts after step 5: same three-provider Deep Research as scorecard (o3, claude-sonnet-4, gemini-2.5-pro) → merge/reconcile → DA-02 recovery for conflicting cells → re-verify sources → then continues from step 6.
 
 ## Model Configuration
 

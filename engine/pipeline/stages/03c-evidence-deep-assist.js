@@ -77,6 +77,29 @@ function providerToLabel(providerId = "") {
   return key;
 }
 
+function buildPlanContext(plan = {}, unitIds = []) {
+  const units = ensureArray(plan?.units).filter((u) => !unitIds.length || unitIds.includes(clean(u?.unitId)));
+  if (!units.length) return "";
+  const niche = clean(plan?.niche);
+  const lines = ["Research plan context (use as directional guidance, not a constraint):"];
+  if (niche) lines.push(`Niche: ${niche}`);
+  units.forEach((u) => {
+    const unitId = clean(u?.unitId);
+    if (!unitId) return;
+    const angles = [
+      ...ensureArray(u?.supportingQueries).slice(0, 2).map((q) => clean(q)),
+      ...ensureArray(u?.counterfactualQueries).slice(0, 1).map((q) => clean(q)),
+    ].filter(Boolean);
+    const targets = ensureArray(u?.sourceTargets).slice(0, 3).map((t) => clean(t)).filter(Boolean);
+    const gap = clean(u?.gapHypothesis);
+    lines.push(`- ${unitId}:`);
+    if (gap) lines.push(`  gap hypothesis: ${gap}`);
+    if (angles.length) lines.push(`  research angles: ${angles.join(" | ")}`);
+    if (targets.length) lines.push(`  preferred sources: ${targets.join(", ")}`);
+  });
+  return lines.join("\n");
+}
+
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   if (clean(state?.mode).toLowerCase() !== "deep-assist") {
@@ -89,12 +112,18 @@ export async function runStage(context = {}) {
   }
 
   const providers = normalizeProviders(runtime?.config || state?.config || {});
+  const plan = state?.plan || {};
+
   const prompt = state?.outputType === "matrix"
-    ? `Objective: ${clean(state?.request?.objective)}
+    ? (() => {
+      const attrIds = ensureArray(state?.request?.matrix?.attributes).map((a) => clean(a?.id));
+      const planContext = buildPlanContext(plan, attrIds);
+      return `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
-Generate full matrix evidence for all listed subject x attribute cells.
+${planContext ? `\n${planContext}\n` : ""}
+Generate full matrix evidence for all listed subject x attribute cells. Use web search to find real, current, source-backed evidence.
 Subjects:
 ${ensureArray(state?.request?.matrix?.subjects).map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
 Attributes:
@@ -102,22 +131,30 @@ ${ensureArray(state?.request?.matrix?.attributes).map((attribute) => `- ${attrib
 
 Rules:
 - Cover every listed subject x attribute cell.
-- If reliable evidence is unavailable, keep "sources" empty, use low confidence, and record the gap in "missingEvidence".
+- Cite real named sources with URLs wherever possible; prefer independent, third-party sources.
+- If reliable evidence is unavailable after searching, keep "sources" empty, use low confidence, and record the gap in "missingEvidence".
 
-Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`
-    : `Objective: ${clean(state?.request?.objective)}
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+    })()
+    : (() => {
+      const dimIds = ensureArray(state?.request?.scorecard?.dimensions).map((d) => clean(d?.id));
+      const planContext = buildPlanContext(plan, dimIds);
+      return `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
-Generate full scorecard evidence for all listed dimensions.
+${planContext ? `\n${planContext}\n` : ""}
+Generate full scorecard evidence for all listed dimensions. Use web search to find real, current, source-backed evidence.
 Dimensions:
 ${ensureArray(state?.request?.scorecard?.dimensions).map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${clean(dim.brief)}` : ""}`).join("\n")}
 
 Rules:
-- Ground each unit in concrete, source-backed evidence.
-- If reliable evidence is unavailable, keep "sources" empty and explain the gap in "missingEvidence".
+- Ground each unit in concrete, source-backed evidence with real named sources and URLs.
+- Prefer independent, third-party sources; flag vendor claims appropriately.
+- If reliable evidence is unavailable after searching, keep "sources" empty and explain the gap in "missingEvidence".
 
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+    })();
 
   const tasks = providers.map(async (providerId) => {
     const override = providerOverride(runtime?.config || state?.config || {}, providerId);
@@ -126,12 +163,14 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       runtime,
       stageId: STAGE_ID,
       actor: "analyst",
-      systemPrompt: runtime?.prompts?.analyst || "You produce independent provider drafts.",
+      systemPrompt: runtime?.prompts?.analyst || "You are a senior research analyst. Use web search to find real, current, source-backed evidence.",
       userPrompt: prompt,
-      tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 12000,
+      // Deep research responses are comprehensive — 32k gives adequate room.
+      tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 32000,
       timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || (20 * 60 * 1000),
       maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 0,
       liveSearch: true,
+      deepResearch: true,
       routeOverride: {
         provider: clean(override?.provider) || providerToLabel(providerId),
         model: clean(override?.model),
