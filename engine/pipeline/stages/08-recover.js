@@ -268,9 +268,10 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         actor: "analyst",
         systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
         userPrompt: prompt,
-        tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
+        tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
         timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-        maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
+        // Group loop processes each group sequentially; inner retries would compound timeouts.
+        maxRetries: 0,
         liveSearch: true,
         schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
       });

@@ -8,6 +8,7 @@ import {
   createStageRecord,
   completeStageRecord,
   appendStageRecord,
+  updateStageRecord,
   appendIoRecord,
   appendProgressRecord,
   pushReasonCodes,
@@ -86,7 +87,7 @@ const STAGE_BUDGETS = {
   [STAGE_05_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 8000 },
   [STAGE_06_ID]: { timeoutMs: 60000, retryMax: 0, tokenBudget: 0 },
   [STAGE_07_ID]: { timeoutMs: 15000, retryMax: 0, tokenBudget: 0 },
-  [STAGE_08_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 8000 },
+  [STAGE_08_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 16000 },
   [STAGE_09_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 6000 },
   [STAGE_10_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
   [STAGE_11_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
@@ -300,6 +301,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
     if (!stageEnabled(stage, state)) continue;
 
     const stageRecord = createStageRecord(stage.id, { title: stage.title });
+    appendStageRecord(state, stageRecord);
     appendProgressRecord(state, {
       stageId: stage.id,
       title: stage.title,
@@ -342,7 +344,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         modelRoute: completedRecord.modelRoute,
         config: runtime?.config || state?.config || {},
       });
-      appendStageRecord(state, completedRecord);
+      updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);
 
       appendProgressRecord(state, {
@@ -371,7 +373,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
           error: clean(err?.message),
         },
       });
-      appendStageRecord(state, completedRecord);
+      updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);
       appendQualityReasonCodes(state, reasonCodes);
       pushReasonCodes(state, reasonCodes);

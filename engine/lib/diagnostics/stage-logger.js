@@ -50,6 +50,18 @@ export function appendStageRecord(state = {}, record = {}) {
   return state;
 }
 
+export function updateStageRecord(state = {}, record = {}) {
+  if (!state?.diagnostics || typeof state.diagnostics !== "object") return state;
+  const stages = Array.isArray(state.diagnostics.stages) ? state.diagnostics.stages : [];
+  const idx = stages.findIndex((s) => s?.stage === record?.stage);
+  if (idx >= 0) {
+    state.diagnostics.stages = stages.map((s, i) => (i === idx ? record : s));
+  } else {
+    state.diagnostics.stages = [...stages, record];
+  }
+  return state;
+}
+
 export function appendIoRecord(state = {}, ioEntry = {}) {
   if (!state?.diagnostics || typeof state.diagnostics !== "object") return state;
   const io = Array.isArray(state.diagnostics.io) ? state.diagnostics.io : [];
