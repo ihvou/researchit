@@ -1659,7 +1659,7 @@ export default function App({
                   fontSize: 12,
                   fontWeight: 700,
                 }}>
-                Research Team
+                Research Team: ChatGPT + Gemini + Claude
               </button>
               <button
                 type="button"
@@ -1672,13 +1672,13 @@ export default function App({
                   fontSize: 12,
                   fontWeight: 700,
                 }}>
-                Deep Research ×3
+                Deep Research ×3: ChatGPT + Claude + Gemini
               </button>
             </div>
             <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
               {evidenceMode === "deep-research-x3"
                 ? "Runs ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel, then merges their independent findings for maximum depth and cross-validation."
-                : "An AI analyst team — memory + web evidence, targeted recovery, critic debate, and synthesis — delivering calibrated, decision-ready research."}
+                : "ChatGPT: memory evidence, scoring, and analysis. Gemini: live web search, recovery, and synthesis. Claude: independent critic review. Includes source verification and targeted recovery on weak coverage."}
             </div>
           </div>
           <textarea
