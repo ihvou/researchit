@@ -17,7 +17,6 @@ function baseModels() {
     analyst: { provider: "openai", model: "gpt-5.4" },
     retrieval: { provider: "gemini", model: "gemini-2.5-pro" },
     critic: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
-    synthesizer: { provider: "gemini", model: "gemini-2.5-pro" },
   };
 }
 
@@ -54,7 +53,7 @@ test("callActorJson parse retry applies repair prompt and reduces scope", async 
   assert.equal(out?.parsed?.ok, true);
   assert.equal(prompts.length, 2);
   assert.match(prompts[1], /Previous response failed JSON parsing/i);
-  assert.equal(prompts[1].includes("L4_DROP"), false);
+  assert.equal(prompts[1].includes("L4_DROP"), true);
 });
 
 test("stage 03b matrix web pass adaptively splits chunks and preserves full cell coverage", async () => {
@@ -253,9 +252,9 @@ test("stage 14 compact critic summary marks counterCaseChangedFinalUnits only on
     budgets: {
       stage_14_synthesize: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
     },
-    prompts: { synthesizer: "synth" },
+    prompts: { analystSynthesis: "synth" },
     transport: {
-      callSynthesizer: async (messages) => {
+      callAnalyst: async (messages) => {
         const prompt = String(messages?.[0]?.content || "");
         prompts.push(prompt);
         return {
@@ -266,8 +265,8 @@ test("stage 14 compact critic summary marks counterCaseChangedFinalUnits only on
           }),
         };
       },
-      callAnalyst: async () => ({ text: '{"ok":true}' }),
       callCritic: async () => ({ text: '{"ok":true}' }),
+      callSynthesizer: async () => ({ text: '{"ok":true}' }),
     },
   };
 

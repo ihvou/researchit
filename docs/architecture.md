@@ -36,7 +36,6 @@ Public entry points:
 
 - `Analyst`: plan, gather, merge, score, recover, defend
 - `Critic`: coherence checks, overclaim challenge, counter-case
-- `Synthesizer`: independent executive synthesis
 - deterministic engine steps: input validation, verification, assessment, gate enforcement
 
 ### Routing Guarantees
@@ -45,9 +44,8 @@ Route preflight is enforced in `engine/lib/routing/route-preflight.js` before pa
 
 Expected default routing:
 - Analyst reasoning stages: OpenAI
-- Analyst retrieval-heavy stages (subject discovery/web/recovery): Gemini
+- Analyst retrieval-heavy stages (subject discovery/web/recovery/synthesis): Gemini
 - Critic stages: Anthropic
-- Synthesizer stage: Gemini
 
 Deep-assist carve-out:
 - Stage `03c` requires all configured deep-assist providers (OpenAI + Anthropic + Gemini lanes by default) and fails preflight if any required lane is missing.
@@ -74,7 +72,7 @@ The canonical sequence is shared by scorecard and matrix runs.
 | `stage_11_challenge` | Overclaim challenge flags | Critic |
 | `stage_12_counter_case` | Disconfirming evidence + risks | Critic |
 | `stage_13_defend` | Analyst concede/defend per critic flag | Analyst |
-| `stage_14_synthesize` | Independent synthesis artifact | Synthesizer |
+| `stage_14_synthesize` | Executive synthesis artifact | Analyst |
 | `stage_15_finalize` | Coverage + decision gates, final status | engine (+ analyst summary route) |
 
 Mode differences:
@@ -147,13 +145,11 @@ Constraints:
 The app provides transport callbacks consumed by engine:
 - `callAnalyst`
 - `callCritic`
-- `callSynthesizer`
 - `fetchSource` (for source verification)
 
 API routes in `app/api/`:
 - `analyst.js`
 - `critic.js`
-- `synthesizer.js`
 - `fetch-source.js`
 
 UI pipeline tracking uses canonical stage IDs in:

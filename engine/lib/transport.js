@@ -22,14 +22,6 @@ const DEFAULT_POLICY_BY_ROLE = {
     backoffFactor: 2,
     retryableStatus: DEFAULT_RETRYABLE_STATUS,
   },
-  synthesizer: {
-    timeoutMs: 120000,
-    maxRetries: 2,
-    initialBackoffMs: 300,
-    maxBackoffMs: 2500,
-    backoffFactor: 2,
-    retryableStatus: DEFAULT_RETRYABLE_STATUS,
-  },
   fetchSource: {
     timeoutMs: 12000,
     maxRetries: 1,
@@ -169,7 +161,10 @@ function resolvePolicy(roleKey, transportOptions = {}, callOptions = {}) {
 
 function normalizeResult(data, includeMeta = false) {
   if (data?.error) {
-    throw new Error(data.error);
+    const err = new Error(String(data.error));
+    err.status = Number(data?.status || 0) || undefined;
+    err.reasonCode = String(data?.reasonCode || "").trim() || undefined;
+    throw err;
   }
   if (includeMeta) return data;
   return data?.text;
@@ -226,6 +221,7 @@ export function createTransport(callFn, transportOptions = {}) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        stageId: typeof options.stageId === "string" ? options.stageId : undefined,
         provider: typeof options.provider === "string" ? options.provider : undefined,
         model: typeof options.model === "string" ? options.model : undefined,
         webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
@@ -247,6 +243,7 @@ export function createTransport(callFn, transportOptions = {}) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        stageId: typeof options.stageId === "string" ? options.stageId : undefined,
         provider: typeof options.provider === "string" ? options.provider : undefined,
         model: typeof options.model === "string" ? options.model : undefined,
         webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
@@ -268,14 +265,15 @@ export function createTransport(callFn, transportOptions = {}) {
         systemPrompt,
         maxTokens,
         liveSearch: !!options.liveSearch,
+        stageId: typeof options.stageId === "string" ? options.stageId : undefined,
         provider: typeof options.provider === "string" ? options.provider : undefined,
         model: typeof options.model === "string" ? options.model : undefined,
         webSearchModel: typeof options.webSearchModel === "string" ? options.webSearchModel : undefined,
         baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
       };
-      const policy = resolvePolicy("synthesizer", transportOptions, options);
+      const policy = resolvePolicy("analyst", transportOptions, options);
       return callWithRetry({
-        role: "synthesizer",
+        role: "analyst",
         payload,
         includeMeta: !!options.includeMeta,
         callFn,

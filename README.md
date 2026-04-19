@@ -37,16 +37,14 @@ Follow-up workflow remains in `engine/pipeline/followUp.js`.
 
 ## Actor Model and Routing Policy
 
-The pipeline uses three actor roles:
+The pipeline uses two actor roles:
 - `Analyst`: planning, scoring, recovery, and defend/concede
 - `Critic`: coherence checks, overclaim challenge, counter-case
-- `Synthesizer`: independent executive synthesis
 
 Default model policy in `configs/research-configurations.js`:
 - Analyst reasoning: OpenAI (`gpt-5.4`)
 - Critic reasoning: Anthropic (`claude-sonnet-4-20250514`)
-- Retrieval-heavy Analyst stages: Gemini (`gemini-2.5-pro`)
-- Synthesizer: Gemini (`gemini-2.5-pro`)
+- Retrieval-heavy Analyst stages (including synthesis): Gemini (`gemini-2.5-pro`)
 
 Route preflight is enforced before paid calls in `engine/lib/routing/route-preflight.js`.
 
@@ -116,7 +114,6 @@ Rules:
 The app consumes the engine package (`"@researchit/engine": "file:../engine"`) and provides transport functions that call API routes:
 - `/api/analyst`
 - `/api/critic`
-- `/api/synthesizer`
 - `/api/fetch-source`
 
 UI pipeline/progress rendering lives in:
@@ -195,7 +192,6 @@ GEMINI_API_KEY=...
 
 RESEARCHIT_ANALYST_MODEL=gpt-5.4
 RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-20250514
-RESEARCHIT_SYNTHESIZER_MODEL=gemini-2.5-pro
 ```
 
 Provider/model/base URL resolution precedence remains:

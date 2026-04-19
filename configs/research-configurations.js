@@ -2,7 +2,7 @@ import {
   SYS_ANALYST,
   SYS_CRITIC,
   SYS_ANALYST_RESPONSE,
-  SYS_SYNTHESIZER,
+  SYS_ANALYST_SYNTHESIS,
   SYS_FOLLOWUP,
 } from "../engine/prompts/defaults.js";
 
@@ -18,11 +18,6 @@ const SHARED_MODELS = {
     webSearchModel: "claude-sonnet-4-20250514",
   },
   retrieval: {
-    provider: "gemini",
-    model: "gemini-2.5-pro",
-    webSearchModel: "gemini-2.5-pro",
-  },
-  synthesizer: {
     provider: "gemini",
     model: "gemini-2.5-pro",
     webSearchModel: "gemini-2.5-pro",
@@ -107,7 +102,7 @@ const BASE_PROMPTS = {
   analyst: SYS_ANALYST,
   critic: SYS_CRITIC,
   analystResponse: SYS_ANALYST_RESPONSE,
-  synthesizer: SYS_SYNTHESIZER,
+  analystSynthesis: SYS_ANALYST_SYNTHESIS,
   followUp: SYS_FOLLOWUP,
 };
 

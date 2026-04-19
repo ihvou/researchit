@@ -236,8 +236,8 @@ function enforceStrictReasonCodeInvariant(state = {}, reasonCodes = []) {
 
 export async function runCanonicalPipeline(input, config, callbacks = {}) {
   const transport = callbacks?.transport;
-  if (!transport?.callAnalyst || !transport?.callCritic || !transport?.callSynthesizer) {
-    throw new Error("runCanonicalPipeline requires transport with analyst, critic, and synthesizer calls.");
+  if (!transport?.callAnalyst || !transport?.callCritic) {
+    throw new Error("runCanonicalPipeline requires transport with analyst and critic calls.");
   }
 
   let state = createRunState({ input, config, runId: input?.id });
@@ -255,7 +255,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
       analyst: config?.prompts?.analyst,
       critic: config?.prompts?.critic,
       analystResponse: config?.prompts?.analystResponse,
-      synthesizer: config?.prompts?.synthesizer,
+      analystSynthesis: config?.prompts?.analystSynthesis || config?.prompts?.synthesizer,
       followUp: config?.prompts?.followUp,
     },
     budgets: STAGE_BUDGETS,

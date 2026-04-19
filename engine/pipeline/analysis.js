@@ -7,8 +7,8 @@ function clean(value) {
 
 export async function runAnalysis(input, config, callbacks = {}) {
   const transport = callbacks?.transport;
-  if (!transport?.callAnalyst || !transport?.callCritic || !transport?.callSynthesizer) {
-    throw new Error("runAnalysis requires callbacks.transport with callAnalyst/callCritic/callSynthesizer.");
+  if (!transport?.callAnalyst || !transport?.callCritic) {
+    throw new Error("runAnalysis requires callbacks.transport with callAnalyst/callCritic.");
   }
 
   const outputMode = clean(config?.outputMode).toLowerCase() === "matrix" ? "matrix" : "scorecard";

@@ -16,7 +16,7 @@ const PHASE_LABELS = {
   analyst_targeted: "Targeted low-confidence search...",
   critic: "Critic reviewing...",
   red_team: "Red Team stress-testing conclusions...",
-  synthesizer: "Independent synthesizer drafting executive narrative...",
+  synthesizer: "Analyst drafting executive synthesis...",
   finalizing: "Analyst responding...",
   discover: "Discovering related research...",
   matrix_plan: "Planning matrix...",

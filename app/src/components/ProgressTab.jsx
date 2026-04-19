@@ -106,7 +106,7 @@ const HYBRID_FLOW = [
     key: "stage_14_synthesize",
     phase: "stage_14_synthesize",
     title: "Stage 14 - Synthesize",
-    detail: "Independent synthesizer builds executive summary, implication, and dissent.",
+    detail: "Analyst writes executive synthesis, decision implication, and uncertainty notes.",
   },
   {
     key: "stage_15_finalize",
@@ -232,7 +232,7 @@ const MATRIX_FLOW = [
     key: "stage_14_synthesize",
     phase: "stage_14_synthesize",
     title: "Stage 14 - Synthesize",
-    detail: "Independent synthesizer builds executive matrix narrative.",
+    detail: "Analyst writes executive matrix narrative and decision implication.",
   },
   {
     key: "stage_15_finalize",
@@ -535,11 +535,13 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
     });
   }
 
-  if (meta.synthesizerCallMade != null) {
+  const synthesisApplied = meta.synthesisCallMade != null ? meta.synthesisCallMade : meta.synthesizerCallMade;
+  const synthesisModel = meta.synthesisModel || meta.synthesizerModel;
+  if (synthesisApplied != null) {
     rows.push({
-      label: "Synthesizer",
-      value: meta.synthesizerCallMade ? "Applied" : "Not applied",
-      detail: String(meta.synthesizerModel || "model not recorded"),
+      label: "Executive synthesis",
+      value: synthesisApplied ? "Applied" : "Not applied",
+      detail: String(synthesisModel || "model not recorded"),
     });
   }
 

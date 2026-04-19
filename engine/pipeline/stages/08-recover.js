@@ -44,6 +44,12 @@ function buildPlanUnitMap(state = {}) {
   return map;
 }
 
+function truncateText(value, max = 800) {
+  const text = clean(value).replace(/\s+/g, " ");
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(120, max)).trimEnd()}...`;
+}
+
 function selectScorecardUnits(state = {}, budget = 8) {
   const dimensions = ensureArray(state?.request?.scorecard?.dimensions);
   const dimensionById = new Map(dimensions.map((dim) => [clean(dim?.id), dim]));
@@ -51,7 +57,7 @@ function selectScorecardUnits(state = {}, budget = 8) {
   const byId = state?.assessment?.scorecard?.byId && typeof state.assessment.scorecard.byId === "object"
     ? state.assessment.scorecard.byId
     : {};
-  const rows = Object.values(byId).map((unit) => ({
+  const ranked = Object.values(byId).map((unit) => ({
     key: unit.id,
     type: "dimension",
     label: clean(dimensionById.get(clean(unit?.id))?.label || unit?.id),
@@ -68,10 +74,33 @@ function selectScorecardUnits(state = {}, budget = 8) {
       gapHypothesis: clean(planByUnit.get(clean(unit?.id))?.gapHypothesis),
     },
     unit,
-  }));
-  return rows
-    .sort((a, b) => b.pressure - a.pressure)
-    .slice(0, Math.max(0, Number(budget) || 0));
+  }))
+    .sort((a, b) => b.pressure - a.pressure);
+
+  const selectedByKey = new Map();
+  const floorSelected = [];
+  ranked.forEach((item) => {
+    const uncovered = clean(item?.unit?.confidence).toLowerCase() === "low"
+      || ensureArray(item?.unit?.sources).length === 0;
+    if (!uncovered || selectedByKey.has(item.key)) return;
+    selectedByKey.set(item.key, item);
+    floorSelected.push(item);
+  });
+
+  const requestedBudget = Math.max(0, Number(budget) || 0);
+  const effectiveBudget = Math.max(requestedBudget, floorSelected.length);
+  for (const item of ranked) {
+    if (selectedByKey.size >= effectiveBudget) break;
+    if (selectedByKey.has(item.key)) continue;
+    selectedByKey.set(item.key, item);
+  }
+
+  return {
+    selected: [...selectedByKey.values()],
+    requestedBudget,
+    effectiveBudget,
+    floorReserved: floorSelected.length,
+  };
 }
 
 function groupMatrixSelections(items = []) {
@@ -223,6 +252,7 @@ Recover missing evidence for these matrix cells.
 Cells:
 ${group.map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${item.subjectLabel} x ${item.attributeLabel})
   attributeBrief: ${item.attributeBrief || "not provided"}
+  existingEvidence: ${truncateText(item?.unit?.full || item?.unit?.value || "none", 800)}
   whySelected: pressure=${item.pressure}; confidence=${item.reasons.confidence}; sourceCount=${item.reasons.sourceCount}; contradictionFlag=${item.reasons.contradictionFlag}; staleSourceFlag=${item.reasons.staleSourceFlag}; gapHypothesis=${item.reasons.gapHypothesis || "not provided"}`).join("\n")}
 
 Rules:
@@ -282,7 +312,8 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
   }
 
   const budget = Number(runtime?.config?.limits?.lowConfidenceBudgetUnits || 8);
-  const selected = selectScorecardUnits(state, budget);
+  const selection = selectScorecardUnits(state, budget);
+  const selected = selection.selected;
   if (!selected.length) {
     reasonCodes.push(REASON_CODES.RECOVERY_BUDGET_STARVED);
     return {
@@ -304,6 +335,7 @@ Recover evidence for these scorecard dimensions.
 Targets:
 ${selected.map((item) => `- ${item.key}: ${item.label}
   brief: ${item.brief || "not provided"}
+  existingEvidence: ${truncateText(item?.unit?.full || item?.unit?.brief || "none", 800)}
   whySelected: pressure=${item.pressure}; confidence=${item.reasons.confidence}; sourceCount=${item.reasons.sourceCount}; contradictionFlag=${item.reasons.contradictionFlag}; staleSourceFlag=${item.reasons.staleSourceFlag}; gapHypothesis=${item.reasons.gapHypothesis || "not provided"}`).join("\n")}
 
 Rules:
@@ -342,6 +374,9 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     diagnostics: {
       selectedUnits: selected.length,
       patchedDimensions: patch.length,
+      requestedBudget: selection.requestedBudget,
+      effectiveBudget: selection.effectiveBudget,
+      coverageFloorReserved: selection.floorReserved,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

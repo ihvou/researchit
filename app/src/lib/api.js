@@ -52,6 +52,9 @@ async function callRoute(role, payload, runtime = {}) {
     err.status = res.status;
     err.role = role;
     err.retryable = DEFAULT_RETRYABLE_STATUS.includes(res.status);
+    if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
+      err.reasonCode = data.reasonCode.trim();
+    }
     throw err;
   }
 
@@ -60,6 +63,9 @@ async function callRoute(role, payload, runtime = {}) {
     err.status = Number(data?.status) || 500;
     err.role = role;
     err.retryable = DEFAULT_RETRYABLE_STATUS.includes(err.status);
+    if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
+      err.reasonCode = data.reasonCode.trim();
+    }
     throw err;
   }
 

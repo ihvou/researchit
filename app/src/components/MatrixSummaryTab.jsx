@@ -117,7 +117,7 @@ export default function MatrixSummaryTab({ uc }) {
         {summaryRow("Whitespace", summary?.whitespace)}
         {summaryRow("Strategic Classification", summary?.strategicClassification)}
         {summaryRow("Key Risks", summary?.keyRisks)}
-        {summaryRow("Decision Implications", summary?.decisionImplications)}
+        {summaryRow("Decision Implications", summary?.decisionImplication || summary?.decisionImplications)}
         {summaryRow("Uncertainty Notes", summary?.uncertaintyNotes)}
       </div>
 

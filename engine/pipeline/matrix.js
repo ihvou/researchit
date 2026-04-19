@@ -126,8 +126,8 @@ export async function resolveMatrixResearchInput(input, config, callbacks = {}, 
 
 export async function runMatrixAnalysis(input, config, callbacks = {}) {
   const transport = callbacks?.transport;
-  if (!transport?.callAnalyst || !transport?.callCritic || !transport?.callSynthesizer) {
-    throw new Error("runMatrixAnalysis requires callbacks.transport with analyst/critic/synthesizer.");
+  if (!transport?.callAnalyst || !transport?.callCritic) {
+    throw new Error("runMatrixAnalysis requires callbacks.transport with analyst/critic.");
   }
 
   let resolvedInput = input;

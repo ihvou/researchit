@@ -1121,7 +1121,7 @@ function renderMatrixSummaryPage(uc, options = {}) {
     ["Whitespace", executiveSummary?.whitespace],
     ["Strategic classification", executiveSummary?.strategicClassification],
     ["Key risks", executiveSummary?.keyRisks],
-    ["Decision implications", executiveSummary?.decisionImplications],
+    ["Decision implications", executiveSummary?.decisionImplication || executiveSummary?.decisionImplications],
     ["Uncertainty notes", executiveSummary?.uncertaintyNotes],
     ["Provider agreement", executiveSummary?.providerAgreementHighlights],
   ].filter((entry) => String(entry?.[1] || "").trim());
@@ -1184,6 +1184,19 @@ function renderMatrixSubjectPage(uc, subject, attributes = [], cellByKey = new M
     const sourcesHtml = sourceChipArrayHtml(cell?.sources || [], { maxItems: 6 });
     const criticNote = cell?.criticNote ? `<div class="small-text"><strong>Critic:</strong> ${escapeHtml(cell.criticNote)}</div>` : "";
     const analystNote = cell?.analystNote ? `<div class="small-text"><strong>Analyst:</strong> ${escapeHtml(cell.analystNote)}</div>` : "";
+    const disposition = String(cell?.analystDecision || "").trim();
+    const dispositionLabel = disposition
+      ? `<div class="small-text"><strong>Disposition:</strong> ${escapeHtml(
+        disposition === "accepted" ? "Conceded"
+          : disposition === "rejected_with_evidence" ? "Defended"
+            : disposition === "accepted_with_mitigation" ? "Acknowledged"
+              : disposition === "no_response" ? "No response"
+                : disposition
+      )}</div>`
+      : "";
+    const mitigationNote = String(cell?.mitigationNote || "").trim()
+      ? `<div class="small-text"><strong>Mitigation:</strong> ${escapeHtml(cell.mitigationNote)}</div>`
+      : "";
     return `
       <tr>
         <td>${escapeHtml(attr?.label || attr?.id || "Attribute")}</td>
@@ -1198,8 +1211,10 @@ function renderMatrixSubjectPage(uc, subject, attributes = [], cellByKey = new M
           ${supportingHtml}
           ${limitingHtml}
           ${providerAgreement}
+          ${dispositionLabel}
           ${criticNote}
           ${analystNote}
+          ${mitigationNote}
         </td>
         <td>${sourcesHtml}</td>
       </tr>
@@ -2476,6 +2491,7 @@ function buildMatrixMarkdown(uc) {
       if (cell?.providerAgreement) lines.push(`- Provider agreement: ${markdownEscapeInline(cell.providerAgreement)}`);
       if (cell?.analystDecision) lines.push(`- Analyst decision: ${markdownEscapeInline(cell.analystDecision)}`);
       if (cell?.analystNote) lines.push(`- Analyst note: ${markdownEscapeInline(cell.analystNote)}`);
+      if (cell?.mitigationNote) lines.push(`- Mitigation note: ${markdownEscapeInline(cell.mitigationNote)}`);
       lines.push("");
       lines.push(markdownTextBlock(cell?.value || "No value."));
       lines.push("");
@@ -2542,7 +2558,7 @@ function buildMatrixMarkdown(uc) {
     ["Whitespace", executiveSummary?.whitespace],
     ["Strategic Classification", executiveSummary?.strategicClassification],
     ["Key Risks", executiveSummary?.keyRisks],
-    ["Decision Implications", executiveSummary?.decisionImplications],
+    ["Decision Implications", executiveSummary?.decisionImplication || executiveSummary?.decisionImplications],
     ["Uncertainty Notes", executiveSummary?.uncertaintyNotes],
     ["Provider Agreement Highlights", executiveSummary?.providerAgreementHighlights],
   ].filter((entry) => markdownTextBlock(entry[1]));

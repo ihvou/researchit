@@ -1,10 +1,16 @@
 import {
   resolveRoleProviderCandidates,
+  resolveStrictRoute,
   missingApiKeyError,
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
 
 const CRITIC_DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const ROUTE_MISMATCH_REASON_CODE = "route_mismatch_preflight";
+
+function clean(value) {
+  return String(value || "").trim();
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -20,26 +26,44 @@ export default async function handler(req, res) {
     model,
     webSearchModel,
     baseUrl, // per-request model routing only (not API key BYOK)
+    stageId,
   } = req.body || {};
   if (!messages || !systemPrompt) {
     return res.status(400).json({ error: "Missing messages or systemPrompt" });
   }
 
-  const candidates = resolveRoleProviderCandidates({
-    role: "critic",
-    requestedProvider: provider,
-    requestedModel: model,
-    requestedWebSearchModel: webSearchModel,
-    requestedBaseUrl: baseUrl,
-    defaultModel: CRITIC_DEFAULT_MODEL,
-    liveSearch,
-  });
+  const strictRouteRequested = clean(provider) && clean(model);
+  const resolved = strictRouteRequested
+    ? resolveStrictRoute({
+      role: "critic",
+      provider,
+      model,
+      webSearchModel,
+      baseUrl,
+    })
+    : (resolveRoleProviderCandidates({
+      role: "critic",
+      requestedProvider: provider,
+      requestedModel: model,
+      requestedWebSearchModel: webSearchModel,
+      requestedBaseUrl: baseUrl,
+      defaultModel: CRITIC_DEFAULT_MODEL,
+      liveSearch,
+    })?.[0] || null);
 
-  if (!candidates.length) {
+  if (!resolved?.apiKey) {
+    if (strictRouteRequested) {
+      const stageLabel = clean(stageId) || "unknown_stage";
+      const declaredProvider = clean(provider).toLowerCase();
+      const declaredModel = clean(model);
+      return res.status(500).json({
+        error: `route_mismatch_preflight: ${stageLabel} declared ${declaredProvider}/${declaredModel} but no API key found for ${declaredProvider}. Set ${declaredProvider.toUpperCase()}_API_KEY.`,
+        reasonCode: ROUTE_MISMATCH_REASON_CODE,
+      });
+    }
     return res.status(500).json({ error: missingApiKeyError("critic") });
   }
 
-  const resolved = candidates[0];
   try {
     const result = await callProviderModel({
       providerId: resolved.providerId,

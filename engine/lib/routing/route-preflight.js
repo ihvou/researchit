@@ -53,7 +53,7 @@ export function runRoutePreflight({ state = {}, config = {} } = {}) {
       || stageId.startsWith("stage_11")
       || stageId.startsWith("stage_12")
       ? "critic"
-      : (stageId === "stage_14_synthesize" ? "synthesizer" : "analyst");
+      : "analyst";
     const route = resolveActorRoute({ actor, stageId, config, mode: state?.mode });
     assertRoute(route, EXPECTED_PROVIDER_BY_STAGE[stageId], { actor, stageId });
     output.routes.push(route);

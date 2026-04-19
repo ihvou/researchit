@@ -24,15 +24,17 @@ export function resolveActorRoute({ actor = "", stageId = "", config = {}, mode 
   const analystDefault = models?.analyst || {};
   const retrievalDefault = models?.retrieval || {};
   const criticDefault = models?.critic || {};
-  const synthesizerDefault = models?.synthesizer || models?.retrieval || {};
+  const retrievalStages = new Set([
+    "stage_01b_subject_discovery",
+    "stage_03b_evidence_web",
+    "stage_08_recover",
+    "stage_14_synthesize",
+  ]);
 
   let base;
   if (actorKey === "critic") {
     base = criticDefault;
-  } else if (actorKey === "synthesizer") {
-    base = synthesizerDefault;
   } else {
-    const retrievalStages = new Set(["stage_01b_subject_discovery", "stage_03b_evidence_web", "stage_08_recover"]);
     base = retrievalStages.has(clean(stageId)) ? retrievalDefault : analystDefault;
   }
 

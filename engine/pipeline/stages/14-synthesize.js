@@ -143,7 +143,7 @@ function buildMatrixExecutiveSummary(parsed = {}) {
     whitespace: clean(parsed?.whitespace),
     strategicClassification: clean(parsed?.strategicClassification),
     keyRisks: clean(parsed?.keyRisks),
-    decisionImplications: clean(parsed?.decisionImplication || parsed?.decisionImplications),
+    decisionImplication: clean(parsed?.decisionImplication || parsed?.decisionImplications),
     uncertaintyNotes: clean(parsed?.dissent || parsed?.uncertaintyNotes),
     providerAgreementHighlights: clean(parsed?.providerAgreementHighlights),
   };
@@ -154,7 +154,7 @@ export async function runStage(context = {}) {
   const criticSummary = compactCriticSummary(state);
   const finalAssessment = buildFinalAssessmentSnapshot(state);
   const flagOutcomes = buildFlagOutcomesSnapshot(state);
-  const prompt = `Produce an independent executive synthesis.
+  const prompt = `Produce the final executive synthesis.
 Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
@@ -197,8 +197,8 @@ ${JSON.stringify(flagOutcomes).slice(0, 14000)}`;
     state,
     runtime,
     stageId: STAGE_ID,
-    actor: "synthesizer",
-    systemPrompt: runtime?.prompts?.synthesizer || runtime?.prompts?.analyst || "You provide independent synthesis.",
+    actor: "analyst",
+    systemPrompt: runtime?.prompts?.analystSynthesis || runtime?.prompts?.analyst || "You provide final executive synthesis.",
     userPrompt: prompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 6000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 60000,

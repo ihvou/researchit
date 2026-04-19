@@ -81,7 +81,7 @@ function detectModelFamily(modelName) {
 function validatePinnedModelRoutes(config = {}, evidenceMode = "native") {
   const problems = [];
   const models = config?.models && typeof config.models === "object" ? config.models : {};
-  const roleKeys = ["analyst", "critic", "retrieval", "synthesizer"];
+  const roleKeys = ["analyst", "critic", "retrieval"];
   roleKeys.forEach((role) => {
     const cfg = models?.[role] && typeof models[role] === "object" ? models[role] : null;
     if (!cfg) return;

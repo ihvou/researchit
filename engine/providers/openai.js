@@ -37,6 +37,30 @@ function normalizeUsage(raw = {}) {
   };
 }
 
+async function readJson(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return { error: { message: text } };
+  }
+}
+
+async function ensureOkResponse(response, fallbackMessage = "OpenAI request failed") {
+  if (response.ok) return readJson(response);
+  const data = await readJson(response);
+  const message = String(
+    data?.error?.message
+    || data?.error
+    || data?.message
+    || `${fallbackMessage} (${response.status})`
+  ).trim() || fallbackMessage;
+  const err = new Error(message);
+  err.status = response.status;
+  throw err;
+}
+
 export function buildChatMessages(messages, systemPrompt) {
   return [
     { role: "system", content: systemPrompt },
@@ -151,7 +175,7 @@ async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, ma
     }),
   });
 
-  const data = await response.json();
+  const data = await ensureOkResponse(response, "OpenAI responses request failed");
   if (data.error) throw new Error(data.error.message);
 
   const text = extractResponsesText(data);
@@ -183,7 +207,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
     }),
   });
 
-  const data = await response.json();
+  const data = await ensureOkResponse(response, "OpenAI chat completions request failed");
   if (data.error) throw new Error(data.error.message);
 
   const text = extractChatCompletionsText(data);
@@ -220,7 +244,13 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
       }),
     });
 
-    const data = await response.json();
+    let data;
+    try {
+      data = await ensureOkResponse(response, "OpenAI web-search responses request failed");
+    } catch (err) {
+      lastErr = err;
+      continue;
+    }
     if (data.error) {
       lastErr = new Error(data.error.message);
       continue;

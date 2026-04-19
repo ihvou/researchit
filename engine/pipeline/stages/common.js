@@ -85,6 +85,7 @@ export function combineTokenDiagnostics(items = []) {
   let tokenBudget = 0;
   let splitApplied = false;
   let compactionApplied = false;
+  let webSearchCalls = 0;
   let sawProviderUsage = false;
   let sawEstimated = false;
 
@@ -98,6 +99,7 @@ export function combineTokenDiagnostics(items = []) {
     tokenBudget += toFiniteNumber(item?.tokenBudget, 0);
     splitApplied = splitApplied || !!item?.splitApplied;
     compactionApplied = compactionApplied || !!item?.compactionApplied;
+    webSearchCalls += toFiniteNumber(item?.webSearchCalls, 0);
     const source = clean(item?.tokenSource).toLowerCase();
     if (source === "provider_usage") sawProviderUsage = true;
     if (source === "estimated_text") sawEstimated = true;
@@ -122,6 +124,7 @@ export function combineTokenDiagnostics(items = []) {
     tokenBudget: tokenBudget || null,
     splitApplied,
     compactionApplied,
+    webSearchCalls,
     tokenSource,
     calls: list.length,
   };
@@ -130,7 +133,6 @@ export function combineTokenDiagnostics(items = []) {
 function chooseTransportCall(transport, actor = "analyst") {
   const key = clean(actor).toLowerCase();
   if (key === "critic") return transport.callCritic.bind(transport);
-  if (key === "synthesizer") return transport.callSynthesizer.bind(transport);
   return transport.callAnalyst.bind(transport);
 }
 
@@ -191,6 +193,7 @@ export async function callActorJson({
 
   const callFn = chooseTransportCall(transport, actor);
   const payloadOptions = {
+    stageId: clean(stageId),
     provider: route.provider,
     model: route.model,
     webSearchModel: route.webSearchModel,
@@ -199,6 +202,7 @@ export async function callActorJson({
     retry: { maxRetries: 0 },
     timeoutMs,
   };
+  let parseFailureCount = 0;
 
   const execution = await executeWithRetry(
     async () => {
@@ -238,7 +242,10 @@ export async function callActorJson({
       onRetry: async ({ failureType }) => {
         if (failureType !== "parse") return;
         parseRepairNotice = "Previous response failed JSON parsing. Return strict JSON only. No prose, no markdown, no code fences.";
-        workingPromptBody = promptSplitHalf(workingPromptBody);
+        parseFailureCount += 1;
+        if (parseFailureCount >= 2) {
+          workingPromptBody = promptSplitHalf(workingPromptBody);
+        }
         promptPrep = preparePromptWithinBudget({
           promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
           tokenBudget,
@@ -268,6 +275,9 @@ export async function callActorJson({
   const estimatedInput = toFiniteNumber(promptPrep.estimatedTokens, 0);
   const estimatedOutput = estimateTokensFromText(execution?.result?.text || "");
   const usage = normalizeUsage(execution?.result?.meta || {});
+  const meta = execution?.result?.meta && typeof execution.result.meta === "object"
+    ? execution.result.meta
+    : {};
 
   let inputTokens = usage?.inputTokens ?? estimatedInput;
   let outputTokens = usage?.outputTokens ?? estimatedOutput;
@@ -298,6 +308,10 @@ export async function callActorJson({
       compactionApplied: reasonCodes.includes(REASON_CODES.PROMPT_COMPACTION_APPLIED),
       tokenSource: usage ? "provider_usage" : "estimated_text",
       usage,
+      provider: clean(meta?.providerId || route.provider).toLowerCase(),
+      model: clean(meta?.model || route.model),
+      webSearchCalls: toFiniteNumber(meta?.webSearchCalls, 0),
+      liveSearchUsed: !!meta?.liveSearchUsed,
     },
   };
 }

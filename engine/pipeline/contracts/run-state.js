@@ -294,6 +294,8 @@ function enrichMatrixCellsWithDebate(cells = [], critique = {}, resolved = {}) {
       || clean(cellOutcomes.map((outcome) => clean(outcome?.analystNote)).filter(Boolean).join(" | "));
     const analystDecision = clean(cell?.analystDecision)
       || clean(cellOutcomes.slice(-1)?.[0]?.disposition || "");
+    const mitigationNote = clean(cell?.mitigationNote)
+      || clean(cellOutcomes.map((outcome) => clean(outcome?.mitigationNote)).filter(Boolean).join(" | "));
     const criticSources = cellFlags.flatMap((flag) => (Array.isArray(flag?.sources) ? flag.sources : []));
     const analystSources = cellOutcomes.flatMap((outcome) => (Array.isArray(outcome?.sources) ? outcome.sources : []));
     const contested = cell?.contested || cellFlags.length > 0;
@@ -304,6 +306,7 @@ function enrichMatrixCellsWithDebate(cells = [], critique = {}, resolved = {}) {
       criticNote,
       analystNote,
       analystDecision,
+      mitigationNote,
       criticSources,
       analystSources,
     };
@@ -315,6 +318,9 @@ function matrixFromState(state = {}) {
   const assessment = state?.resolved?.assessment || state?.assessment || {};
   const cellsRaw = Array.isArray(assessment?.matrix?.cells) ? assessment.matrix.cells : [];
   const cells = enrichMatrixCellsWithDebate(cellsRaw, state?.critique || {}, state?.resolved || {});
+  const matrixExecutiveSummary = state?.synthesis?.matrixExecutiveSummary && typeof state.synthesis.matrixExecutiveSummary === "object"
+    ? state.synthesis.matrixExecutiveSummary
+    : {};
   return {
     layout: clean(state?.config?.matrixLayout) || "auto",
     subjects: Array.isArray(request?.matrix?.subjects) ? request.matrix.subjects : [],
@@ -323,13 +329,16 @@ function matrixFromState(state = {}) {
     coverage: toCoverageSummary(cells),
     crossMatrixSummary: clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
     subjectSummaries: Array.isArray(state?.synthesis?.subjectSummaries) ? state.synthesis.subjectSummaries : [],
-    executiveSummary: state?.synthesis?.matrixExecutiveSummary && typeof state.synthesis.matrixExecutiveSummary === "object"
-      ? state.synthesis.matrixExecutiveSummary
-      : {
-        decisionAnswer: clean(state?.synthesis?.executiveSummary),
-        decisionImplications: clean(state?.synthesis?.decisionImplication),
-        uncertaintyNotes: clean(state?.synthesis?.dissent),
-      },
+    executiveSummary: {
+      decisionAnswer: clean(matrixExecutiveSummary?.decisionAnswer || state?.synthesis?.executiveSummary),
+      closestThreats: clean(matrixExecutiveSummary?.closestThreats),
+      whitespace: clean(matrixExecutiveSummary?.whitespace),
+      strategicClassification: clean(matrixExecutiveSummary?.strategicClassification),
+      keyRisks: clean(matrixExecutiveSummary?.keyRisks),
+      decisionImplication: clean(matrixExecutiveSummary?.decisionImplication || matrixExecutiveSummary?.decisionImplications || state?.synthesis?.decisionImplication),
+      uncertaintyNotes: clean(matrixExecutiveSummary?.uncertaintyNotes || matrixExecutiveSummary?.dissent || state?.synthesis?.dissent),
+      providerAgreementHighlights: clean(matrixExecutiveSummary?.providerAgreementHighlights),
+    },
     discovery: state?.discovery || null,
     redTeam: state?.redTeam || {},
   };
@@ -431,15 +440,52 @@ function toSourceUniverseSummary(sourceUniverse = {}) {
   return summary;
 }
 
+function stageWebSearchCalls(stage = {}) {
+  const tokens = stage?.tokens && typeof stage.tokens === "object" ? stage.tokens : {};
+  const diagnostics = stage?.diagnostics && typeof stage.diagnostics === "object" ? stage.diagnostics : {};
+  const tokenDiagnostics = diagnostics?.tokenDiagnostics && typeof diagnostics.tokenDiagnostics === "object"
+    ? diagnostics.tokenDiagnostics
+    : {};
+  return Number(tokens?.webSearchCalls || tokenDiagnostics?.webSearchCalls || 0);
+}
+
+function collectWebSearchCounters(state = {}) {
+  const stages = Array.isArray(state?.diagnostics?.stages) ? state.diagnostics.stages : [];
+  const discoveryStages = new Set(["stage_01b_subject_discovery"]);
+  const targetedStages = new Set(["stage_08_recover"]);
+  const criticStages = new Set(["stage_10_coherence", "stage_11_challenge", "stage_12_counter_case"]);
+
+  let total = 0;
+  let critic = 0;
+  let discovery = 0;
+  let targeted = 0;
+
+  stages.forEach((stage) => {
+    const calls = stageWebSearchCalls(stage);
+    if (!calls) return;
+    total += calls;
+    const stageId = clean(stage?.stage);
+    if (criticStages.has(stageId)) critic += calls;
+    if (discoveryStages.has(stageId)) discovery += calls;
+    if (targetedStages.has(stageId)) targeted += calls;
+  });
+
+  return {
+    total,
+    critic,
+    discovery,
+    targeted,
+    analyst: Math.max(0, total - critic - discovery - targeted),
+  };
+}
+
 export function toUseCaseState(state = {}) {
   const outputMode = state?.outputType === "matrix" ? "matrix" : "scorecard";
   const qualityGrade = clean(state?.quality?.qualityGrade) || "decision-grade";
   const sourceVerification = state?.quality?.sourceVerification && typeof state.quality.sourceVerification === "object"
     ? state.quality.sourceVerification
     : {};
-  const providerContributions = Array.isArray(state?.evidence?.providerContributions)
-    ? state.evidence.providerContributions
-    : [];
+  const webSearchCounts = collectWebSearchCounters(state);
   const analysisMeta = {
     analysisMode: outputMode === "matrix"
       ? (state?.mode === "deep-assist" ? "matrix-deep-assist" : "matrix")
@@ -461,14 +507,17 @@ export function toUseCaseState(state = {}) {
     sourceVerificationPartialMatch: Number(sourceVerification?.partial || 0),
     sourceVerificationNameOnly: Number(sourceVerification?.nameOnly || 0),
     criticFlagsRaised: Number(state?.critique?.flags?.length || 0),
-    webSearchCalls: Number(providerContributions?.length || 0),
-    criticWebSearchCalls: 0,
-    discoveryWebSearchCalls: 0,
-    lowConfidenceTargetedWebSearchCalls: 0,
+    webSearchCalls: Number(webSearchCounts.analyst || 0),
+    criticWebSearchCalls: Number(webSearchCounts.critic || 0),
+    discoveryWebSearchCalls: Number(webSearchCounts.discovery || 0),
+    lowConfidenceTargetedWebSearchCalls: Number(webSearchCounts.targeted || 0),
+    totalWebSearchCalls: Number(webSearchCounts.total || 0),
     redTeamCallMade: Number(Object.keys(state?.redTeam?.cells || {}).length || 0) > 0,
     redTeamHighSeverityCount: Number(
       Object.values(state?.redTeam?.cells || {}).filter((entry) => String(entry?.severityIfWrong || "").toLowerCase() === "high").length
     ),
+    synthesisCallMade: !!clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
+    synthesisModel: clean(state?.diagnostics?.stages?.find((entry) => entry?.stage === "stage_14_synthesize")?.modelRoute?.model || ""),
     synthesizerCallMade: !!clean(state?.synthesis?.executiveSummary || state?.synthesis?.decisionImplication),
     synthesizerModel: clean(state?.diagnostics?.stages?.find((entry) => entry?.stage === "stage_14_synthesize")?.modelRoute?.model || ""),
     decisionGradeGate: state?.decisionGate || null,

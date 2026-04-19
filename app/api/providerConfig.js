@@ -4,7 +4,6 @@ const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_PROVIDER_PREFERENCE = {
   analyst: ["openai", "anthropic", "gemini"],
   critic: ["anthropic", "openai", "gemini"],
-  synthesizer: ["anthropic", "openai", "gemini"],
   retrieval: ["gemini", "openai", "anthropic"],
 };
 
@@ -126,7 +125,8 @@ function resolveModel(role, provider, requestedModel, defaultModel) {
   const roleKey = rolePrefix(role);
   const providerKey = providerPrefix(provider);
   return (
-    envValue(`RESEARCHIT_${roleKey}_${providerKey}_MODEL`)
+    pickNonEmptyString(requestedModel)
+    || envValue(`RESEARCHIT_${roleKey}_${providerKey}_MODEL`)
     || envValue(`RESEARCHIT_${providerKey}_MODEL`)
     || envValue(`${providerKey}_${roleKey}_MODEL`)
     || envValue(`${providerKey}_MODEL`)
@@ -134,7 +134,6 @@ function resolveModel(role, provider, requestedModel, defaultModel) {
     || envValue("RESEARCHIT_MODEL")
     || envValue(`OPENAI_${roleKey}_MODEL`)
     || envValue("OPENAI_MODEL")
-    || pickNonEmptyString(requestedModel)
     || defaultModel
   );
 }
@@ -261,6 +260,28 @@ export function resolveRoleProviderCandidates({
     })
     .filter(Boolean);
   return candidates;
+}
+
+export function resolveStrictRoute({
+  role,
+  provider,
+  model,
+  webSearchModel,
+  baseUrl,
+} = {}) {
+  const resolvedProvider = normalizeProvider(provider);
+  const resolvedModel = pickNonEmptyString(model);
+  const resolvedWebSearchModel = pickNonEmptyString(webSearchModel) || resolvedModel;
+  const resolvedBaseUrl = pickNonEmptyString(baseUrl) || resolveProviderDefaultBaseUrl(resolvedProvider);
+  const apiKey = resolveApiKey(role, resolvedProvider);
+  return {
+    providerId: resolvedProvider,
+    provider: resolvedProvider,
+    model: resolvedModel,
+    webSearchModel: resolvedWebSearchModel,
+    baseUrl: resolvedBaseUrl,
+    apiKey,
+  };
 }
 
 export function resolveRoleProviderConfig({
