@@ -42,6 +42,14 @@ function promptSplitHalf(text) {
   return lines.slice(0, half).join("\n");
 }
 
+function buildPromptPayload(promptBody = "", schemaHint = "", parseRepairNotice = "") {
+  const parts = [];
+  if (clean(parseRepairNotice)) parts.push(clean(parseRepairNotice));
+  if (clean(promptBody)) parts.push(clean(promptBody));
+  if (clean(schemaHint)) parts.push(`Schema: ${clean(schemaHint)}`);
+  return parts.join("\n\n");
+}
+
 export async function callActorJson({
   state,
   runtime,
@@ -67,15 +75,16 @@ export async function callActorJson({
     override: routeOverride,
   });
 
-  const promptPayload = `${clean(userPrompt)}\n${schemaHint ? `\nSchema: ${schemaHint}` : ""}`;
-  const preflight = preparePromptWithinBudget({
-    promptText: promptPayload,
+  const reasonCodes = [];
+  let workingPromptBody = clean(userPrompt);
+  let parseRepairNotice = "";
+  let promptPrep = preparePromptWithinBudget({
+    promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
     tokenBudget,
     splitStrategy: promptSplitHalf,
   });
-
-  const reasonCodes = [...(preflight.reasonCodes || [])];
-  if (!preflight.ok) {
+  reasonCodes.push(...(promptPrep.reasonCodes || []));
+  if (!promptPrep.ok) {
     const err = new Error("Prompt compaction exhausted stage token budget.");
     err.reasonCode = REASON_CODES.PROMPT_COMPACTION_EXHAUSTED;
     throw err;
@@ -95,7 +104,7 @@ export async function callActorJson({
   const execution = await executeWithRetry(
     async () => {
       const response = await callFn(
-        [{ role: "user", content: preflight.text }],
+        [{ role: "user", content: promptPrep.text }],
         clean(systemPrompt),
         tokenBudget,
         payloadOptions
@@ -127,6 +136,22 @@ export async function callActorJson({
       maxRetries,
       initialBackoffMs: 300,
       backoffFactor: 2,
+      onRetry: async ({ failureType }) => {
+        if (failureType !== "parse") return;
+        parseRepairNotice = "Previous response failed JSON parsing. Return strict JSON only. No prose, no markdown, no code fences.";
+        workingPromptBody = promptSplitHalf(workingPromptBody);
+        promptPrep = preparePromptWithinBudget({
+          promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
+          tokenBudget,
+          splitStrategy: promptSplitHalf,
+        });
+        reasonCodes.push(...(promptPrep.reasonCodes || []));
+        if (!promptPrep.ok) {
+          const err = new Error("Prompt compaction exhausted stage token budget after parse-repair.");
+          err.reasonCode = REASON_CODES.PROMPT_COMPACTION_EXHAUSTED;
+          throw err;
+        }
+      },
     }
   );
 
@@ -148,9 +173,9 @@ export async function callActorJson({
     durationMs: execution.durationMs,
     reasonCodes: normalizeReasonCodes(reasonCodes),
     tokenDiagnostics: {
-      estimatedInput: preflight.estimatedTokens,
+      estimatedInput: promptPrep.estimatedTokens,
       tokenBudget,
-      splitApplied: !!preflight.splitApplied,
+      splitApplied: !!promptPrep.splitApplied,
       compactionApplied: reasonCodes.includes(REASON_CODES.PROMPT_COMPACTION_APPLIED),
     },
   };

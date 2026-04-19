@@ -24,6 +24,7 @@ function normalizeScorecardEvidence(parsed = {}, dimensions = []) {
       sources: normalizeSources(unit?.sources || []),
       arguments: normalizeArguments(unit?.arguments || {}, `${dim.id}-mem`),
       risks: clean(unit?.risks),
+      missingEvidence: clean(unit?.missingEvidence),
     };
   });
 }
@@ -59,6 +60,7 @@ function normalizeMatrixCells(parsed = {}, subjects = [], attributes = []) {
         sources: normalizeSources(source?.sources || []),
         arguments: normalizeArguments(source?.arguments || {}, `${subject.id}-${attribute.id}-mem`),
         risks: clean(source?.risks),
+        missingEvidence: clean(source?.missingEvidence),
       });
     });
   });
@@ -87,8 +89,15 @@ async function gatherMatrixChunk({
       attempts += 1;
       const activeChunk = chunk.slice(0, localChunkSize);
       const prompt = `Objective: ${clean(state?.request?.objective)}\nBuild MEMORY-ONLY matrix evidence for the provided cells.
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
 Subjects:\n${activeChunk.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
-Attributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}`).join("\n")}
+Attributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(attribute?.brief) ? ` - ${clean(attribute.brief)}` : ""}`).join("\n")}
+
+Rules:
+- Use only model memory and prior knowledge; do not fabricate sources.
+- If credible evidence is unavailable, keep "sources" empty, set low confidence, and explain the gap in "missingEvidence".
 
 Return JSON:
 {
@@ -101,7 +110,8 @@ Return JSON:
     "confidenceReason": "",
     "sources": [{"name":"","url":"","quote":"","sourceType":""}],
     "arguments": {"supporting":[],"limiting":[]},
-    "risks": ""
+    "risks": "",
+    "missingEvidence": ""
   }]
 }`;
       try {
@@ -116,7 +126,7 @@ Return JSON:
           timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
           maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
           liveSearch: false,
-          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","sources":[]}]}',
+          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
         const normalized = normalizeMatrixCells(result?.parsed, activeChunk, attributes);
         cells.push(...normalized);
@@ -183,16 +193,30 @@ export async function runStage(context = {}) {
   }
 
   const dimensions = ensureArray(state?.request?.scorecard?.dimensions);
-  const prompt = `Objective: ${clean(state?.request?.objective)}\nBuild MEMORY-ONLY evidence for each dimension.\nDimensions:\n${dimensions.map((dim) => `- ${dim.id}: ${dim.label}`).join("\n")}\n\nReturn JSON:\n{
+  const prompt = `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Build MEMORY-ONLY evidence for each scorecard dimension.
+Dimensions:
+${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${clean(dim.brief)}` : ""}`).join("\n")}
+
+Rules:
+- Use only memory and prior knowledge.
+- If evidence cannot be found confidently, keep "sources" empty and document what is missing in "missingEvidence".
+
+Return JSON:
+{
   "dimensions": [{
-    "id": "",
+    "unitId": "",
     "brief": "",
     "full": "",
     "confidence": "high|medium|low",
     "confidenceReason": "",
     "sources": [{"name":"","url":"","quote":"","sourceType":""}],
     "arguments": {"supporting":[],"limiting":[]},
-    "risks": ""
+    "risks": "",
+    "missingEvidence": ""
   }]
 }`;
 
@@ -207,7 +231,7 @@ export async function runStage(context = {}) {
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
     liveSearch: false,
-    schemaHint: '{"dimensions":[{"id":"","brief":"","full":"","sources":[]}]}',
+    schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
   const normalized = normalizeScorecardEvidence(result?.parsed, dimensions);

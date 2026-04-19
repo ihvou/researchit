@@ -36,6 +36,7 @@ function mergeScorecard(memory = [], web = []) {
         limiting: [...ensureArray(unit?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
       },
       risks: clean(patch?.risks || unit?.risks),
+      missingEvidence: clean(patch?.missingEvidence || unit?.missingEvidence),
     };
   });
 }
@@ -56,6 +57,7 @@ function mergeMatrixCells(memory = [], web = []) {
         limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
       },
       risks: clean(patch?.risks || cell?.risks),
+      missingEvidence: clean(patch?.missingEvidence || cell?.missingEvidence),
     };
   });
 }
@@ -73,6 +75,7 @@ function normalizeScorecard(parsed = {}, dimensions = []) {
       sources: normalizeSources(unit?.sources || []),
       arguments: normalizeArguments(unit?.arguments || {}, `${dim.id}-web`),
       risks: clean(unit?.risks),
+      missingEvidence: clean(unit?.missingEvidence),
     };
   });
 }
@@ -93,10 +96,114 @@ function normalizeMatrix(parsed = {}, subjects = [], attributes = []) {
         sources: normalizeSources(patch?.sources || []),
         arguments: normalizeArguments(patch?.arguments || {}, `${subject.id}-${attribute.id}-web`),
         risks: clean(patch?.risks),
+        missingEvidence: clean(patch?.missingEvidence),
       });
     });
   });
   return cells;
+}
+
+function chunkSubjects(subjects = [], size = 1) {
+  const safeSize = Math.max(1, Number(size) || 1);
+  const chunks = [];
+  for (let idx = 0; idx < subjects.length; idx += safeSize) {
+    chunks.push(subjects.slice(idx, idx + safeSize));
+  }
+  return chunks;
+}
+
+function matrixChunkSize(subjects = [], attributes = [], config = {}) {
+  const subjectCount = Math.max(1, ensureArray(subjects).length);
+  const attrCount = Math.max(1, ensureArray(attributes).length);
+  const maxCells = Math.max(
+    attrCount,
+    Number(config?.limits?.matrixWebChunkMaxCells) || 16
+  );
+  const byCells = Math.max(1, Math.floor(maxCells / attrCount));
+  return Math.max(1, Math.min(subjectCount, byCells));
+}
+
+function buildMatrixPrompt(state = {}, subjects = [], attributes = []) {
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Collect WEB evidence for each matrix cell below and return structured JSON.
+Subjects:
+${subjects.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
+Attributes:
+${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(attribute?.brief) ? ` - ${clean(attribute.brief)}` : ""}`).join("\n")}
+
+Rules:
+- Cover every listed subject x attribute cell.
+- If evidence is unavailable, keep "sources" empty, use low confidence, and explain what is missing in "missingEvidence".
+
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+}
+
+async function gatherMatrixWeb({
+  state,
+  runtime,
+  subjects,
+  attributes,
+}) {
+  const initialSize = matrixChunkSize(subjects, attributes, runtime?.config || {});
+  const rootChunks = chunkSubjects(subjects, initialSize);
+  const cells = [];
+  const reasonCodes = [];
+  const diagnostics = [];
+
+  for (const root of rootChunks) {
+    const queue = [root];
+    while (queue.length) {
+      const current = queue.shift();
+      const prompt = buildMatrixPrompt(state, current, attributes);
+      try {
+        const result = await callActorJson({
+          state,
+          runtime,
+          stageId: STAGE_ID,
+          actor: "analyst",
+          systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
+          userPrompt: prompt,
+          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 12000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
+          maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
+          liveSearch: true,
+          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+        });
+
+        cells.push(...normalizeMatrix(result?.parsed, current, attributes));
+        reasonCodes.push(...ensureArray(result?.reasonCodes));
+        diagnostics.push({
+          chunkSubjects: current.map((subject) => subject.id),
+          chunkSize: current.length,
+          retries: result.retries,
+          tokenDiagnostics: result.tokenDiagnostics,
+          modelRoute: result.route,
+        });
+      } catch (err) {
+        if (current.length <= 1) throw err;
+        const splitAt = Math.max(1, Math.floor(current.length / 2));
+        const left = current.slice(0, splitAt);
+        const right = current.slice(splitAt);
+        diagnostics.push({
+          chunkSubjects: current.map((subject) => subject.id),
+          chunkSize: current.length,
+          splitInto: [left.map((subject) => subject.id), right.map((subject) => subject.id)],
+          splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+        });
+        if (right.length) queue.unshift(right);
+        if (left.length) queue.unshift(left);
+      }
+    }
+  }
+
+  return {
+    cells,
+    reasonCodes: [...new Set(reasonCodes)],
+    diagnostics,
+  };
 }
 
 export async function runStage(context = {}) {
@@ -106,28 +213,17 @@ export async function runStage(context = {}) {
   if (state?.outputType === "matrix") {
     const subjects = ensureArray(state?.request?.matrix?.subjects);
     const attributes = ensureArray(state?.request?.matrix?.attributes);
-    const prompt = `Objective: ${clean(state?.request?.objective)}\nCollect WEB evidence for each matrix cell below and return structured JSON.\nSubjects:\n${subjects.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}\nAttributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}`).join("\n")}
-Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":""}]}`;
-
-    const result = await callActorJson({
+    const matrixWeb = await gatherMatrixWeb({
       state,
       runtime,
-      stageId: STAGE_ID,
-      actor: "analyst",
-      systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
-      userPrompt: prompt,
-      tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 12000,
-      timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
-      maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
-      liveSearch: true,
-      schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","sources":[]}]}',
+      subjects,
+      attributes,
     });
-
-    const normalizedWeb = normalizeMatrix(result?.parsed, subjects, attributes);
+    const normalizedWeb = matrixWeb.cells;
     const merged = mergeMatrixCells(ensureArray(memory?.matrix?.cells), normalizedWeb);
     return {
       stageStatus: "ok",
-      reasonCodes: result.reasonCodes,
+      reasonCodes: matrixWeb.reasonCodes,
       statePatch: {
         ui: { phase: STAGE_ID },
         evidenceDrafts: {
@@ -146,23 +242,25 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       diagnostics: {
         mode: "matrix",
         cells: merged.length,
-        retries: result.retries,
-        modelRoute: result.route,
-        tokenDiagnostics: result.tokenDiagnostics,
+        chunks: matrixWeb.diagnostics,
       },
-      io: {
-        prompt,
-        response: result.text,
-      },
-      modelRoute: result.route,
-      tokens: result.tokenDiagnostics,
-      retries: result.retries,
     };
   }
 
   const dimensions = ensureArray(state?.request?.scorecard?.dimensions);
-  const prompt = `Objective: ${clean(state?.request?.objective)}\nCollect WEB evidence and update each dimension.\nDimensions:\n${dimensions.map((dim) => `- ${dim.id}: ${dim.label}`).join("\n")}
-Return JSON {"dimensions":[{"id":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":""}]}`;
+  const prompt = `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Collect WEB evidence and update each scorecard dimension.
+Dimensions:
+${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${clean(dim.brief)}` : ""}`).join("\n")}
+
+Rules:
+- Use sources that can be cited with specific URLs when possible.
+- If reliable evidence is unavailable, keep "sources" empty and explain the gap in "missingEvidence".
+
+Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 
   const result = await callActorJson({
     state,
@@ -175,7 +273,7 @@ Return JSON {"dimensions":[{"id":"","brief":"","full":"","confidence":"","confid
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
     liveSearch: true,
-    schemaHint: '{"dimensions":[{"id":"","brief":"","full":"","sources":[]}]}',
+    schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
   const normalizedWeb = normalizeScorecard(result?.parsed, dimensions);

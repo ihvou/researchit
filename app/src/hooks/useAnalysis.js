@@ -69,7 +69,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
       ? "matrix_plan"
       : (evidenceMode === "deep-assist" ? "deep_assist_collect" : "analyst_baseline"),
   });
-  let debugSessionReceived = false;
+  let debugSessionFinalized = false;
   let caughtError = null;
 
   let latest = null;
@@ -105,7 +105,12 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
           });
         },
         onDebugSession: (session, meta = {}) => {
-          debugSessionReceived = true;
+          const isIncremental = meta?.incremental === true && meta?.final !== true;
+          if (isIncremental) {
+            storeCompletedAnalysisDebugSession(session);
+            return;
+          }
+          debugSessionFinalized = true;
           const networkCapture = stopRunDebugCapture(id);
           storeCompletedAnalysisDebugSession(session, { networkCapture });
           if (meta?.downloadRequested) {
@@ -118,7 +123,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     caughtError = err;
     throw err;
   } finally {
-    if (!debugSessionReceived) {
+    if (!debugSessionFinalized) {
       const status = latest?.status || "error";
       const networkCapture = stopRunDebugCapture(id);
       const payload = finalizeAnalysisDebugSession(fallbackDebugSession, {

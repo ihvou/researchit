@@ -51,7 +51,18 @@ export async function runStage(context = {}) {
   }
 
   const attrs = Array.isArray(state?.request?.matrix?.attributes) ? state.request.matrix.attributes : [];
-  const prompt = `Decision objective:\n${clean(state?.request?.objective)}\n\nSuggest 4 to 8 concrete comparison subjects for this matrix.
+  const prompt = `Decision objective:\n${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+
+Attributes the subjects will be evaluated on:
+${attrs.map((attr) => `- ${attr.id}: ${attr.label}${clean(attr?.brief) ? ` - ${clean(attr.brief)}` : ""}`).join("\n")}
+
+Existing subjects (if any):
+${existing.length ? existing.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n") : "- none"}
+
+Suggest 4 to 8 concrete comparison subjects for this matrix.
 Return JSON:
 {
   "subjects": [{"label":"", "aliases":[""]}],

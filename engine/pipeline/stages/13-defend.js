@@ -5,7 +5,15 @@ export const STAGE_TITLE = "Concede Defend";
 
 function normalizeOutcome(raw = {}, fallback = {}) {
   const flag = fallback?.flag || {};
-  const resolved = raw?.resolved === true;
+  const generatedFallback = fallback?.generatedFallback === true;
+  const rawDisposition = clean(raw?.disposition).toLowerCase();
+  const validDisposition = rawDisposition === "accepted" || rawDisposition === "rejected_with_evidence"
+    ? rawDisposition
+    : "";
+  const analystNote = clean(raw?.analystNote);
+  const resolved = raw?.resolved === true && !!analystNote;
+  const disposition = validDisposition
+    || (generatedFallback ? "no_response" : (resolved ? "accepted" : "rejected_with_evidence"));
   const outcome = {
     flagId: clean(raw?.flagId || fallback?.flagId || flag?.id),
     flag: {
@@ -14,12 +22,93 @@ function normalizeOutcome(raw = {}, fallback = {}) {
       category: clean(flag?.category || "other"),
     },
     resolved,
-    disposition: clean(raw?.disposition || (resolved ? "accepted" : "rejected_with_evidence")) || "rejected_with_evidence",
-    analystNote: clean(raw?.analystNote || fallback?.flag?.note || "No analyst note provided."),
+    disposition,
+    analystNote: analystNote || (generatedFallback ? "No analyst response returned for this flag." : ""),
     mitigationNote: clean(raw?.mitigationNote || "") || undefined,
     sources: normalizeSources(raw?.sources || []),
+    responseMissing: generatedFallback || !analystNote,
   };
   return outcome;
+}
+
+function buildFlagContexts(state = {}, flags = [], counterEntries = []) {
+  const counterByFlagId = new Map();
+  ensureArray(counterEntries).forEach((entry) => {
+    const key = clean(entry?.flagId);
+    if (!key) return;
+    if (!counterByFlagId.has(key)) counterByFlagId.set(key, []);
+    counterByFlagId.get(key).push(entry);
+  });
+
+  if (clean(state?.outputType).toLowerCase() === "matrix") {
+    const byKey = new Map(ensureArray(state?.assessment?.matrix?.cells).map((cell) => [
+      `${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`,
+      cell,
+    ]));
+    return ensureArray(flags).map((flag) => {
+      const unitKey = clean(flag?.unitKey);
+      const cell = byKey.get(unitKey) || {};
+      return {
+        flagId: clean(flag?.id),
+        unitKey,
+        flag,
+        assessedUnit: {
+          value: clean(cell?.value),
+          full: clean(cell?.full).slice(0, 1200),
+          confidence: clean(cell?.confidence),
+          confidenceReason: clean(cell?.confidenceReason),
+          missingEvidence: clean(cell?.missingEvidence),
+          sources: normalizeSources(cell?.sources || []).slice(0, 8),
+          arguments: {
+            supporting: ensureArray(cell?.arguments?.supporting).slice(0, 8).map((item) => ({
+              claim: clean(item?.claim),
+              detail: clean(item?.detail).slice(0, 220),
+            })),
+            limiting: ensureArray(cell?.arguments?.limiting).slice(0, 8).map((item) => ({
+              claim: clean(item?.claim),
+              detail: clean(item?.detail).slice(0, 220),
+            })),
+          },
+          risks: clean(cell?.risks),
+        },
+        counterEntries: counterByFlagId.get(clean(flag?.id)) || [],
+      };
+    });
+  }
+
+  const byId = state?.assessment?.scorecard?.byId && typeof state.assessment.scorecard.byId === "object"
+    ? state.assessment.scorecard.byId
+    : {};
+  return ensureArray(flags).map((flag) => {
+    const unitKey = clean(flag?.unitKey);
+    const unit = byId[unitKey] || {};
+    return {
+      flagId: clean(flag?.id),
+      unitKey,
+      flag,
+      assessedUnit: {
+        score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
+        brief: clean(unit?.brief),
+        full: clean(unit?.full).slice(0, 1200),
+        confidence: clean(unit?.confidence),
+        confidenceReason: clean(unit?.confidenceReason),
+        missingEvidence: clean(unit?.missingEvidence),
+        sources: normalizeSources(unit?.sources || []).slice(0, 8),
+        arguments: {
+          supporting: ensureArray(unit?.arguments?.supporting).slice(0, 8).map((item) => ({
+            claim: clean(item?.claim),
+            detail: clean(item?.detail).slice(0, 220),
+          })),
+          limiting: ensureArray(unit?.arguments?.limiting).slice(0, 8).map((item) => ({
+            claim: clean(item?.claim),
+            detail: clean(item?.detail).slice(0, 220),
+          })),
+        },
+        risks: clean(unit?.risks),
+      },
+      counterEntries: counterByFlagId.get(clean(flag?.id)) || [],
+    };
+  });
 }
 
 function applyAcceptedAdjustments(state = {}, outcomes = []) {
@@ -82,8 +171,17 @@ export async function runStage(context = {}) {
       diagnostics: { skipped: true, reason: "no_flags" },
     };
   }
+  const flagContexts = buildFlagContexts(state, flags, counterEntries);
 
   const prompt = `Resolve every critic flag using counter-case evidence.
+You must respond to every listed flagId exactly once.
+
+Rules:
+- analystNote is required for every flag.
+- If resolved=true, explain the exact correction/defense and cite sources.
+- If resolved=false and severity is high, mitigationNote is required.
+- Do not invent sources that are not in evidence or counter entries.
+
 Return JSON:
 {
   "outcomes": [{
@@ -96,10 +194,8 @@ Return JSON:
   }],
   "analystSummary": ""
 }
-Flags:
-${JSON.stringify(flags).slice(0, 14000)}
-Counter evidence:
-${JSON.stringify(counterEntries).slice(0, 12000)}`;
+Flag contexts:
+${JSON.stringify(flagContexts).slice(0, 28000)}`;
 
   const result = await callActorJson({
     state,
@@ -121,7 +217,7 @@ ${JSON.stringify(counterEntries).slice(0, 12000)}`;
   flags.forEach((flag) => {
     const key = clean(flag?.id);
     if (normalizedOutcomes.some((outcome) => clean(outcome?.flagId) === key)) return;
-    normalizedOutcomes.push(normalizeOutcome({}, { flagId: key, flag }));
+    normalizedOutcomes.push(normalizeOutcome({}, { flagId: key, flag, generatedFallback: true }));
   });
 
   const unresolvedHighSeverityCount = normalizedOutcomes.filter((outcome) => (
@@ -147,6 +243,7 @@ ${JSON.stringify(counterEntries).slice(0, 12000)}`;
     diagnostics: {
       outcomes: normalizedOutcomes.length,
       unresolvedHighSeverityCount,
+      missingResponses: normalizedOutcomes.filter((outcome) => outcome?.responseMissing).length,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

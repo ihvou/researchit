@@ -2,6 +2,7 @@ import {
   SYS_ANALYST,
   SYS_CRITIC,
   SYS_ANALYST_RESPONSE,
+  SYS_SYNTHESIZER,
   SYS_FOLLOWUP,
 } from "../engine/prompts/defaults.js";
 
@@ -93,13 +94,11 @@ const SHARED_LIMITS = {
     highLowConfidenceRate: 0.3,
   },
   tokenLimits: {
-    phase1Evidence: 10000,
-    phase1EvidenceWeb: 14000,
-    phase1Scoring: 12000,
-    critic: 6000,
-    phase3Response: 6000,
-    followUpQuestion: 1400,
-    followUpChallenge: 2100,
+    question: 1400,
+    challenge: 2100,
+    reframe: 1600,
+    addEvidence: 2200,
+    reSearch: 2400,
     intentClassification: 450,
   },
 };
@@ -108,6 +107,7 @@ const BASE_PROMPTS = {
   analyst: SYS_ANALYST,
   critic: SYS_CRITIC,
   analystResponse: SYS_ANALYST_RESPONSE,
+  synthesizer: SYS_SYNTHESIZER,
   followUp: SYS_FOLLOWUP,
 };
 

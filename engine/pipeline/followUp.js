@@ -52,6 +52,21 @@ const DEFAULT_LIMITS = {
   reSearch: 2400,
 };
 
+function normalizeTokenLimitOverrides(limits = {}) {
+  const raw = limits && typeof limits === "object" ? limits : {};
+  const normalized = { ...raw };
+  if (!Number.isFinite(Number(normalized.question)) && Number.isFinite(Number(raw.followUpQuestion))) {
+    normalized.question = Number(raw.followUpQuestion);
+  }
+  if (!Number.isFinite(Number(normalized.challenge)) && Number.isFinite(Number(raw.followUpChallenge))) {
+    normalized.challenge = Number(raw.followUpChallenge);
+  }
+  if (!Number.isFinite(Number(normalized.intentClassification)) && Number.isFinite(Number(raw.intentClassification))) {
+    normalized.intentClassification = Number(raw.intentClassification);
+  }
+  return normalized;
+}
+
 function makeId(prefix = "fu") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -811,7 +826,7 @@ export async function handleFollowUp(input, config, callbacks) {
   };
   const tokenLimits = {
     ...DEFAULT_LIMITS,
-    ...(config?.limits?.tokenLimits || {}),
+    ...normalizeTokenLimitOverrides(config?.limits?.tokenLimits || {}),
   };
 
   let uc = copyState(input?.ucState);

@@ -17,6 +17,7 @@ function normalizeCategory(value) {
 
 function normalizeFlags(parsed = {}, state = {}) {
   const raw = ensureArray(parsed?.flags);
+  const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
   const flags = raw.map((flag, idx) => ({
     id: clean(flag?.id) || `flag-${idx + 1}`,
     unitKey: clean(flag?.unitKey),
@@ -24,7 +25,7 @@ function normalizeFlags(parsed = {}, state = {}) {
     severity: normalizeSeverity(flag?.severity),
     category: normalizeCategory(flag?.category),
     note: clean(flag?.note),
-    suggestedScore: Number.isFinite(Number(flag?.suggestedScore)) ? Number(flag.suggestedScore) : undefined,
+    suggestedScore: !isMatrix && Number.isFinite(Number(flag?.suggestedScore)) ? Number(flag.suggestedScore) : undefined,
     suggestedValue: clean(flag?.suggestedValue) || undefined,
     suggestedConfidence: clean(flag?.suggestedConfidence) ? clean(flag.suggestedConfidence).toLowerCase() : undefined,
     sources: normalizeSources(flag?.sources || []),
@@ -42,13 +43,76 @@ function normalizeFlags(parsed = {}, state = {}) {
   };
 }
 
+function buildAssessmentSnapshot(state = {}) {
+  const compactSources = (sources = []) => ensureArray(sources).slice(0, 8).map((source) => ({
+    name: clean(source?.name),
+    url: clean(source?.url),
+    quote: clean(source?.quote).slice(0, 180),
+  })).filter((source) => source.name || source.url || source.quote);
+
+  const compactClaims = (items = []) => ensureArray(items).slice(0, 8).map((item) => ({
+    claim: clean(item?.claim),
+    detail: clean(item?.detail).slice(0, 220),
+  })).filter((item) => item.claim);
+
+  if (clean(state?.outputType).toLowerCase() === "matrix") {
+    return ensureArray(state?.assessment?.matrix?.cells).map((cell) => ({
+      unitKey: `${cell.subjectId}::${cell.attributeId}`,
+      value: clean(cell?.value),
+      full: clean(cell?.full).slice(0, 1200),
+      confidence: clean(cell?.confidence),
+      confidenceReason: clean(cell?.confidenceReason),
+      missingEvidence: clean(cell?.missingEvidence),
+      sources: compactSources(cell?.sources),
+      arguments: {
+        supporting: compactClaims(cell?.arguments?.supporting),
+        limiting: compactClaims(cell?.arguments?.limiting),
+      },
+      risks: clean(cell?.risks),
+    }));
+  }
+
+  const byId = state?.assessment?.scorecard?.byId && typeof state.assessment.scorecard.byId === "object"
+    ? state.assessment.scorecard.byId
+    : {};
+
+  return Object.values(byId).map((unit) => ({
+    unitKey: clean(unit?.id),
+    score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
+    brief: clean(unit?.brief).slice(0, 420),
+    full: clean(unit?.full).slice(0, 1200),
+    confidence: clean(unit?.confidence),
+    confidenceReason: clean(unit?.confidenceReason),
+    missingEvidence: clean(unit?.missingEvidence),
+    sources: compactSources(unit?.sources),
+    arguments: {
+      supporting: compactClaims(unit?.arguments?.supporting),
+      limiting: compactClaims(unit?.arguments?.limiting),
+    },
+    risks: clean(unit?.risks),
+  }));
+}
+
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const coherence = ensureArray(state?.critique?.coherenceFindings);
-
-  const prompt = `Challenge overclaims and confidence calibration. Use coherence findings and current assessment.
-Return JSON:
-{
+  const assessmentSnapshot = buildAssessmentSnapshot(state);
+  const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
+  const flagSchema = isMatrix
+    ? `{
+  "flags": [{
+    "id":"",
+    "unitKey":"",
+    "flagged": true,
+    "severity":"high|medium|low",
+    "category":"overclaim|missing_evidence|contradiction|stale_source|missed_risk|other",
+    "note":"",
+    "suggestedValue": "",
+    "suggestedConfidence": "high|medium|low",
+    "sources": []
+  }]
+}`
+    : `{
   "flags": [{
     "id":"",
     "unitKey":"",
@@ -57,11 +121,37 @@ Return JSON:
     "category":"overclaim|missing_evidence|contradiction|stale_source|missed_risk|other",
     "note":"",
     "suggestedScore": 1,
-    "suggestedValue": "",
     "suggestedConfidence": "high|medium|low",
     "sources": []
   }]
-}
+}`;
+
+  const prompt = `Challenge overclaims and confidence calibration using the full assessment context.
+
+Severity definitions:
+- high: materially changes the decision, invalidates a central claim, or leaves a high-impact risk unaddressed.
+- medium: meaningfully weakens confidence or quality but may not flip the decision alone.
+- low: minor calibration issue with limited decision impact.
+
+Category definitions:
+- overclaim: claim strength exceeds evidence quality.
+- missing_evidence: key claim lacks sufficient evidence.
+- contradiction: claim conflicts with other units or within-unit evidence.
+- stale_source: claim relies on stale or outdated evidence.
+- missed_risk: material downside is absent from assessment.
+- other: issue outside the categories above.
+
+Rules:
+- Evaluate each unit using its current score/value, confidence, sources, and arguments.
+- Flag only concrete issues and cite why.
+- ${isMatrix
+    ? "For matrix units, suggest text updates using suggestedValue and do not return suggestedScore."
+    : "For scorecard units, use suggestedScore only when proposing a score change."}
+
+Return JSON:
+${flagSchema}
+Assessment:
+${JSON.stringify(assessmentSnapshot).slice(0, 26000)}
 Coherence findings:
 ${JSON.stringify(coherence).slice(0, 12000)}`;
 
@@ -76,7 +166,9 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
     liveSearch: false,
-    schemaHint: '{"flags":[{"id":"","unitKey":"","severity":"medium","category":"other","note":""}]}' ,
+    schemaHint: isMatrix
+      ? '{"flags":[{"id":"","unitKey":"","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[]}]}'
+      : '{"flags":[{"id":"","unitKey":"","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[]}]}',
   });
 
   const normalized = normalizeFlags(result?.parsed, state);

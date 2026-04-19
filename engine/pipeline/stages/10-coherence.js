@@ -4,13 +4,33 @@ export const STAGE_ID = "stage_10_coherence";
 export const STAGE_TITLE = "Coherence";
 
 function buildSummaryInput(state = {}) {
+  const compactSources = (sources = []) => ensureArray(sources).slice(0, 8).map((source) => ({
+    name: clean(source?.name),
+    url: clean(source?.url),
+    quote: clean(source?.quote).slice(0, 180),
+    sourceType: clean(source?.sourceType),
+    displayStatus: clean(source?.displayStatus),
+  })).filter((source) => source.name || source.url || source.quote);
+  const compactClaims = (items = []) => ensureArray(items).slice(0, 8).map((item) => ({
+    claim: clean(item?.claim),
+    detail: clean(item?.detail).slice(0, 260),
+  })).filter((item) => item.claim);
+
   if (state?.outputType === "matrix") {
     const cells = ensureArray(state?.assessment?.matrix?.cells);
     return cells.slice(0, 120).map((cell) => ({
       unitKey: `${cell.subjectId}::${cell.attributeId}`,
       value: clean(cell?.value),
+      full: clean(cell?.full).slice(0, 1200),
       confidence: clean(cell?.confidence),
       confidenceReason: clean(cell?.confidenceReason),
+      sources: compactSources(cell?.sources),
+      arguments: {
+        supporting: compactClaims(cell?.arguments?.supporting),
+        limiting: compactClaims(cell?.arguments?.limiting),
+      },
+      risks: clean(cell?.risks),
+      missingEvidence: clean(cell?.missingEvidence),
     }));
   }
   const byId = state?.assessment?.scorecard?.byId && typeof state.assessment.scorecard.byId === "object"
@@ -18,16 +38,25 @@ function buildSummaryInput(state = {}) {
     : {};
   return Object.values(byId).map((unit) => ({
     unitKey: clean(unit?.id),
-    value: clean(unit?.brief || unit?.full),
+    score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
+    value: clean(unit?.brief || unit?.full).slice(0, 500),
+    full: clean(unit?.full).slice(0, 1200),
     confidence: clean(unit?.confidence),
     confidenceReason: clean(unit?.confidenceReason),
+    sources: compactSources(unit?.sources),
+    arguments: {
+      supporting: compactClaims(unit?.arguments?.supporting),
+      limiting: compactClaims(unit?.arguments?.limiting),
+    },
+    risks: clean(unit?.risks),
+    missingEvidence: clean(unit?.missingEvidence),
   }));
 }
 
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const summary = buildSummaryInput(state);
-  const prompt = `Review cross-unit coherence for this assessment and flag contradictions.
+  const prompt = `Review cross-unit coherence for this assessment and flag contradictions or internal logic breaks.
 Return JSON:
 {
   "findings": [{"unitKey":"", "note":"", "severity":"high|medium|low"}],

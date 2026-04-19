@@ -19,6 +19,8 @@ function isTimeoutError(err) {
 }
 
 function classifyFailure(err) {
+  const reasonCode = String(err?.reasonCode || "").trim();
+  if (reasonCode === REASON_CODES.RESPONSE_PARSE_FAILED) return "parse";
   if (isRateLimitError(err)) return "rate_limit";
   if (isTimeoutError(err)) return "timeout";
   const message = String(err?.message || "").toLowerCase();
@@ -31,6 +33,7 @@ export async function executeWithRetry(work, options = {}) {
   const timeoutMs = Number(options?.timeoutMs) || 0;
   const initialBackoffMs = Math.max(20, Number(options?.initialBackoffMs) || 250);
   const backoffFactor = Math.max(1, Number(options?.backoffFactor) || 2);
+  const onRetry = typeof options?.onRetry === "function" ? options.onRetry : null;
 
   let lastError = null;
   const attempts = maxRetries + 1;
@@ -84,6 +87,16 @@ export async function executeWithRetry(work, options = {}) {
           durationMs: Date.now() - start,
           reasonCodes,
         };
+      }
+
+      if (onRetry) {
+        await onRetry({
+          attempt,
+          nextAttempt: attempt + 1,
+          maxAttempts: attempts,
+          error: err,
+          failureType,
+        });
       }
 
       const backoff = Math.min(5000, Math.round(initialBackoffMs * (backoffFactor ** (attempt - 1))));

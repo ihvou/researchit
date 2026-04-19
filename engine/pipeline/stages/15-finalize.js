@@ -48,6 +48,11 @@ export async function runStage(context = {}) {
       REASON_CODES.RUN_COMPLETED_DEGRADED,
     ]);
   }
+  if (strictQuality) {
+    runReasonCodes = normalizeReasonCodes(
+      runReasonCodes.filter((code) => code !== REASON_CODES.RUN_COMPLETED_DEGRADED)
+    );
+  }
 
   const qualityGrade = qualityGradeFromGate({
     strictQuality,

@@ -144,6 +144,17 @@ function emitProgress(state, callbacks = {}) {
   onProgress(uiState.phase, uiState);
 }
 
+function emitDebugSnapshot(state, callbacks = {}, extras = {}, meta = {}) {
+  const onDebugSession = typeof callbacks?.onDebugSession === "function" ? callbacks.onDebugSession : null;
+  if (!onDebugSession) return;
+  const debugBundle = buildDebugBundle(state, extras);
+  onDebugSession(debugBundle, {
+    incremental: meta?.incremental === true,
+    final: meta?.final === true,
+    downloadRequested: !!meta?.downloadRequested,
+  });
+}
+
 function appendRoutingDiagnostics(state = {}, routes = []) {
   state.diagnostics.routing = Array.isArray(routes) ? routes : [];
   return state;
@@ -159,6 +170,12 @@ function appendQualityReasonCodes(state = {}, reasonCodes = []) {
     reasonCodes: merged,
   };
   return state;
+}
+
+function enforceStrictReasonCodeInvariant(state = {}, reasonCodes = []) {
+  const normalized = normalizeReasonCodes(reasonCodes);
+  if (!state?.strictQuality) return normalized;
+  return normalized.filter((code) => code !== REASON_CODES.RUN_COMPLETED_DEGRADED);
 }
 
 export async function runCanonicalPipeline(input, config, callbacks = {}) {
@@ -210,10 +227,10 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
     });
     pushReasonCodes(state, [reasonCode, REASON_CODES.RUN_ABORTED_STRICT_QUALITY]);
 
-    const debugBundle = buildDebugBundle(state, { status: "error", error: err });
-    if (typeof callbacks?.onDebugSession === "function") {
-      callbacks.onDebugSession(debugBundle, { downloadRequested: !!input?.options?.downloadDebugLog });
-    }
+    emitDebugSnapshot(state, callbacks, { status: "error", error: err }, {
+      final: true,
+      downloadRequested: !!input?.options?.downloadDebugLog,
+    });
     emitProgress(state, callbacks);
     throw err;
   }
@@ -232,7 +249,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
 
     try {
       const result = await stage.run({ state, runtime, callbacks });
-      const reasonCodes = normalizeReasonCodes(result?.reasonCodes || []);
+      const reasonCodes = enforceStrictReasonCodeInvariant(state, result?.reasonCodes || []);
       const statePatch = result?.statePatch && typeof result.statePatch === "object"
         ? result.statePatch
         : {};
@@ -264,9 +281,12 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
       });
 
       emitProgress(state, callbacks);
+      emitDebugSnapshot(state, callbacks, { status: state?.ui?.status || "analyzing" }, {
+        incremental: true,
+      });
     } catch (err) {
       pipelineError = err;
-      const reasonCodes = normalizeReasonCodes([
+      const reasonCodes = enforceStrictReasonCodeInvariant(state, [
         ...(Array.isArray(err?.reasonCodes) ? err.reasonCodes : []),
         clean(err?.reasonCode),
       ]);
@@ -306,6 +326,9 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
           },
         });
         emitProgress(state, callbacks);
+        emitDebugSnapshot(state, callbacks, { status: "error", error: err }, {
+          incremental: true,
+        });
         break;
       }
 
@@ -313,6 +336,9 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         ui: { phase: stage.id },
       });
       emitProgress(state, callbacks);
+      emitDebugSnapshot(state, callbacks, { status: state?.ui?.status || "analyzing", error: err }, {
+        incremental: true,
+      });
     }
   }
 
@@ -326,15 +352,14 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
   }
 
   state.diagnostics.run.finishedAt = new Date().toISOString();
-  const debugBundle = buildDebugBundle(state, {
+  emitDebugSnapshot(state, callbacks, {
     status: state?.ui?.status,
     error: pipelineError,
+  }, {
+    final: true,
+    incremental: false,
+    downloadRequested: !!input?.options?.downloadDebugLog,
   });
-  if (typeof callbacks?.onDebugSession === "function") {
-    callbacks.onDebugSession(debugBundle, {
-      downloadRequested: !!input?.options?.downloadDebugLog,
-    });
-  }
 
   const output = toUseCaseState(state);
   emitProgress(state, callbacks);

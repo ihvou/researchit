@@ -44,7 +44,7 @@ function rescoreScorecard(state = {}) {
       },
       risks: clean(patch?.risks || current?.risks),
       score: adjustedScore,
-      missingEvidence: confidence === "low" ? "More evidence needed." : "",
+      missingEvidence: clean(patch?.missingEvidence || current?.missingEvidence) || (confidence === "low" ? "More evidence needed." : ""),
     };
   });
 
@@ -73,6 +73,7 @@ function rescoreMatrix(state = {}) {
         limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
       },
       risks: clean(patch?.risks || cell?.risks),
+      missingEvidence: clean(patch?.missingEvidence || cell?.missingEvidence),
     };
   });
 

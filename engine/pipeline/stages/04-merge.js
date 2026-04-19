@@ -153,6 +153,7 @@ function mergeNativeScorecard(memory = {}, merged = {}) {
             limiting: [...ensureArray(unit?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
           },
           risks: clean(patch?.risks || unit?.risks),
+          missingEvidence: clean(patch?.missingEvidence || unit?.missingEvidence),
         };
       }),
     },
@@ -180,6 +181,7 @@ function mergeNativeMatrix(memory = {}, merged = {}) {
             limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
           },
           risks: clean(patch?.risks || cell?.risks),
+          missingEvidence: clean(patch?.missingEvidence || cell?.missingEvidence),
         };
       }),
     },

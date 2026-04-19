@@ -1,511 +1,211 @@
 # ResearchIt
 
-ResearchIt is a config-driven AI research engine plus a product shell.
+ResearchIt is a config-driven research engine and product shell built for decision-grade analysis.
 
-The core idea is simple: most AI tools generate fluent reports, but strategic decisions need auditable structure. ResearchIt turns a question into:
-- weighted per-dimension scores,
-- evidence and confidence per dimension,
-- explicit analyst-vs-critic disagreement,
-- follow-up challenge threads,
-- exportable, reproducible artifacts.
+Instead of a single fluent response, each run produces structured outputs with:
+- explicit evidence and confidence per unit,
+- critic challenges and analyst responses,
+- source verification signals,
+- quality gate outcomes and reason codes,
+- reproducible artifacts for audit/export.
 
-Quality bar:
-- [docs/quality-bar.md](docs/quality-bar.md)
+Quality objective and release priority are defined in [docs/quality-bar.md](docs/quality-bar.md).
 
-## Idea
-
-ResearchIt is built for decisions like:
-- Should we build this AI product?
-- Should we buy vs build?
-- Which opportunity should we prioritize first?
-- Which variant is stronger after pressure-testing assumptions?
-
-The product is intentionally opinionated about process, not outcomes:
-- Evidence first, then scoring.
-- Critique is required, not optional.
-- Score changes are explicit and reviewable.
-- Configuration is first-class so the same engine can power different research types.
-
-## Repository Architecture
-
-This repo is a monorepo with three top-level concerns.
+## Monorepo Layout
 
 ```txt
 researchit/
-  app/                                # Deployable product shell (React + Vite + Vercel API routes)
-  engine/                             # Reusable research engine package (@researchit/engine)
-  configs/                            # ResearchConfig instances used by products
+  app/      # Product shell (React + Vite + API routes)
+  engine/   # Reusable analysis engine (@researchit/engine)
+  configs/  # ResearchConfig definitions
+  docs/     # Architecture and quality docs
 ```
 
-### app/
-`app/` owns user experience and deployment concerns:
-- React UI and tabs (`app/src/components/*`)
-- client state wiring (`app/src/App.jsx`)
-- exports and browser-side helpers (`app/src/lib/*`)
-- serverless endpoints (`app/api/*`)
+## Current Architecture (v2 Canonical Pipeline)
 
-It consumes the engine package via `"@researchit/engine": "file:../engine"`.
+Research runs now execute through one canonical orchestrator for both scorecard and matrix modes:
+- `engine/pipeline/orchestrator.js`
+- stage modules under `engine/pipeline/stages/*`
+- state/contract mapping under `engine/pipeline/contracts/*`
 
-### engine/
-`engine/` owns research behavior and core contracts:
-- pipelines (`engine/pipeline/analysis.js`, `engine/pipeline/followUp.js`)
-- base OpenAI adapter (`engine/providers/openai.js`)
-- transport abstraction (`engine/lib/transport.js`)
-- scoring, rubric, confidence, serialization, debug primitives (`engine/lib/*`)
-- default dimensions and prompts (`engine/configs/*`, `engine/prompts/*`)
+Entry points:
+- `runAnalysis()` in `engine/pipeline/analysis.js`
+- `runMatrixAnalysis()` in `engine/pipeline/matrix.js`
+- `resolveMatrixResearchInput()` in `engine/pipeline/matrix.js`
 
-Engine design constraints:
-- no React dependency
-- no browser-only APIs in core logic
-- dependency-injected transport for LLM/source calls
+Follow-up workflow remains in `engine/pipeline/followUp.js`.
 
-### configs/
-`configs/` contains concrete `ResearchConfig` objects (for this product: `configs/research-configurations.js`).
+## Actor Model and Routing Policy
 
-### Architecture Diagram
+The pipeline uses three actor roles:
+- `Analyst`: planning, scoring, recovery, and defend/concede
+- `Critic`: coherence checks, overclaim challenge, counter-case
+- `Synthesizer`: independent executive synthesis
 
-```mermaid
-flowchart LR
-  U["PM / Founder"] --> UI["App UI (app/src)"]
-  UI --> H["UI Hooks (useAnalysis/useFollowUp)"]
-  H --> E["Engine Pipelines (@researchit/engine)"]
-  C["ResearchConfig (configs/*.js)"] --> E
-  E --> T["Transport (engine/lib/transport.js)"]
-  T --> A["Serverless API (app/api/*)"]
-  A --> R["Provider Router (OpenAI / Anthropic / Gemini)"]
-  R --> O["OpenAI APIs"]
-  R --> N["Anthropic Messages API"]
-  R --> G["Gemini API (grounded search)"]
-  T --> F["Source Fetch Route (/api/fetch-source)"]
-  E --> D["Progress + Debug Events"]
-  D --> UI
-```
+Default model policy in `configs/research-configurations.js`:
+- Analyst reasoning: OpenAI (`gpt-5.4`)
+- Critic reasoning: Anthropic (`claude-sonnet-4-20250514`)
+- Retrieval-heavy Analyst stages: Gemini (`gemini-2.5-pro`)
+- Synthesizer: Gemini (`gemini-2.5-pro`)
 
-## Analysis Pipeline
+Route preflight is enforced before paid calls in `engine/lib/routing/route-preflight.js`.
 
-For detailed step-by-step pipeline flow with request/response shapes and diagrams, see [docs/pipeline-architecture.md](docs/pipeline-architecture.md).
+## Canonical Stage Sequence
 
-Scorecard pipeline (quality-first):
-1. Analyst baseline pass (memory-only)
-2. Analyst web pass (live-search assisted)
-3. Reconcile pass (merge evidence, re-score, apply quality guard retry/fail-fast if merge looks implausible)
-4. Targeted low-confidence cycle (query plan -> web harvest -> re-score)
-5. Critic audit pass
-6. Analyst final response pass
-7. Consistency check pass + decision/confidence/polarity post-guards
-8. Red Team pass (strongest counter-case, risk-only)
-9. Synthesizer pass (independent executive synthesis from structured signals)
-10. Discovery generation + candidate pre-validation
+All run types share this stage order:
 
-Matrix pipeline:
-1. Plan + input resolution (decision question, subject set)
-2. Baseline matrix pass (memory-only)
-3. Web matrix pass
-4. Reconcile baseline + web drafts (with quality guard retry/fail-fast)
-5. Targeted low-confidence cell recovery (adaptive budget by default)
-6. Critic matrix audit
-7. Analyst response (defend or concede contested cells)
-8. Cross-subject consistency audit
-9. Derived attributes (optional)
-10. Red Team matrix pass (risk-only)
-11. Synthesizer matrix pass
-12. Decision-grade gate (explicit pass/fail checks before final recommendation use)
-13. Matrix summary (+ optional matrix discovery suggestions)
+1. `stage_01_intake`
+2. `stage_01b_subject_discovery` (matrix optional)
+3. `stage_02_plan`
+4. `stage_03a_evidence_memory` (native)
+5. `stage_03b_evidence_web` (native)
+6. `stage_03c_evidence_deep_assist` (deep-assist)
+7. `stage_04_merge`
+8. `stage_05_score_confidence`
+9. `stage_06_source_verify`
+10. `stage_07_source_assess`
+11. `stage_08_recover`
+12. `stage_09_rescore`
+13. `stage_10_coherence`
+14. `stage_11_challenge`
+15. `stage_12_counter_case`
+16. `stage_13_defend`
+17. `stage_14_synthesize`
+18. `stage_15_finalize`
 
-Source verification runs after source-producing phases in both scorecard and matrix flows. Cited URLs are checked with `fetchSource`; unverified claims can reduce confidence.
-Each source is also classified into a UI/export taxonomy: `cited`, `corroborating`, `unverified`, `excluded_marketing`, `excluded_stale`, with aggregate counts in `analysisMeta.sourceUniverse`.
-Run diagnostics are captured in `analysisMeta` and surfaced in Progress UI + exports (HTML/PDF/Markdown), including matrix decision-grade pass/fail and failure reasons.
+Native vs deep-assist differs only inside Stage 03 (03a/03b vs 03c); downstream stages are shared.
 
-Follow-up pipeline classifies PM intent (`challenge`, `question`, `reframe`, `add_evidence`, `note`, `re_search`) and executes intent-specific logic with explicit score proposals. Matrix follow-ups are supported at cell level (`subjectId` × `attributeId`) in addition to scorecard dimension threads.
+For the full stage contract and policy details, see [docs/pipeline-architecture-suggestion.md](docs/pipeline-architecture-suggestion.md).
 
-## Architecture Reference
+## Scorecard and Matrix Parity
 
-`docs/architecture.md` is the authoritative architecture contract for:
-- module boundaries (`engine`, `app`, `configs`)
-- data flow and pipeline phases
-- `ResearchConfig` contract
-- invariants that must stay true during future changes
-- quality objective and non-silent-failure policy in [docs/quality-bar.md](docs/quality-bar.md)
+Both output modes now use the same critic/analyst cycle and debate structure:
+- critic flags include typed severity/category,
+- analyst responses include disposition + mitigation notes where needed,
+- matrix and scorecard both surface critic-vs-analyst exchanges in UI.
 
-Read it before refactors or cross-module changes:
-- [docs/architecture.md](docs/architecture.md)
+## Quality Gates and Outcomes
+
+Stage 15 applies deterministic coverage + decision gates:
+- strict mode: failing gate conditions abort the run (`run_aborted_strict_quality`)
+- non-strict mode: recoverable failures can complete as degraded (`run_completed_degraded`)
+- hard-abort coverage floor failure aborts in both modes
+
+Reason codes are defined in `engine/pipeline/contracts/reason-codes.js`.
+
+## Legacy Adapter Boundary
+
+`engine/lib/legacy-adapter.js` exists only for import/read compatibility of legacy artifacts.
+
+Rules:
+- pipeline stage modules must not import it,
+- no back-porting new stage logic into legacy format,
+- remove it at migration sunset (`LEGACY_ADAPTER_SUNSET`).
+
+## Public Engine API
+
+`engine/index.js` exports:
+- `runAnalysis`
+- `runMatrixAnalysis`
+- `resolveMatrixResearchInput`
+- `handleFollowUp`
+- `createTransport`
+
+## App Integration
+
+The app consumes the engine package (`"@researchit/engine": "file:../engine"`) and provides transport functions that call API routes:
+- `/api/analyst`
+- `/api/critic`
+- `/api/synthesizer`
+- `/api/fetch-source`
+
+UI pipeline/progress rendering lives in:
+- `app/src/components/ProgressTab.jsx`
+- `app/src/components/ExpandedRow.jsx`
+
+Matrix debate rendering lives in:
+- `app/src/components/MatrixDebateTab.jsx`
 
 ## Configuration
 
-Research behavior is configured through a `ResearchConfig` object.
-
-Primary config in this repo:
+Research behavior is configured by `ResearchConfig` objects in:
 - `configs/research-configurations.js`
 
-Default single-config alias:
-- `configs/researchit-prioritizer.js`
-
-Engine-level default dimensions preset (legacy compatibility export) lives in:
-- `engine/configs/researchit-dimensions.js`
-
-Default system prompts live in:
-- `engine/prompts/defaults.js`
-
-### ResearchConfig shape
-
-```js
-{
-  id: "startup-product-idea-validation",
-  name: "Startup / Product Idea Validation",
-  tabLabel: "Startup Validation", // UI label for tabbed config selection
-  outputMode: "scorecard", // "scorecard" | "matrix"
-  shortDescription: "Short card copy used on homepage and discovery surfaces",
-  methodology: "Methodological foundation shown in UI (supports inline markdown links)",
-  engineVersion: "1.0.0",
-
-  inputSpec: {
-    label: "New Research - describe the startup or product idea",
-    placeholder: "E.g. AI co-pilot for insurance claims adjusters in US mid-market carriers.",
-    description: "What this research type expects as input. Broad input is allowed."
-  },
-
-  framingFields: [
-    {
-      id: "researchObject",
-      label: "Research Object",
-      description: "What is being evaluated"
-    },
-    {
-      id: "decisionQuestion",
-      label: "Decision Question",
-      description: "What decision the research should inform"
-    },
-    {
-      id: "scopeContext",
-      label: "Scope / Context",
-      description: "Explicit segment, geography, timeframe, constraints (or unspecified)"
-    }
-  ],
-
-  // scorecard mode
-  dimensions: [
-    {
-      id: "problem-severity",
-      label: "Problem Severity",
-      weight: 22,
-      enabled: true,
-      brief: "...",
-      fullDef: "...",
-      polarityHint: "Higher score means stronger decision attractiveness",
-      researchHints: {
-        whereToLook: ["industry reports", "earnings calls", "regulatory filings"],
-        queryTemplates: ["<segment> pain evidence", "<product> adoption benchmark"]
-      }
-    }
-  ],
-
-  // matrix mode
-  matrixLayout: "auto", // "subjects-as-rows" | "subjects-as-columns" | "auto" (UI default hint)
-  subjects: {
-    label: "Competitors",
-    inputPrompt: "List the competitors to analyze (optional override; auto-discovery supported)",
-    examples: ["Notion", "Coda", "Confluence"],
-    minCount: 2,
-    maxCount: 8
-  },
-  attributes: [
-    {
-      id: "pricing-model",
-      label: "Pricing Model",
-      brief: "Pricing structure and tiering",
-      derived: false // optional
-    }
-  ],
-
-  relatedDiscovery: true,
-
-  prompts: {
-    analyst: "...",
-    critic: "...",
-    analystResponse: "...",
-    followUp: "...",
-    redTeam: "...",      // optional
-    synthesizer: "..."   // optional
-  },
-
-  models: {
-    analyst: {
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      webSearchModel: "gpt-5.4-mini",   // optional; defaults to model
-      baseUrl: "https://api.openai.com"  // optional
-    },
-    critic: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-20250514",
-      webSearchModel: "claude-sonnet-4-20250514", // optional
-      baseUrl: "https://api.anthropic.com" // optional
-    },
-    synthesizer: {
-      provider: "openai",
-      model: "gpt-5.4-mini" // optional; falls back to critic model if omitted
-    },
-    retrieval: {
-      provider: "gemini",
-      model: "gemini-2.5-flash",
-      webSearchModel: "gemini-2.5-flash"
-    }
-  },
-
-  limits: {
-    maxSourcesPerDim: 14,
-    targetedBudgetUnits: 8,
-    counterfactualQueriesPerDim: 2,
-    discoveryMaxCandidates: 5,
-    matrixAdaptiveTargetedRatio: 0.7,
-    matrixAdaptiveTargetedFloor: 12,
-    matrixAdaptiveTargetedMax: 36,
-    matrixCoverageSLA: {
-      minSourcesPerCell: 2,
-      minSubjectEvidenceCoverage: 0.5,
-      maxUnresolvedCellsRatio: 0.35
-    },
-    matrixDecisionGradeGate: {
-      enabled: true,
-      minSourcesPerCoverageCell: 2,
-      minSubjectEvidenceCoverage: 0.75,
-      maxLowConfidenceRatio: 0.15,
-      minSourcesPerCriticalCell: 2,
-      minIndependentSourcesPerCriticalCell: 1,
-      maxUnverifiedSourceRatio: 0.05,
-      minCitedSourceRatio: 0.7,
-      requireResolvedCriticFlags: true,
-      maxRedTeamHighSeverity: 8,
-      criticalAttributeIds: ["pricing-model", "pmf-signal", "moat-assessment"]
-    },
-    criticFlagMonitoring: {
-      minAuditedCells: 8,
-      minFlagRate: 0.1,
-      highLowConfidenceRate: 0.3
-    },
-    tokenLimits: {
-      phase1Evidence: 10000,
-      phase1Scoring: 12000,
-      critic: 6000,
-      phase3Response: 6000,
-      followUpQuestion: 1400,
-      followUpChallenge: 2100,
-      intentClassification: 450
-    }
-  }
-}
-```
-
-For matrix configs, a single free-form prompt is accepted. The engine can extract subjects from the prompt and, when needed, run subject discovery before analysis.
-
-In scorecard mode, analysis `attributes` also include an `inputFrame` block used by UI:
-
-```js
-{
-  inputFrame: {
-    providedInput: "<verbatim user input>",
-    framingFields: {
-      researchObject: "<value or 'unspecified'>",
-      decisionQuestion: "<value or 'unspecified'>",
-      scopeContext: "<value or 'unspecified'>"
-    },
-    assumptionsUsed: [],
-    confidenceLimits: "<what cannot be concluded from current input/evidence>"
-  }
-}
-```
+Config controls:
+- output mode (`scorecard` or `matrix`),
+- dimensions/attributes and matrix subject rules,
+- prompts per actor,
+- model routing,
+- limits/gates (coverage, decision-grade, recovery budgets, token budgets).
 
 ## Local Development
 
-### Prerequisites
+Prerequisites:
 - Node.js 20+
 - npm
-- Vercel CLI (optional but recommended for local serverless parity)
 
-### Environment
-Create:
-- `app/.env.local`
+Install app deps:
 
-Minimum server-side variable:
-```bash
-OPENAI_API_KEY=sk-...
-```
-
-Optional provider/model/key overrides (env-first):
-```bash
-RESEARCHIT_PROVIDER=openai                  # or anthropic / gemini / openai_compatible
-RESEARCHIT_API_KEY=...                      # global provider key override
-RESEARCHIT_BASE_URL=https://api.openai.com # or your OpenAI-compatible endpoint
-
-RESEARCHIT_ANALYST_PROVIDER=openai
-RESEARCHIT_ANALYST_API_KEY=...
-RESEARCHIT_ANALYST_MODEL=gpt-5.4-mini
-RESEARCHIT_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
-RESEARCHIT_ANALYST_BASE_URL=https://api.openai.com
-
-RESEARCHIT_CRITIC_PROVIDER=anthropic
-RESEARCHIT_CRITIC_API_KEY=...
-RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-20250514
-RESEARCHIT_CRITIC_WEBSEARCH_MODEL=claude-sonnet-4-20250514
-RESEARCHIT_CRITIC_BASE_URL=https://api.anthropic.com
-
-# Provider-specific keys (recommended for quality-first routing)
-ANTHROPIC_API_KEY=...
-GEMINI_API_KEY=...
-```
-
-OpenAI-prefixed aliases are also supported for compatibility:
-```bash
-OPENAI_BASE_URL=https://api.openai.com
-OPENAI_MODEL=gpt-5.4
-OPENAI_WEBSEARCH_MODEL=gpt-5.4
-OPENAI_ANALYST_MODEL=gpt-5.4-mini
-OPENAI_ANALYST_WEBSEARCH_MODEL=gpt-5.4-mini
-OPENAI_CRITIC_MODEL=gpt-5.4
-OPENAI_CRITIC_WEBSEARCH_MODEL=gpt-5.4
-```
-
-Optional SEO canonical base URL (used by build-time prerendering):
-```bash
-RESEARCHIT_PUBLIC_URL=https://your-domain.example
-```
-For production auth/account routes, this same variable is required (used as trusted magic-link origin).
-
-Phase 1 account/auth variables:
-```bash
-# Session signing (required for production auth/account routes)
-RESEARCHIT_AUTH_SECRET=replace-with-long-random-secret
-
-# Magic-link email delivery (if not set, dev link fallback is used)
-RESEND_API_KEY=re_...
-RESEARCHIT_AUTH_FROM_EMAIL=Research it <noreply@your-domain.example>
-
-# Optional: allow dev link fallback in production (default false in production)
-RESEARCHIT_AUTH_ALLOW_DEV_LINK=false
-
-# Public base URL used for magic-link origin (required for production auth/account routes)
-RESEARCHIT_PUBLIC_URL=https://your-domain.example
-
-# Persistent account storage via Upstash/Vercel KV REST API
-# required for production auth/account routes
-KV_REST_API_URL=https://...upstash.io
-KV_REST_API_TOKEN=...
-# aliases are also supported:
-UPSTASH_REDIS_REST_URL=https://...upstash.io
-UPSTASH_REDIS_REST_TOKEN=...
-```
-
-Without KV env vars, account data falls back to in-memory storage in local/dev only; production auth/account APIs fail closed until KV is configured.
-
-Default routing behavior:
-- Native scorecard/matrix:
-  - Analyst synthesis/scoring -> OpenAI (default model)
-  - Retrieval/live-search-heavy phases -> Gemini (with grounded search where available)
-  - Critic -> Anthropic (default model)
-  - Provider/model routes are pinned; no automatic provider/model failover. Route mismatch or unavailable route fails fast.
-- Deep Assist:
-  - ChatGPT lane -> OpenAI
-  - Claude lane -> Anthropic
-  - Gemini lane -> Gemini
-  - Provider outputs are merged, then shared critic/verification/scoring layers run.
-
-Resolution precedence for provider/model/base URL is:
-1. Role-specific `RESEARCHIT_*` env vars
-2. Global `RESEARCHIT_*` env vars
-3. OpenAI-prefixed env aliases
-4. `ResearchConfig.models.*` values
-5. Built-in defaults
-
-Key handling:
-- Current app architecture is server-key only.
-- API key is read from env vars with provider-aware resolution:
-  - provider-specific first (`RESEARCHIT_<ROLE>_<PROVIDER>_API_KEY`, `RESEARCHIT_<PROVIDER>_API_KEY`, etc.)
-  - then role/global `RESEARCHIT_*_API_KEY`
-  - `OPENAI_*` / `OPENAI_API_KEY` are used for OpenAI provider resolution only
-- Request-body API keys are intentionally not used yet.
-- End-user BYOK UI will be added later without changing engine contracts.
-
-### Install
-From repo root:
 ```bash
 cd app
 npm install
 ```
 
-### Run
-Using Vercel dev runtime:
+Run dev server:
+
 ```bash
 cd app
-npx vercel dev
+npm run dev
 ```
 
-Open:
-- `http://localhost:3000`
+Build app:
 
-### Build
-From repo root:
 ```bash
 npm run build
 ```
 
-(or `cd app && npm run build`)
+Run engine tests:
 
-## Deployment (Vercel)
-
-This repo deploys from root with root-level `vercel.json` that builds `app/`:
-- install command: `cd app && npm install`
-- build command: `cd app && npm run build`
-- output directory: `app/dist`
-
-Root-level API entrypoints re-export handlers from `app/api/*`:
-- research pipeline: `/api/analyst`, `/api/critic`, `/api/fetch-source`
-- auth/session: `/api/auth/request-link`, `/api/auth/verify`, `/api/auth/session`, `/api/auth/logout`
-- account data: `/api/account/researches`
-
-If deployment settings in Vercel override these commands, reset them so repo `vercel.json` takes effect.
-
-## Contribution Flow
-
-### 1) Pick scope
-Open an issue (or use an existing one) describing:
-- problem statement
-- expected behavior
-- affected area (`engine`, `app`, or `config`)
-
-### 2) Branch
-Create a branch from `main`.
-Use small focused changes. Avoid mixing refactor + feature + style-only edits in one PR.
-
-### 3) Implement
-Recommended boundaries:
-- Engine logic changes in `engine/*`
-- Product/UI changes in `app/*`
-- Domain behavior changes in `configs/*`
-
-### 4) Validate locally
-Minimum checks before PR:
 ```bash
-cd app
-npm run build
+npm run test:engine
 ```
 
-If touching runtime behavior, run at least one end-to-end analysis and one follow-up flow in local dev.
+## Environment Variables (Minimum)
 
-### 5) Submit PR
-Include:
-- what changed
-- why it changed
-- risk/regression notes
-- screenshots/GIFs for UI changes
-- migration notes if config/contracts changed
+Create `app/.env.local`.
 
-## Security Notes
+Minimum for OpenAI-only experimentation:
 
-- Never commit real API keys.
-- Keep `.env.local` local only.
-- If a key was exposed, rotate immediately.
+```bash
+OPENAI_API_KEY=sk-...
+```
 
-## License
+Recommended for canonical multi-provider routing:
 
-No license file is currently defined in this repository.
-Add one before publishing broader external contributions.
+```bash
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GEMINI_API_KEY=...
+
+RESEARCHIT_ANALYST_MODEL=gpt-5.4
+RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-20250514
+RESEARCHIT_SYNTHESIZER_MODEL=gemini-2.5-pro
+```
+
+Provider/model/base URL resolution precedence remains:
+1. role-specific `RESEARCHIT_*`
+2. global `RESEARCHIT_*`
+3. `OPENAI_*` aliases
+4. `ResearchConfig.models.*`
+5. built-in defaults
+
+## Architecture Reference
+
+Primary architecture contract:
+- [docs/architecture.md](docs/architecture.md)
+
+Quality policy:
+- [docs/quality-bar.md](docs/quality-bar.md)
+
+Pipeline spec and stage-level details:
+- [docs/pipeline-architecture-suggestion.md](docs/pipeline-architecture-suggestion.md)

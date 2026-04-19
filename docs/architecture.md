@@ -1,350 +1,176 @@
-# ResearchIt — Architecture
+# ResearchIt Architecture
 
-This document captures the architectural principles and module boundaries of the ResearchIt monorepo. All future changes should respect these constraints. For detailed step-by-step pipeline flow with request/response shapes, see [pipeline-architecture.md](pipeline-architecture.md).
+This document is the architecture contract for the monorepo after the canonical pipeline refactor.
 
-Quality objective and release priority are defined in [quality-bar.md](quality-bar.md). If architecture tradeoffs conflict, the quality bar wins.
+If architecture tradeoffs conflict with quality, [quality-bar.md](./quality-bar.md) wins.
 
----
+## 1. Scope and Boundaries
 
-## Core Idea
+Repository structure:
 
-ResearchIt is a **config-driven AI research engine** with a product shell on top. The engine scores any set of weighted dimensions against any input using a multi-phase LLM pipeline (analyst → critic → response), producing structured, auditable research results. The product shell is one consumer; other products can use the same engine with different configs.
-
----
-
-## Module Boundaries
-
-```
+```txt
 researchit/
-  engine/          @researchit/engine — reusable research logic
-  app/             Product shell — React UI + Vercel serverless API
-  configs/         ResearchConfig instances consumed by products
+  engine/   # reusable package: @researchit/engine
+  app/      # product shell: UI + API routes
+  configs/  # ResearchConfig definitions
+  docs/     # architecture and policy docs
 ```
 
-### engine/ — The Engine Package
-
-**Owns:** research behavior and core contracts.
-
-**Constraints:**
-- Zero React dependency. Zero browser-only API usage.
-- Zero product-specific language in prompts or logic.
-- No knowledge of Vercel, hosting, or deployment.
-- No hardcoded dimension IDs — all dimension-specific behavior reads from config.
-- Dependency-injected transport for all LLM and source-fetch calls.
-- Can be extracted to a standalone npm package with no code changes.
-
-**Internal structure:**
-| Directory | Contents |
-|-----------|----------|
-| `pipeline/` | `analysis.js` (8-phase analysis), `followUp.js` (intent-classified follow-up) |
-| `providers/` | `openai.js` — base OpenAI adapter primitives used by host-side provider routing |
-| `lib/` | Pure utility modules: transport, scoring, confidence, rubric, arguments, dimensionView, followUpIntent, researchBrief, serialize, debug, json |
-| `prompts/` | `defaults.js` — generic default system prompts (overridable via ResearchConfig) |
-| `configs/` | `researchit-dimensions.js` — shipped default dimension set |
-
-**Barrel export:** `engine/index.js` is the public API surface. Internal file paths are not part of the contract.
-
-**Key function signatures:**
-```js
-runAnalysis(input, config, callbacks)
-// input:     { description, id, origin?, options?: { evidenceMode?, deepAssist?, ... } }
-// config:    ResearchConfig object
-// callbacks: { transport, onProgress, onDebugSession? }
-
-handleFollowUp(input, config, callbacks)
-// input:     { ucId, dimId?, subjectId?, attributeId?, challenge, ucState, options? }
-// config:    ResearchConfig object
-// callbacks: { transport, onProgress }
-
-resolveMatrixResearchInput(input, config, callbacks, options)
-// input:     { description, options?.matrixSubjects?[] }
-// options:   { requireConfirmation?: boolean }
-// returns:   resolved subjects + decision question (+ discovery metadata when used)
-```
-
-### app/ — Product Shell
-
-**Owns:** user experience, deployment, and API-key management.
-
-**Constraints:**
-- Imports engine only via `@researchit/engine` (resolved as `file:../engine`).
-- All LLM calls go through the engine's transport abstraction — app provides the `callFn` implementation.
-- `analyst.js` / `critic.js` are thin wrappers around host-side provider routing (`providerCalls.js` + `providerConfig.js`); `fetch-source.js` remains host-only sanitization.
-- UI components never call APIs directly; data fetching/orchestration stays in hooks and lib adapters.
-- Auth/session and account storage are host concerns implemented in `app/api/*`; engine remains unaware of user identity.
-- Production auth/account routes fail closed when required env config is missing (`RESEARCHIT_AUTH_SECRET`, `RESEARCHIT_PUBLIC_URL`, and KV REST credentials).
-
-**Internal structure:**
-| Directory | Contents |
-|-----------|----------|
-| `api/` | Vercel serverless routes: pipeline (`analyst.js`, `critic.js`, `fetch-source.js`), auth (`auth/*`), account storage (`account/*`), host resolver (`providerConfig.js`) |
-| `src/components/` | React UI components (tabs, pills, badges, lists, threads) |
-| `src/hooks/` | `useAnalysis.js`, `useFollowUp.js` — orchestration hooks that wire engine to React state |
-| `src/lib/` | Product-only utilities: `export.js` (HTML/PDF/ZIP), `scoringUI.js`, `confidenceUI.js`, `debugUI.js`, `api.js` (transport implementation), `accountApi.js` (auth/account endpoints), `localDrafts.js` (RU-01 client crash-safety state), `seo.js`, `routes.js` |
-| `scripts/` | Build-time scripts: `prerender-meta.js` (stamps route-specific SEO tags into static HTML) |
-
-### configs/ — Research Configurations
-
-**Owns:** concrete ResearchConfig objects that define what a specific product researches.
-
-**Constraints:**
-- Each config is a self-contained JS module exporting a ResearchConfig.
-- Configs may import engine defaults (dimensions, prompts) and override selectively.
-- Product shell imports configs; engine never imports from this directory.
-
----
-
-## Data Flow
-
-```
-User input + ResearchConfig
-  ↓
-App hooks (useAnalysis / useFollowUp)
-  ↓
-Engine pipelines (runAnalysis / handleFollowUp)
-  ↓ uses
-Transport (dependency-injected callFn)
-  ↓
-App's callFn → fetch("/api/analyst" | "/api/critic" | "/api/fetch-source")
-  ↓
-Serverless route (`analyst` / `critic`) → provider router (OpenAI / Anthropic / Gemini / OpenAI-compatible)
-  ↓
-Results flow back through callbacks.onProgress → React state → UI
-```
-
-Phase 1 account/session flow (host shell only):
-
-```
-User email → /api/auth/request-link
-  ↓
-Magic link (/auth/callback?token=...) → /api/auth/verify
-  ↓ sets signed HttpOnly session cookie (HMAC with `RESEARCHIT_AUTH_SECRET`)
-/api/auth/session resolves user for UI shell
-  ↓
-Workspace state sync → /api/account/researches (load/upsert/delete)
-```
-
----
-
-## Analysis Pipeline
-
-### Scorecard (phase graph, evidence-mode aware)
-1. **Phase 1 evidence collection**
-   - Native: analyst baseline + analyst web pass + reconcile
-   - Deep Assist: multi-provider deep collection + merge + provider agreement synthesis
-2. **Targeted low-confidence cycle** — query plan → web harvest → re-score for weak dimensions
-3. **Critic audit** — independent critical review of all findings
-4. **Analyst final response** — address critic challenges with evidence
-5. **Consistency check** — cross-dimension coherence validation + decision/confidence/polarity post-guards
-6. **Red Team pass** — strongest counter-case + missed-risk pressure (risk context only; no score mutation)
-7. **Synthesizer pass** — model-independent executive summary from structured signals
-8. **Discovery generation** — related opportunities + candidate pre-validation
-
-### Matrix (evidence-mode aware)
-1. **Plan/input resolution** — resolve decision question and matrix subjects
-2. **Phase 1 evidence collection**
-   - Native: baseline matrix pass + web matrix pass + reconcile
-   - Deep Assist: multi-provider matrix collection + merge + provider agreement synthesis
-3. **Targeted low-confidence recovery** — focused query plan/harvest/rescore per weak cell
-4. **Critic matrix audit** — flag weak/contradictory cells
-5. **Analyst response** — defend or concede each contested cell
-6. **Cross-subject consistency audit** — detect contradictions and apply conservative confidence adjustments
-7. **Derived attributes (optional)** — computed columns after core evidence phases
-8. **Red Team pass** — per-cell counter-case and missed-risk pressure (risk context only)
-9. **Synthesizer pass** — independent matrix executive synthesis
-10. **Decision-grade gate** — explicit pass/fail checks on required-subject coverage, confidence mix, critical-cell evidence depth, source quality, critic resolution, and red-team severity
-11. **Summary/discovery** — subject summaries, cross-matrix notes, and optional missing-coverage discovery
-
-### Source verification and taxonomy
-After source-producing passes, cited URLs are checked via `fetchSource`. Raw verification signals include `verified_in_page`, `not_found_in_page`, `fetch_failed`, `invalid_url`, and `name_only_in_page`.
-
-Engine derives user-facing source taxonomy:
-- `cited`
-- `corroborating`
-- `unverified`
-- `excluded_marketing`
-- `excluded_stale`
-
-Aggregated source-quality totals are emitted as `analysisMeta.sourceUniverse` and consumed by UI/exports.
-
-### Run diagnostics surface
-Pipelines emit reliability/quality diagnostics into `analysisMeta` (e.g., source verification totals, reconcile health/retry outcomes, critic flag-rate signals, coverage SLA status, decision-grade gate status, stale-evidence ratio, provider contribution, and post-guard adjustment counts). App UI and exports consume this metadata to show run quality state.
-
-### Degraded-complete semantics
-Quality gates no longer hard-abort the entire run for recoverable failures. Pipelines can complete with:
-- `analysisMeta.qualityGrade = "standard"` — quality thresholds met
-- `analysisMeta.qualityGrade = "degraded"` — partial output is returned with explicit `degradedReasons[]`
-
-This keeps output inspectable while preserving honest quality signaling.
-
-## Follow-Up Pipeline
-
-Classifies user intent into one of 6 types, then executes intent-specific logic:
-- `challenge` — dispute findings, require counter-evidence
-- `question` — clarifying question
-- `reframe` — reinterpret the problem
-- `add_evidence` — incorporate new sources
-- `note` — comment (no re-analysis)
-- `re_search` — re-run a specific dimension with web search
-
-Supports both:
-- scorecard threads (`dimId`)
-- matrix cell threads (`subjectId` + `attributeId`)
-
----
-
-## ResearchConfig Contract
-
-```js
-{
-  id,                    // unique string
-  name,                  // human-readable name
-  tabLabel,              // UI tab label
-  outputMode,            // "scorecard" | "matrix"
-  shortDescription,      // concise discovery/homepage copy
-  methodology,           // methodology notes shown in UI (supports inline links)
-  engineVersion,         // semver
-
-  inputSpec: { label, placeholder, description },
-  framingFields: [{ id, label, description }],
-
-  // scorecard mode
-  dimensions: [{
-    id, label, weight, enabled,
-    brief, fullDef,
-    polarityHint,                          // read by engine rubric
-    researchHints: { whereToLook, queryTemplates }  // read by engine brief
-  }],
-
-  // matrix mode
-  matrixLayout,         // "subjects-as-rows" | "subjects-as-columns" | "auto" (UI default hint)
-  subjects: { label, inputPrompt, examples, minCount, maxCount },
-  attributes: [{ id, label, brief, derived? }],
-
-  relatedDiscovery,      // boolean — enables discovery phase
-
-  prompts: {             // optional overrides; engine has generic defaults
-    analyst, critic, analystResponse, followUp, redTeam, synthesizer
-  },
-
-  models: {
-    analyst: { provider, model, webSearchModel?, baseUrl? },
-    critic:  { provider, model, webSearchModel?, baseUrl? },
-    synthesizer: { provider, model, webSearchModel?, baseUrl? }, // optional; falls back to critic
-    retrieval: { provider, model, webSearchModel?, baseUrl? }    // optional capability override
-  },
-
-  deepAssist: {
-    defaults: { providers, minProviders, maxWaitMs, maxRetries },
-    providers: {
-      [providerId]: {
-        analyst: { provider, model, webSearchModel?, baseUrl? }
-      }
-    }
-  },
-
-  limits: {
-    maxSourcesPerDim,
-    targetedBudgetUnits,               // optional low-confidence budget
-    counterfactualQueriesPerDim,       // default 2
-    discoveryMaxCandidates,
-    matrixAdaptiveTargetedRatio,       // adaptive matrix targeted-recovery ratio
-    matrixAdaptiveTargetedFloor,       // minimum adaptive targeted batch size
-    matrixAdaptiveTargetedMax,         // maximum adaptive targeted batch size
-    matrixCoverageSLA: {
-      minSourcesPerCell, minSubjectEvidenceCoverage, maxUnresolvedCellsRatio, maxUnresolvedCells?
-    },
-    matrixDecisionGradeGate: {
-      enabled,
-      minSourcesPerCoverageCell,
-      minSubjectEvidenceCoverage,
-      maxLowConfidenceRatio,
-      minSourcesPerCriticalCell,
-      minIndependentSourcesPerCriticalCell,
-      maxUnverifiedSourceRatio,
-      minCitedSourceRatio,
-      requireResolvedCriticFlags,
-      maxRedTeamHighSeverity,
-      criticalAttributeIds
-    },
-    criticFlagMonitoring: {
-      minAuditedCells, minFlagRate, highLowConfidenceRate
-    },
-    tokenLimits: { phase1Evidence, phase1Scoring, critic, phase3Response,
-                   followUpQuestion, followUpChallenge, intentClassification }
-  }
-}
-```
-
----
-
-## Routing, SEO & Static Prerendering
-
-The app is a client-side SPA. Routing is handled by a custom router (`ResearchitRoot.jsx`) that reads `window.location.pathname` and resolves it to a config via `lib/routes.js`. No React Router dependency.
-
-**URL structure:**
-- `/` — homepage (landing page)
-- `/{slug}/` — research workspace for a specific config (e.g. `/startup-validation/`)
-- `/auth/callback` — magic-link verification landing route
-- `/workspace`, `/research/{slug}` — legacy paths, redirected client-side
-
-**Static prerendering:** At build time, `app/scripts/prerender-meta.js` runs after `vite build`. It uses shared builders from `src/lib/seo.js`, generates route-specific `<title>`, `<meta>`, `<link rel="canonical">`, and JSON-LD, and writes one `index.html` per route into `dist/{slug}/index.html`. Canonical base URL is configurable via `RESEARCHIT_PUBLIC_URL` (fallback: `https://researchit.app`). Vercel serves these static files directly — no rewrite needed for known slugs.
-
-A single catch-all rewrite in `vercel.json` handles unknown paths, falling back to `dist/index.html` where the SPA router renders a 404.
-
-**Client-side SEO updates:** `lib/seo.js` updates meta tags dynamically on in-app navigation (e.g., user switches configs). The prerendered HTML covers the first page load for search engines and direct URL access; the client-side `applySeoMeta()` covers subsequent navigations within the SPA.
-
-**Adding a new route:** Add the config to `configs/research-configurations.js` with a `slug` entry. The prerender script and router pick it up automatically — no changes to `vercel.json` or routing code needed.
-
----
-
-## Key Design Decisions
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Transport | Dependency injection (`createTransport(callFn)`) | Engine stays host-agnostic; testable without real API calls |
-| Package format | ESM only (`"type": "module"`) | Vite and modern Node both support it |
-| State updates | `onProgress(phase, partialState)` callback | Simpler React integration than async generators |
-| Prompt ownership | Engine ships generic defaults; product overrides via config | Engine stays product-agnostic |
-| Serverless routes | Stay in product shell, not engine | Engine is library-only, never a server |
-| Dimension config | JS modules (not JSON) | Importable, supports comments, can reference engine defaults |
-| SEO prerendering | Build-time meta injection, not SSR | All routes are known at build time; avoids server runtime complexity |
-
----
-
-## Provider Resolution
-
-API key, model, and base URL are resolved at request time with this precedence:
-1. Role-specific `RESEARCHIT_*` env vars (e.g. `RESEARCHIT_ANALYST_MODEL`)
-2. Global `RESEARCHIT_*` env vars
-3. OpenAI-prefixed env aliases (e.g. `OPENAI_MODEL`)
-4. `ResearchConfig.models.*` values
-5. Built-in defaults
-
-Provider key isolation rule:
-- Provider-specific keys are preferred and must match the selected provider.
-- `OPENAI_*` and `OPENAI_API_KEY` are only used when resolving OpenAI provider candidates.
-- Key is server-side only. BYOK UI is planned but not yet implemented.
-
----
-
-## Phase 1 Account Storage Modes
-
-- Preferred: KV REST adapter (`KV_REST_API_URL` + `KV_REST_API_TOKEN`, or Upstash aliases).
-- Fallback: in-memory map for local/dev testing.
-- In-memory mode is non-durable across serverless restarts and must not be treated as production persistence.
-- Production auth/account APIs require KV and return configuration errors when KV env vars are missing.
-- Account writes use short-lived KV locks to reduce concurrent upsert/delete overwrite risk.
-
----
-
-## What Must Stay True
-
-These invariants must hold across all future changes:
-
-1. **`engine/` has zero imports from `app/` or `configs/`.** Dependency flows one way: app → engine, configs → engine defaults.
-2. **Engine never calls `fetch()`, DOM APIs, or React APIs.** All external I/O goes through injected transport.
-3. **Engine never references specific dimension IDs.** All dimension-specific behavior reads from the config object's dimension fields.
-4. **Prompts in `engine/prompts/defaults.js` contain no product-specific language.** Products customize via `ResearchConfig.prompts`.
-5. **UI components never call APIs directly.** Data fetching/orchestration stays in hooks and app lib adapters.
-6. **LLM routes stay thin.** Business logic lives in engine; non-LLM API handlers are limited to host concerns (provider/env resolution and source fetch sanitization).
+Boundary rules:
+- `engine/` must not depend on `app/` or browser/React APIs.
+- `app/` may depend on `@researchit/engine` but should not copy pipeline logic.
+- `configs/` define behavior; engine consumes them but does not import app code.
+
+## 2. Engine Runtime Model
+
+The engine now runs one canonical orchestrator:
+- `engine/pipeline/orchestrator.js`
+
+Public entry points:
+- `runAnalysis()` (`engine/pipeline/analysis.js`)
+- `runMatrixAnalysis()` (`engine/pipeline/matrix.js`)
+- `resolveMatrixResearchInput()` (`engine/pipeline/matrix.js`)
+- `handleFollowUp()` (`engine/pipeline/followUp.js`)
+
+### Actor Roles
+
+- `Analyst`: plan, gather, merge, score, recover, defend
+- `Critic`: coherence checks, overclaim challenge, counter-case
+- `Synthesizer`: independent executive synthesis
+- deterministic engine steps: input validation, verification, assessment, gate enforcement
+
+### Routing Guarantees
+
+Route preflight is enforced in `engine/lib/routing/route-preflight.js` before paid calls.
+
+Expected default routing:
+- Analyst reasoning stages: OpenAI
+- Analyst retrieval-heavy stages (subject discovery/web/recovery): Gemini
+- Critic stages: Anthropic
+- Synthesizer stage: Gemini
+
+Deep-assist carve-out:
+- Stage `03c` requires all configured deep-assist providers (OpenAI + Anthropic + Gemini lanes by default) and fails preflight if any required lane is missing.
+
+## 3. Canonical Stage Sequence
+
+The canonical sequence is shared by scorecard and matrix runs.
+
+| Stage ID | Purpose | Actor |
+|---|---|---|
+| `stage_01_intake` | Validate + normalize request | engine |
+| `stage_01b_subject_discovery` | Optional matrix subject discovery/canonicalization | Analyst |
+| `stage_02_plan` | Query and unit planning | Analyst |
+| `stage_03a_evidence_memory` | Native memory draft evidence | Analyst |
+| `stage_03b_evidence_web` | Native web-grounded evidence | Analyst |
+| `stage_03c_evidence_deep_assist` | Deep-assist provider evidence lanes | Analyst |
+| `stage_04_merge` | Merge evidence into unified bundle | Analyst + deterministic rules |
+| `stage_05_score_confidence` | Unit scoring + confidence assignment | Analyst |
+| `stage_06_source_verify` | URL fetch/verification checks | engine |
+| `stage_07_source_assess` | Source-quality caps/penalties | engine |
+| `stage_08_recover` | Targeted low-confidence/coverage recovery | Analyst |
+| `stage_09_rescore` | Re-score after recovery | Analyst |
+| `stage_10_coherence` | Cross-unit coherence audit | Critic |
+| `stage_11_challenge` | Overclaim challenge flags | Critic |
+| `stage_12_counter_case` | Disconfirming evidence + risks | Critic |
+| `stage_13_defend` | Analyst concede/defend per critic flag | Analyst |
+| `stage_14_synthesize` | Independent synthesis artifact | Synthesizer |
+| `stage_15_finalize` | Coverage + decision gates, final status | engine (+ analyst summary route) |
+
+Mode differences:
+- native mode runs `03a + 03b`
+- deep-assist mode runs `03c`
+- all downstream stages are identical
+
+## 4. Contracts and State
+
+Core run state and output shaping are in:
+- `engine/pipeline/contracts/run-state.js`
+- `engine/pipeline/contracts/reason-codes.js`
+
+Key state properties:
+- `mode`: `native` or `deep-assist`
+- `outputType`: `scorecard` or `matrix`
+- `strictQuality`: strict gate behavior
+- `quality.reasonCodes`: normalized machine codes
+- `diagnostics`: stage logs, IO snippets, progress timeline, routing records
+
+Reason code examples:
+- `route_mismatch_preflight`
+- `response_parse_failed`
+- `coverage_catastrophic`
+- `decision_gate_failed`
+- `run_aborted_strict_quality`
+- `run_completed_degraded`
+
+## 5. Quality and Finalization Behavior
+
+Stage `15` enforces deterministic gates using:
+- `engine/lib/guards/coverage-gate.js`
+- `engine/lib/guards/decision-gate.js`
+
+Completion semantics:
+- strict mode: failed decision gate aborts
+- non-strict mode: decision gate failure may complete degraded
+- catastrophic coverage floor failure aborts in both strict and non-strict modes
+
+Source verification and quality assessment occur before recovery/critic cycle:
+- Stage `06`: fetch + text match checks
+- Stage `07`: confidence/quality adjustments
+
+## 6. Matrix and Scorecard Debate Parity
+
+Both output modes expose critic-vs-analyst exchange artifacts from shared contracts:
+- critic flags include `severity` + `category`
+- analyst outcomes include `disposition`, `analystNote`, optional `mitigationNote`
+
+Matrix per-cell debate materialization is normalized in `run-state.js` and rendered in:
+- `app/src/components/MatrixDebateTab.jsx`
+
+Scorecard and matrix both use:
+- `phase: initial`
+- `phase: critique`
+- `phase: response`
+
+## 7. Legacy Adapter Rule
+
+`engine/lib/legacy-adapter.js` is migration-only.
+
+Constraints:
+- production stage modules must not import it,
+- it is for read/import compatibility only,
+- no new behavior should be implemented through legacy mapping,
+- delete once migration sunset is reached (`LEGACY_ADAPTER_SUNSET`).
+
+## 8. App Integration Contract
+
+The app provides transport callbacks consumed by engine:
+- `callAnalyst`
+- `callCritic`
+- `callSynthesizer`
+- `fetchSource` (for source verification)
+
+API routes in `app/api/`:
+- `analyst.js`
+- `critic.js`
+- `synthesizer.js`
+- `fetch-source.js`
+
+UI pipeline tracking uses canonical stage IDs in:
+- `app/src/components/ProgressTab.jsx`
+- `app/src/components/ExpandedRow.jsx`
+
+## 9. Invariants (Must Stay True)
+
+1. `engine/` has no imports from `app/`.
+2. External I/O in engine flows through injected transport, not direct `fetch()` in pipeline logic.
+3. Stage execution remains canonical and centralized in `orchestrator.js`.
+4. Route preflight remains mandatory before paid model calls.
+5. Strict-vs-degraded semantics stay explicit and reason-coded (no silent downgrade).
+6. Matrix and scorecard both preserve explicit critic/analyst debate traceability.
+7. Legacy adapter remains outside production stage execution.
+
+## 10. Related Documents
+
+- Quality objective: [quality-bar.md](./quality-bar.md)
+- Detailed stage policy/spec: [pipeline-architecture-suggestion.md](./pipeline-architecture-suggestion.md)
