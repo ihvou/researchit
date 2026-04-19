@@ -31,39 +31,15 @@ There is no separate "Synthesizer" actor. Stage 14 (executive synthesis) is an A
 
 ---
 
-## Model Routing (per stage, non-negotiable)
-
-Every stage has an exact provider and model declaration. The pipeline does not pick the first available provider, does not fall through to env-var defaults, and does not failover. If the declared route is unreachable, the run fails with `route_mismatch_preflight` before any token spend.
-
-| Stage | Provider | Model | Notes |
-|-------|----------|-------|-------|
-| 01b Subject Discovery | Gemini | gemini-2.5-pro | web-grounded; matrix + auto-discover only |
-| 02 Research Planning | OpenAI | gpt-5.4 | pure reasoning, no web |
-| 03a Evidence — Memory | OpenAI | gpt-5.4 | no web search |
-| 03b Evidence — Web | Gemini | gemini-2.5-pro | web search enabled |
-| 03c Evidence — Deep Assist | OpenAI + Anthropic + Gemini | gpt-5.4 · claude-sonnet-4 · gemini-2.5-pro | parallel; all three required |
-| 04 Evidence Merge | OpenAI | gpt-5.4-mini | merge + deterministic rules |
-| 05 Score + Confidence | OpenAI | gpt-5.4 | rubric-based scoring |
-| 06 Source Verification | engine | — | deterministic; no LLM |
-| 07 Source Assessment | engine | — | deterministic; no LLM |
-| 08 Targeted Recovery — search | Gemini | gemini-2.5-pro | web search for retrieval |
-| 08 Targeted Recovery — re-assess | OpenAI | gpt-5.4 | scoring recovered evidence |
-| 09 Re-score + Re-confidence | OpenAI | gpt-5.4 | |
-| 10 Consistency + Coherence | Anthropic | claude-sonnet-4 | |
-| 11 Challenge Overclaims | Anthropic | claude-sonnet-4 | |
-| 12 Counter-case + Missed Risks | Anthropic | claude-sonnet-4 | web search enabled |
-| 13 Concede / Defend | OpenAI | gpt-5.4 | |
-| 14 Synthesize | Gemini | gemini-2.5-pro | Analyst using Gemini for model-family variety after OpenAI reasoning chain |
-| 15 Finalize — summary | OpenAI | gpt-5.4-mini | |
-| 15 Finalize — gates | engine | — | deterministic |
-
-**Stage 03c carve-out:** 03c is the only stage where multiple providers are used simultaneously under the Analyst actor. Preflight for 03c must verify all three configured providers are present and reachable — not match the single-provider pattern. Absence of any configured deep-assist provider fails `route_mismatch_preflight`. No provider may be silently skipped.
-
-**Implementation requirement:** Stage model declarations must be sourced from this table, not resolved dynamically at runtime via provider preference ordering. The `resolveProviderOrder` / "pick first provider with a valid key" pattern must not be used for any pipeline stage call. Route enforcement happens at `route-preflight.js` before the first paid call.
-
----
-
 ## Canonical Pipeline Diagram
+
+The diagram is the source of truth for stage sequence, actor assignment, and per-stage model routing. Each node shows `Actor | Model` — that is the exact, non-negotiable route for that stage.
+
+**Routing policy:**
+- Each stage declares one exact provider and model. The pipeline does not pick the first available key, does not fall through to env-var defaults, and does not failover to another provider.
+- If a stage's declared route is unreachable, the run fails with `route_mismatch_preflight` before any token spend.
+- Stage 03c is the only exception: it runs three providers in parallel under the Analyst actor (gpt-5.4 + claude-sonnet-4 + gemini-2.5-pro). Preflight must verify all three are present and reachable. Absence of any one fails `route_mismatch_preflight`. No provider may be silently skipped.
+- `resolveProviderOrder` / "pick first provider with a valid key" must not be used for any pipeline stage call.
 
 ```mermaid
 flowchart TD
