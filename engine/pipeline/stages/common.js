@@ -331,6 +331,19 @@ export function normalizeConfidence(value) {
   return "low";
 }
 
+export function normalizeConfidenceSource(value) {
+  const lower = clean(value).toLowerCase();
+  if (lower === "verification_penalty") return "verification_penalty";
+  return "model";
+}
+
+export function normalizeCitationStatus(value) {
+  const lower = clean(value).toLowerCase();
+  if (lower === "verified") return "verified";
+  if (lower === "unverifiable") return "unverifiable";
+  return "not_found";
+}
+
 export function normalizeSource(raw = {}) {
   if (!raw || typeof raw !== "object") return null;
   const name = clean(raw?.name || raw?.title || raw?.source || "");
@@ -344,6 +357,7 @@ export function normalizeSource(raw = {}) {
     sourceType: clean(raw?.sourceType || raw?.type || "").toLowerCase() || undefined,
     provider: clean(raw?.provider || "") || undefined,
     verificationStatus: clean(raw?.verificationStatus || "") || undefined,
+    citationStatus: normalizeCitationStatus(raw?.citationStatus),
     displayStatus: clean(raw?.displayStatus || "") || undefined,
     publishedYear: Number.isFinite(Number(raw?.publishedYear)) ? Number(raw.publishedYear) : null,
   };

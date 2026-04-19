@@ -6,6 +6,8 @@ import { runStage as run03b } from "../pipeline/stages/03b-evidence-web.js";
 import { runStage as run03c } from "../pipeline/stages/03c-evidence-deep-assist.js";
 import { runStage as run02 } from "../pipeline/stages/02-plan.js";
 import { runStage as run05 } from "../pipeline/stages/05-score-confidence.js";
+import { runStage as run06 } from "../pipeline/stages/06-source-verify.js";
+import { runStage as run07 } from "../pipeline/stages/07-source-assess.js";
 import { runStage as run08 } from "../pipeline/stages/08-recover.js";
 import { runStage as run11 } from "../pipeline/stages/11-challenge.js";
 import { runStage as run13 } from "../pipeline/stages/13-defend.js";
@@ -138,6 +140,85 @@ test("stage 03b matrix web pass adaptively splits chunks and preserves full cell
   assert.ok((result?.diagnostics?.chunks || []).some((item) => Array.isArray(item?.splitInto)));
 });
 
+test("stage 03b rewrites Gemini grounding redirect URLs to canonical targets", async () => {
+  const attrs = [{ id: "a1", label: "Attr 1" }];
+  const subjects = [{ id: "s1", label: "Subject 1" }];
+  const groundingUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZI-test";
+  const canonicalUrl = "https://example.com/canonical-source";
+
+  const runtime = {
+    config: {
+      models: baseModels(),
+      limits: { matrixWebChunkMaxCells: 4 },
+    },
+    budgets: {
+      stage_03b_evidence_web: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
+    },
+    prompts: { analyst: "web evidence" },
+    transport: {
+      callAnalyst: async () => ({
+        text: JSON.stringify({
+          cells: [{
+            subjectId: "s1",
+            attributeId: "a1",
+            value: "value",
+            full: "full",
+            confidence: "medium",
+            confidenceReason: "reason",
+            sources: [{ name: "Grounded", url: groundingUrl, sourceType: "news" }],
+            arguments: { supporting: [], limiting: [] },
+            risks: "",
+          }],
+        }),
+      }),
+      fetchSource: async (_url, options = {}) => {
+        assert.equal(options?.resolveOnly, true);
+        return {
+          url: groundingUrl,
+          resolvedUrl: canonicalUrl,
+          responseStatus: 200,
+          reachable: true,
+          sourceFetchStatus: "resolved",
+        };
+      },
+      callCritic: async () => ({ text: '{"ok":true}' }),
+      callSynthesizer: async () => ({ text: '{"ok":true}' }),
+    },
+  };
+
+  const state = {
+    outputType: "matrix",
+    request: {
+      objective: "compare subjects",
+      matrix: { subjects, attributes: attrs },
+    },
+    evidenceDrafts: {
+      memory: {
+        matrix: {
+          cells: [{
+            subjectId: "s1",
+            attributeId: "a1",
+            value: "memory",
+            confidence: "low",
+            sources: [],
+            arguments: { supporting: [], limiting: [] },
+          }],
+        },
+      },
+    },
+    mode: "native",
+  };
+
+  const result = await run03b({ state, runtime });
+  const sourceUrl = result?.statePatch?.evidenceDrafts?.web?.matrix?.cells?.[0]?.sources?.[0]?.url;
+  const grounding = result?.diagnostics?.groundingRedirects || {};
+
+  assert.equal(sourceUrl, canonicalUrl);
+  assert.equal(grounding.detected, 1);
+  assert.equal(grounding.resolved, 1);
+  assert.equal(grounding.remaining, 0);
+});
+
 test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias mode, non-strict included)", async () => {
   const runtime = {
     config: {
@@ -243,6 +324,106 @@ test("stage 08 reserves per-attribute recovery floor before pressure fill", asyn
   assert.equal(result?.diagnostics?.attributeCoverageFloorReserved, 2);
   assert.equal(result?.diagnostics?.effectiveBudget, 2);
   assert.equal(result?.statePatch?.recoveredPatch?.matrix?.cells?.length, 2);
+});
+
+test("stage 06 applies tiered verification and avoids counting vendor/analyst access blocks as fetchFailed", async () => {
+  const runtime = {
+    transport: {
+      fetchSource: async (url, options = {}) => {
+        const value = String(url || "");
+        if (value.includes("vendor.example")) {
+          return {
+            url: value,
+            resolvedUrl: value,
+            responseStatus: 403,
+            reachable: false,
+            sourceFetchStatus: "403",
+          };
+        }
+        if (value.includes("analyst.example")) {
+          return {
+            url: value,
+            resolvedUrl: value,
+            responseStatus: 403,
+            reachable: false,
+            sourceFetchStatus: "403",
+          };
+        }
+        if (value.includes("research.example")) {
+          const err = new Error("fetch failed");
+          err.sourceFetchStatus = "fetch_failed";
+          throw err;
+        }
+        return {
+          url: value,
+          resolvedUrl: value,
+          responseStatus: 200,
+          reachable: true,
+          sourceFetchStatus: "resolved",
+          text: "evidence text",
+        };
+      },
+    },
+  };
+
+  const state = {
+    outputType: "matrix",
+    assessment: {
+      matrix: {
+        cells: [{
+          subjectId: "s1",
+          attributeId: "a1",
+          confidence: "medium",
+          sources: [
+            { name: "Vendor", url: "https://vendor.example/page", sourceType: "vendor" },
+            { name: "Analyst", url: "https://analyst.example/report", sourceType: "analyst" },
+            { name: "Research", url: "https://research.example/paper", sourceType: "research", quote: "trial result" },
+          ],
+          arguments: { supporting: [], limiting: [] },
+        }],
+      },
+    },
+  };
+
+  const result = await run06({ state, runtime });
+  const counters = result?.diagnostics?.counters || {};
+  const sources = result?.statePatch?.assessment?.matrix?.cells?.[0]?.sources || [];
+
+  assert.equal(counters.fetchFailed, 1);
+  assert.equal(counters.paywalled, 1);
+  assert.equal(counters.unverifiable, 2);
+  assert.equal(sources.find((s) => s.sourceType === "vendor")?.verificationStatus, "unverifiable");
+  assert.equal(sources.find((s) => s.sourceType === "analyst")?.verificationStatus, "paywalled");
+  assert.equal(sources.find((s) => s.sourceType === "research")?.verificationStatus, "fetch_failed");
+});
+
+test("stage 07 preserves model confidence and sets citation status separately", async () => {
+  const state = {
+    outputType: "matrix",
+    assessment: {
+      matrix: {
+        cells: [{
+          subjectId: "s1",
+          attributeId: "a1",
+          confidence: "high",
+          confidenceSource: "model",
+          confidenceReason: "Model has strong prior knowledge.",
+          sources: [
+            { name: "Vendor page", sourceType: "vendor", verificationStatus: "unverifiable", citationStatus: "unverifiable" },
+            { name: "News", sourceType: "news", verificationStatus: "not_found_in_page", citationStatus: "not_found" },
+          ],
+          arguments: { supporting: [], limiting: [] },
+        }],
+      },
+    },
+  };
+
+  const result = await run07({ state });
+  const cell = result?.statePatch?.assessment?.matrix?.cells?.[0] || {};
+
+  assert.equal(cell.confidence, "high");
+  assert.equal(cell.confidenceSource, "model");
+  assert.equal(cell.citationStatus, "unverifiable");
 });
 
 test("stage 14 compact critic summary marks counterCaseChangedFinalUnits only on actual diffs", async () => {
@@ -384,6 +565,7 @@ test("stage 11 matrix challenge prompt is mode-aware and ignores suggestedScore"
             flags: [{
               id: "flag-1",
               unitKey: "s1::a1",
+              flagType: "factual",
               severity: "high",
               category: "overclaim",
               note: "Value overstates evidence certainty.",
@@ -426,8 +608,10 @@ test("stage 11 matrix challenge prompt is mode-aware and ignores suggestedScore"
 
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /do not return suggestedScore/i);
+  assert.match(prompts[0], /factual accuracy pass/i);
   assert.equal(flag?.suggestedValue, "insufficient evidence");
   assert.equal(flag?.suggestedScore, undefined);
+  assert.equal(flag?.flagType, "factual");
 });
 
 test("stage 02 does not fail on matrix cell-level planner ids and reports diagnostics", async () => {

@@ -1,34 +1,54 @@
-import { clean, ensureArray, normalizeConfidence, summarizeSourceUniverse } from "./common.js";
+import {
+  clean,
+  ensureArray,
+  normalizeCitationStatus,
+  normalizeConfidence,
+  normalizeConfidenceSource,
+  summarizeSourceUniverse,
+} from "./common.js";
 import { REASON_CODES } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_07_source_assess";
 export const STAGE_TITLE = "Source Assessment";
 
 function assessSourceStatus(source = {}) {
-  const verification = clean(source?.verificationStatus).toLowerCase();
-  const type = clean(source?.sourceType).toLowerCase();
+  const sourceType = clean(source?.sourceType).toLowerCase();
+  if (sourceType === "marketing" || sourceType === "press_release") return "excluded_marketing";
 
+  const citationStatus = normalizeCitationStatus(source?.citationStatus);
+  if (citationStatus === "verified") {
+    const verification = clean(source?.verificationStatus).toLowerCase();
+    return verification === "name_only_in_page" ? "corroborating" : "cited";
+  }
+
+  const verification = clean(source?.verificationStatus).toLowerCase();
   if (verification === "verified_in_page") return "cited";
   if (verification === "name_only_in_page") return "corroborating";
-  if (type === "marketing" || type === "press_release") return "excluded_marketing";
   return "unverified";
+}
+
+function unitCitationStatus(sources = []) {
+  const statuses = ensureArray(sources).map((source) => normalizeCitationStatus(source?.citationStatus));
+  if (!statuses.length) return "not_found";
+  if (statuses.includes("verified")) return "verified";
+  if (statuses.includes("unverifiable")) return "unverifiable";
+  return "not_found";
 }
 
 function applyAssessmentToUnit(unit = {}) {
   const sources = ensureArray(unit?.sources).map((source) => ({
     ...source,
+    citationStatus: normalizeCitationStatus(source?.citationStatus),
     displayStatus: assessSourceStatus(source),
   }));
-
-  const cited = sources.filter((source) => clean(source?.displayStatus) === "cited").length;
-  const corroborating = sources.filter((source) => clean(source?.displayStatus) === "corroborating").length;
-  const confidenceCap = cited === 0 && corroborating <= 1 ? "low" : (cited <= 1 ? "medium" : unit?.confidence);
 
   return {
     ...unit,
     sources,
-    confidence: normalizeConfidence(confidenceCap || unit?.confidence),
-    confidenceReason: clean(unit?.confidenceReason) || (confidenceCap === "low" ? "Evidence quality cap applied after source verification." : ""),
+    confidence: normalizeConfidence(unit?.confidence),
+    confidenceSource: normalizeConfidenceSource(unit?.confidenceSource || "model"),
+    confidenceReason: clean(unit?.confidenceReason),
+    citationStatus: unitCitationStatus(sources),
   };
 }
 

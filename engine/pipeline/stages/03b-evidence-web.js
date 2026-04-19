@@ -11,6 +11,35 @@ import {
 export const STAGE_ID = "stage_03b_evidence_web";
 export const STAGE_TITLE = "Evidence Web";
 
+function isGroundingRedirectUrl(url = "") {
+  const value = clean(url).toLowerCase();
+  return value.includes("vertexaisearch.cloud.google.com/grounding-api-redirect")
+    || value.includes("grounding-api-redirect");
+}
+
+function emptyGroundingDiagnostics() {
+  return {
+    detected: 0,
+    resolved: 0,
+    unresolved: 0,
+    dropped: 0,
+    remaining: 0,
+    skipped: false,
+  };
+}
+
+function mergeGroundingDiagnostics(items = []) {
+  return ensureArray(items).reduce((acc, item) => {
+    acc.detected += Number(item?.detected || 0);
+    acc.resolved += Number(item?.resolved || 0);
+    acc.unresolved += Number(item?.unresolved || 0);
+    acc.dropped += Number(item?.dropped || 0);
+    acc.remaining += Number(item?.remaining || 0);
+    acc.skipped = acc.skipped || !!item?.skipped;
+    return acc;
+  }, emptyGroundingDiagnostics());
+}
+
 function mergeSourceLists(a = [], b = []) {
   const map = new Map();
   [...ensureArray(a), ...ensureArray(b)].forEach((source) => {
@@ -104,6 +133,92 @@ function normalizeMatrix(parsed = {}, subjects = [], attributes = []) {
   return cells;
 }
 
+async function resolveGroundingRedirectUrl(url = "", fetchSource, cache = new Map()) {
+  const normalizedUrl = clean(url);
+  if (!isGroundingRedirectUrl(normalizedUrl)) return normalizedUrl;
+  if (typeof fetchSource !== "function") return "";
+  if (cache.has(normalizedUrl)) {
+    return cache.get(normalizedUrl);
+  }
+
+  const pending = (async () => {
+    try {
+      const payload = await fetchSource(normalizedUrl, {
+        resolveOnly: true,
+        timeoutMs: 10000,
+        retry: { maxRetries: 0 },
+      });
+      const candidate = clean(payload?.resolvedUrl || payload?.url || "");
+      return (!candidate || isGroundingRedirectUrl(candidate)) ? "" : candidate;
+    } catch (err) {
+      const candidate = clean(err?.resolvedUrl || err?.url || "");
+      return (!candidate || isGroundingRedirectUrl(candidate)) ? "" : candidate;
+    }
+  })();
+
+  cache.set(normalizedUrl, pending);
+  return pending;
+}
+
+async function canonicalizeGroundingSources(sources = [], fetchSource, cache = new Map()) {
+  const diagnostics = emptyGroundingDiagnostics();
+  const normalized = ensureArray(sources).map((source) => ({ ...source }));
+  await Promise.all(normalized.map(async (source) => {
+    const url = clean(source?.url);
+    if (!isGroundingRedirectUrl(url)) return;
+    diagnostics.detected += 1;
+    const resolved = await resolveGroundingRedirectUrl(url, fetchSource, cache);
+    if (resolved) {
+      source.url = resolved;
+      diagnostics.resolved += 1;
+      return;
+    }
+    source.url = undefined;
+    diagnostics.unresolved += 1;
+    diagnostics.dropped += 1;
+  }));
+
+  diagnostics.remaining = normalized.filter((source) => isGroundingRedirectUrl(source?.url)).length;
+  if (typeof fetchSource !== "function") diagnostics.skipped = true;
+
+  return {
+    sources: normalized,
+    diagnostics,
+  };
+}
+
+async function canonicalizeMatrixCells(cells = [], fetchSource, cache = new Map()) {
+  const diagnostics = [];
+  const normalized = await Promise.all(ensureArray(cells).map(async (cell) => {
+    const canonical = await canonicalizeGroundingSources(cell?.sources || [], fetchSource, cache);
+    diagnostics.push(canonical.diagnostics);
+    return {
+      ...cell,
+      sources: canonical.sources,
+    };
+  }));
+  return {
+    cells: normalized,
+    diagnostics: mergeGroundingDiagnostics(diagnostics),
+  };
+}
+
+async function canonicalizeScorecardUnits(units = [], fetchSource, cache = new Map()) {
+  const diagnostics = [];
+  const normalized = await Promise.all(ensureArray(units).map(async (unit) => {
+    const canonical = await canonicalizeGroundingSources(unit?.sources || [], fetchSource, cache);
+    diagnostics.push(canonical.diagnostics);
+    return {
+      ...unit,
+      sources: canonical.sources,
+    };
+  }));
+  return {
+    units: normalized,
+    diagnostics: mergeGroundingDiagnostics(diagnostics),
+  };
+}
+
 function chunkSubjects(subjects = [], size = 1) {
   const safeSize = Math.max(1, Number(size) || 1);
   const chunks = [];
@@ -137,8 +252,12 @@ ${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(at
 
 Rules:
 - Cover every listed subject x attribute cell.
+- Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- If uncertain, lower confidence and state what is missing.
 - Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
-- For each non-empty source, include a valid https URL, a concise quote/snippet, and "sourceType".
+- For each non-empty source, include a valid public https URL, a concise quote/snippet, and "sourceType".
+- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
+- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
 - sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If evidence is unavailable, keep "sources" empty, use low confidence, and explain what is missing in "missingEvidence".
 
@@ -153,6 +272,7 @@ async function gatherMatrixWeb({
 }) {
   const initialSize = matrixChunkSize(subjects, attributes, runtime?.config || {});
   const rootChunks = chunkSubjects(subjects, initialSize);
+  const groundingCache = new Map();
 
   const results = await Promise.all(rootChunks.map(async (root) => {
     const cells = [];
@@ -178,7 +298,13 @@ async function gatherMatrixWeb({
           liveSearch: true,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-        cells.push(...normalizeMatrix(result?.parsed, current, attributes));
+        const normalizedChunk = normalizeMatrix(result?.parsed, current, attributes);
+        const canonical = await canonicalizeMatrixCells(
+          normalizedChunk,
+          runtime?.transport?.fetchSource,
+          groundingCache
+        );
+        cells.push(...canonical.cells);
         reasonCodes.push(...ensureArray(result?.reasonCodes));
         diagnostics.push({
           chunkSubjects: current.map((subject) => subject.id),
@@ -186,6 +312,7 @@ async function gatherMatrixWeb({
           retries: result.retries,
           tokenDiagnostics: result.tokenDiagnostics,
           modelRoute: result.route,
+          groundingRedirects: canonical.diagnostics,
         });
       } catch (err) {
         if (current.length <= 1) throw err;
@@ -230,6 +357,9 @@ export async function runStage(context = {}) {
     const aggregatedTokens = combineTokenDiagnostics(
       matrixWeb.diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
     );
+    const groundingRedirects = mergeGroundingDiagnostics(
+      matrixWeb.diagnostics.map((entry) => entry?.groundingRedirects).filter(Boolean)
+    );
     const totalRetries = matrixWeb.diagnostics.reduce((sum, entry) => sum + Number(entry?.retries || 0), 0);
     const modelRoute = matrixWeb.diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
     return {
@@ -254,6 +384,7 @@ export async function runStage(context = {}) {
         mode: "matrix",
         cells: merged.length,
         chunks: matrixWeb.diagnostics,
+        groundingRedirects,
         retries: totalRetries,
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
@@ -274,9 +405,13 @@ Dimensions:
 ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${clean(dim.brief)}` : ""}`).join("\n")}
 
 Rules:
-- Use sources that can be cited with specific URLs when possible.
+- Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- If uncertain, lower confidence and state what is missing.
+- Use sources that can be cited with specific canonical public URLs when possible.
 - Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
 - For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
+- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
 - sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is unavailable, keep "sources" empty and explain the gap in "missingEvidence".
 
@@ -296,7 +431,13 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
-  const normalizedWeb = normalizeScorecard(result?.parsed, dimensions);
+  const normalizedWebRaw = normalizeScorecard(result?.parsed, dimensions);
+  const canonicalScorecard = await canonicalizeScorecardUnits(
+    normalizedWebRaw,
+    runtime?.transport?.fetchSource,
+    new Map()
+  );
+  const normalizedWeb = canonicalScorecard.units;
   const merged = mergeScorecard(ensureArray(memory?.scorecard?.dimensions), normalizedWeb);
 
   return {
@@ -317,12 +458,13 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
         },
       },
     },
-    diagnostics: {
-      mode: "scorecard",
-      dimensions: merged.length,
-      retries: result.retries,
-      modelRoute: result.route,
-      tokenDiagnostics: result.tokenDiagnostics,
+      diagnostics: {
+        mode: "scorecard",
+        dimensions: merged.length,
+        groundingRedirects: canonicalScorecard.diagnostics,
+        retries: result.retries,
+        modelRoute: result.route,
+        tokenDiagnostics: result.tokenDiagnostics,
     },
     io: {
       prompt,

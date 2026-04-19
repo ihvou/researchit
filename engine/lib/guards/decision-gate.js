@@ -94,6 +94,22 @@ function isIndependentSource(source = {}) {
     || type === "registry";
 }
 
+function normalizeCitationStatus(value = "") {
+  const status = clean(value).toLowerCase();
+  if (status === "verified") return "verified";
+  if (status === "unverifiable") return "unverifiable";
+  return "not_found";
+}
+
+function sourceRequiresStrictCitationCheck(source = {}) {
+  const type = inferSourceType(source);
+  return type === "independent"
+    || type === "research"
+    || type === "news"
+    || type === "government"
+    || type === "registry";
+}
+
 function getUnits(state = {}) {
   if (state?.outputType === "matrix") {
     return Array.isArray(state?.resolved?.assessment?.matrix?.cells)
@@ -131,6 +147,38 @@ function criticalUnitsForSourceCheck(state = {}, gate = {}, units = []) {
   return filtered.length ? filtered : units;
 }
 
+function citationCoverageMetrics(units = []) {
+  const relevantSources = [];
+  units.forEach((unit) => {
+    const sources = Array.isArray(unit?.sources) ? unit.sources : [];
+    sources.forEach((source) => {
+      if (!sourceRequiresStrictCitationCheck(source)) return;
+      relevantSources.push(source);
+    });
+  });
+
+  const totals = {
+    totalRelevant: relevantSources.length,
+    verified: 0,
+    unverifiable: 0,
+    notFound: 0,
+  };
+
+  relevantSources.forEach((source) => {
+    const status = normalizeCitationStatus(source?.citationStatus);
+    if (status === "verified") totals.verified += 1;
+    else if (status === "unverifiable") totals.unverifiable += 1;
+    else totals.notFound += 1;
+  });
+
+  const denom = Math.max(1, totals.totalRelevant);
+  return {
+    ...totals,
+    verifiedRatio: totals.totalRelevant ? (totals.verified / denom) : 1,
+    unresolvedRatio: totals.totalRelevant ? ((totals.unverifiable + totals.notFound) / denom) : 0,
+  };
+}
+
 export function evaluateDecisionGate(state = {}, options = {}) {
   const defaults = {
     enabled: true,
@@ -139,6 +187,8 @@ export function evaluateDecisionGate(state = {}, options = {}) {
     minSourcesPerCriticalUnit: 2,
     minIndependentSourcesPerCriticalUnit: 1,
     maxUnresolvedCriticFlags: 0,
+    maxUnverifiedSourceRatio: 1,
+    minCitedSourceRatio: 0,
   };
   const gate = {
     ...defaults,
@@ -160,11 +210,15 @@ export function evaluateDecisionGate(state = {}, options = {}) {
   });
 
   const critic = unresolvedCriticCounts(state);
+  const citationCoverage = citationCoverageMetrics(units);
+  const citationCoverageFailed = citationCoverage.verifiedRatio < Number(gate.minCitedSourceRatio || 0)
+    || citationCoverage.unresolvedRatio > Number(gate.maxUnverifiedSourceRatio || 1);
 
   const checks = {
     coverage: coverageRatio >= gate.minCoverageRatio,
     confidence: lowConfidenceRatio <= gate.maxLowConfidenceRatio,
     sourceSufficiency: !sourceCheckFailed,
+    citationCoverage: !citationCoverageFailed,
     criticResolution: critic.unresolvedCount <= gate.maxUnresolvedCriticFlags,
     highSeverityCoverage: critic.unresolvedHighWithoutMitigationCount === 0,
   };
@@ -183,6 +237,7 @@ export function evaluateDecisionGate(state = {}, options = {}) {
       coverageRatio,
       lowConfidenceRatio,
       criticalUnitsChecked: criticalUnits.length,
+      citationCoverage,
     },
   };
 }

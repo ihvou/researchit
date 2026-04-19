@@ -15,6 +15,16 @@ function normalizeCategory(value) {
   return allowed.has(category) ? category : "other";
 }
 
+function normalizeFlagType(value, category = "other") {
+  const explicit = clean(value).toLowerCase();
+  const allowed = new Set(["factual", "coherence", "coverage", "structural"]);
+  if (allowed.has(explicit)) return explicit;
+  if (category === "missing_evidence" || category === "stale_source") return "coverage";
+  if (category === "contradiction") return "coherence";
+  if (category === "missed_risk") return "structural";
+  return "factual";
+}
+
 function normalizeFlags(parsed = {}, state = {}) {
   const raw = ensureArray(parsed?.flags);
   const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
@@ -24,6 +34,7 @@ function normalizeFlags(parsed = {}, state = {}) {
     flagged: flag?.flagged !== false,
     severity: normalizeSeverity(flag?.severity),
     category: normalizeCategory(flag?.category),
+    flagType: normalizeFlagType(flag?.flagType, normalizeCategory(flag?.category)),
     note: clean(flag?.note),
     suggestedScore: !isMatrix && Number.isFinite(Number(flag?.suggestedScore)) ? Number(flag.suggestedScore) : undefined,
     suggestedValue: clean(flag?.suggestedValue) || undefined,
@@ -104,6 +115,7 @@ export async function runStage(context = {}) {
     "id":"",
     "unitKey":"",
     "flagged": true,
+    "flagType":"factual|coherence|coverage|structural",
     "severity":"high|medium|low",
     "category":"overclaim|missing_evidence|contradiction|stale_source|missed_risk|other",
     "note":"",
@@ -117,6 +129,7 @@ export async function runStage(context = {}) {
     "id":"",
     "unitKey":"",
     "flagged": true,
+    "flagType":"factual|coherence|coverage|structural",
     "severity":"high|medium|low",
     "category":"overclaim|missing_evidence|contradiction|stale_source|missed_risk|other",
     "note":"",
@@ -127,6 +140,10 @@ export async function runStage(context = {}) {
 }`;
 
   const prompt = `Challenge overclaims and confidence calibration using the full assessment context.
+
+Include a factual accuracy pass:
+- Flag claims that appear imprecise, overstated, or inconsistent with known public information.
+- For factual challenges, state what appears more accurate and reference supporting sources when possible.
 
 Severity definitions:
 - high: materially changes the decision, invalidates a central claim, or leaves a high-impact risk unaddressed.
@@ -140,6 +157,12 @@ Category definitions:
 - stale_source: claim relies on stale or outdated evidence.
 - missed_risk: material downside is absent from assessment.
 - other: issue outside the categories above.
+
+Flag type definitions:
+- factual: claim appears incorrect, overstated, or materially imprecise versus known public information.
+- coherence: internal inconsistency across units or within a unit.
+- coverage: insufficient evidence, stale evidence, or weak support depth.
+- structural: framing, decision-logic, or risk-structure weakness.
 
 Rules:
 - Evaluate each unit using its current score/value, confidence, sources, and arguments.
@@ -167,11 +190,16 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
     liveSearch: false,
     schemaHint: isMatrix
-      ? '{"flags":[{"id":"","unitKey":"","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[]}]}'
-      : '{"flags":[{"id":"","unitKey":"","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[]}]}',
+      ? '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[]}]}'
+      : '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[]}]}',
   });
 
   const normalized = normalizeFlags(result?.parsed, state);
+  const flagTypeCounts = normalized.flags.reduce((acc, flag) => {
+    const key = clean(flag?.flagType).toLowerCase() || "unknown";
+    acc[key] = Number(acc[key] || 0) + 1;
+    return acc;
+  }, {});
 
   return {
     stageStatus: "ok",
@@ -186,6 +214,7 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     },
     diagnostics: {
       flags: normalized.flags.length,
+      flagTypeCounts,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

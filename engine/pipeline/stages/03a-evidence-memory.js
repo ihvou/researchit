@@ -93,6 +93,9 @@ Attributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.lab
 
 Rules:
 - Use only model memory and prior knowledge; do not fabricate sources.
+- Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- If uncertain, lower confidence and explain what is missing.
+- If you are not certain a public URL is correct, omit the URL instead of guessing.
 - If credible evidence is unavailable, keep "sources" empty, set low confidence, and explain the gap in "missingEvidence".
 
 Return JSON:
@@ -216,6 +219,9 @@ ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${
 
 Rules:
 - Use only memory and prior knowledge.
+- Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- If uncertain, lower confidence and explain what is missing.
+- If you are not certain a public URL is correct, omit the URL instead of guessing.
 - If evidence cannot be found confidently, keep "sources" empty and document what is missing in "missingEvidence".
 
 Return JSON:

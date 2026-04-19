@@ -330,7 +330,9 @@ ${group.map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${ite
 Rules:
 - Focus on what is weak for each listed cell.
 - Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, or reputable news) over vendor claims.
-- For each non-empty source, include a valid https URL, a concise quote/snippet, and "sourceType".
+- For each non-empty source, include a valid canonical public https URL, a concise quote/snippet, and "sourceType".
+- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
+- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
 - sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is still unavailable, keep "sources" empty and describe the missing data in "missingEvidence".
 
@@ -426,7 +428,9 @@ ${selected.map((item) => `- ${item.key}: ${item.label}
 Rules:
 - Focus on closing the specific weakness for each target.
 - Use high-quality sources whenever possible; prefer independent evidence (government, research, analyst, reputable news).
-- For each non-empty source, include a valid https URL, concise quote/snippet, and "sourceType".
+- For each non-empty source, include a valid canonical public https URL, concise quote/snippet, and "sourceType".
+- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
+- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
 - sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
 - If reliable evidence is still unavailable, keep "sources" empty and state what remains missing in "missingEvidence".
 

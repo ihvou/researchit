@@ -286,12 +286,21 @@ export function createTransport(callFn, transportOptions = {}) {
       const policy = resolvePolicy("fetchSource", transportOptions, options);
       const data = await callWithRetry({
         role: "fetch-source",
-        payload: { url },
+        payload: {
+          url,
+          resolveOnly: options?.resolveOnly === true,
+        },
         includeMeta: true,
         callFn,
         policy,
       });
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) {
+        const err = new Error(String(data.error));
+        err.sourceFetchStatus = String(data?.sourceFetchStatus || "");
+        err.resolvedUrl = String(data?.resolvedUrl || "");
+        err.url = String(data?.url || url);
+        throw err;
+      }
       return data;
     },
   };

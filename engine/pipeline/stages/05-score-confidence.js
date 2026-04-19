@@ -3,7 +3,9 @@ import {
   clean,
   compactText,
   ensureArray,
+  normalizeCitationStatus,
   normalizeConfidence,
+  normalizeConfidenceSource,
   normalizeSources,
   summarizeSourceUniverse,
 } from "./common.js";
@@ -34,6 +36,15 @@ function confidenceFromEvidence(unit = {}) {
   if (sourceCount >= 4) return "high";
   if (sourceCount >= 2) return "medium";
   return "low";
+}
+
+function citationStatusFromSources(sources = []) {
+  const list = normalizeSources(sources);
+  if (!list.length) return "not_found";
+  const statuses = list.map((source) => normalizeCitationStatus(source?.citationStatus));
+  if (statuses.includes("verified")) return "verified";
+  if (statuses.includes("unverifiable")) return "unverifiable";
+  return "unverifiable";
 }
 
 function missingEvidenceFallback(unit = {}, confidence = "low") {
@@ -96,15 +107,18 @@ function normalizeScorecardAssessment(evidence = {}, dimensions = [], parsed = {
     const unit = evidenceMap.get(dim.id) || {};
     const scored = scoredMap.get(dim.id) || {};
     const confidence = normalizeConfidence(scored?.confidence || unit?.confidence || confidenceFromEvidence(unit));
+    const sources = normalizeSources(unit?.sources || []);
     const score = clampScore(scored?.score || unit?.score || scoreFromEvidence(unit));
     byId[dim.id] = {
       id: dim.id,
       score,
       confidence,
+      confidenceSource: normalizeConfidenceSource(unit?.confidenceSource || "model"),
       confidenceReason: clean(scored?.confidenceReason || unit?.confidenceReason) || `Based on ${ensureArray(unit?.sources).length} cited sources.`,
       brief: clean(scored?.brief || unit?.brief),
       full: clean(scored?.full || unit?.full),
-      sources: normalizeSources(unit?.sources || []),
+      sources,
+      citationStatus: citationStatusFromSources(sources),
       arguments: {
         supporting: ensureArray(unit?.arguments?.supporting),
         limiting: ensureArray(unit?.arguments?.limiting),
@@ -125,8 +139,10 @@ function normalizeMatrixAssessment(evidence = {}, request = {}) {
     value: clean(cell?.value),
     full: clean(cell?.full),
     confidence: normalizeConfidence(cell?.confidence || confidenceFromEvidence(cell)),
+    confidenceSource: normalizeConfidenceSource(cell?.confidenceSource || "model"),
     confidenceReason: clean(cell?.confidenceReason) || `Based on ${ensureArray(cell?.sources).length} cited sources.`,
     sources: normalizeSources(cell?.sources || []),
+    citationStatus: citationStatusFromSources(cell?.sources || []),
     arguments: {
       supporting: ensureArray(cell?.arguments?.supporting),
       limiting: ensureArray(cell?.arguments?.limiting),
@@ -151,8 +167,10 @@ function normalizeMatrixAssessment(evidence = {}, request = {}) {
       value: "insufficient evidence",
       full: "No reliable evidence collected yet.",
       confidence: "low",
+      confidenceSource: "model",
       confidenceReason: "No sources available.",
       sources: [],
+      citationStatus: "not_found",
       arguments: { supporting: [], limiting: [] },
       risks: "",
       providerAgreement: "none",

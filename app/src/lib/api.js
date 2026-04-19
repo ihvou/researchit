@@ -60,9 +60,12 @@ async function callRoute(role, payload, runtime = {}) {
 
   if (data?.error) {
     const err = new Error(data.error || `Request failed: /api/${role}`);
-    err.status = Number(data?.status) || 500;
+    err.status = Number(data?.status || data?.sourceFetchStatus) || 500;
     err.role = role;
     err.retryable = DEFAULT_RETRYABLE_STATUS.includes(err.status);
+    if (data?.sourceFetchStatus != null) err.sourceFetchStatus = String(data.sourceFetchStatus);
+    if (data?.resolvedUrl != null) err.resolvedUrl = String(data.resolvedUrl || "");
+    if (data?.url != null) err.url = String(data.url || "");
     if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
       err.reasonCode = data.reasonCode.trim();
     }
