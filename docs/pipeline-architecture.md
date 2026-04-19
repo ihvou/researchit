@@ -102,8 +102,8 @@ flowchart TD
     MEM_NATIVE["#03a EVIDENCE - MEMORY\nGoal: produce memory-grounded first-pass evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: ResearchPlan + unit briefs\nReq: generate evidence per unit (no web)\nResp: per-unit evidence, scores, sources\nOut: memory evidence bundle"]
     WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro\nIn: memory bundle + ResearchPlan\nReq: web search + extend evidence per unit\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
     EVID_DA["#03c EVIDENCE - DEEP RESEARCH ×3\nGoal: parallel Deep Research calls to 3 providers for cross-validation\nActor: Analyst | Model: openai:o3 + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: ChatGPT Deep Research (o3 + web_search_preview, Responses API); Claude Research (claude-sonnet-4 + web_search, max 20 uses); Gemini Deep Research (gemini-2.5-pro + google_search + thinkingConfig unlimited budget) — all three in parallel\nResp: 3 independent deep-researched evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
-    MERGE["#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: Analyst | Model: openai:gpt-5.4-mini\nIn: evidence bundle(s)\nReq: merge and deduplicate with provenance\nResp: unified evidence per unit\nOut: EvidenceBundle"]
-    SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units against rubric, assign confidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: EvidenceBundle + scoring rubric\nReq: score each unit against rubric criteria\nResp: per-unit score, confidence, rationale\nOut: AssessedState"]
+    MERGE{{"#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: engine\nIn: evidence bundle(s)\nOut: EvidenceBundle"}}
+    SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units/cells and assign calibrated confidence\nActor: Analyst | Model: openai:gpt-5.4 (scorecard)\n       engine (matrix)\nIn: EvidenceBundle + scoring criteria\nReq: score scorecard units against rubric anchors and calibrate confidence\nResp: per-unit assessment with confidence rationale (scorecard)\nOut: AssessedState"]
     VERIFY{{"#06 SOURCE VERIFICATION\nGoal: fetch and verify cited sources\nActor: engine\nIn: AssessedState with cited URLs\nOut: sources tagged with verificationStatus"}}
     ASSESS{{"#07 SOURCE ASSESSMENT\nGoal: apply source-quality confidence adjustments\nActor: engine\nIn: AssessedState + verificationStatus\nOut: confidence adjustments applied"}}
     RECOVER["#08 TARGETED RECOVERY\nGoal: recover weak and low-confidence coverage\nActor: Analyst | Model: gemini-2.5-pro (search) + openai:gpt-5.4 (re-assess)\nIn: AssessedState (weak units prioritized)\nReq: web search + re-assess per weak unit\nResp: new evidence + revised assessments\nOut: enriched AssessedState"]
@@ -126,9 +126,9 @@ flowchart TD
     RESCORE --> COHERENCE --> CHALLENGE --> COUNTER --> DEFEND
     DEFEND --> SYNTHESIZE --> FINAL
 
-    class PLAN,MEM_NATIVE,WEB_NATIVE,SUBJDISC,EVID_DA,MERGE,SCORE_CONF,RECOVER,RESCORE,DEFEND,SYNTHESIZE analyst
+    class PLAN,MEM_NATIVE,WEB_NATIVE,SUBJDISC,EVID_DA,SCORE_CONF,RECOVER,RESCORE,DEFEND,SYNTHESIZE analyst
     class COHERENCE,CHALLENGE,COUNTER critic
-    class INTAKE,VERIFY,ASSESS,FINAL engine
+    class INTAKE,MERGE,VERIFY,ASSESS,FINAL engine
 ```
 
 ---
@@ -146,7 +146,7 @@ This breakdown and wording is the source-of-truth reference for Progress tab sta
 | `stage_03b_evidence_web` | Stage 03b - Web evidence | Add cited web evidence and patch memory gaps. |
 | `stage_03c_evidence_deep_assist` | Stage 03c - Deep Research ×3 evidence | Run ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel for deep-research-x3 mode. |
 | `stage_04_merge` | Stage 04 - Evidence merge | Merge evidence drafts into one provenance-preserving bundle. |
-| `stage_05_score_confidence` | Stage 05 - Score + confidence | Assess each unit against rubric and assign confidence with explicit rationale. |
+| `stage_05_score_confidence` | Stage 05 - Score + confidence | Assess each unit/cell and assign calibrated confidence with explicit rationale (rubric anchors for scorecard). |
 | `stage_06_source_verify` | Stage 06 - Source verification | Deterministically verify source fetchability and citation matches. |
 | `stage_07_source_assess` | Stage 07 - Source assessment | Apply source-quality adjustments before recovery/critic cycle. |
 | `stage_08_recover` | Stage 08 - Targeted recovery | Prioritize and recover weak or low-confidence coverage. |

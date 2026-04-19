@@ -13,26 +13,26 @@ const HYBRID_FLOW = [
     key: "stage_01_intake",
     phase: "stage_01_intake",
     title: "Stage 01 - Input intake",
-    detail: "Validates and normalizes request input into canonical run-state fields.",
+    detail: "Validates your request and normalizes inputs before research begins.",
   },
   {
     key: "stage_02_plan",
     phase: "stage_02_plan",
     title: "Stage 02 - Planning",
-    detail: "Builds scoped queries, counterfactual probes, and per-unit research plan coverage.",
+    detail: "Builds per-dimension research queries, source targets, and gap hypotheses.",
   },
   {
     key: "stage_03a_evidence_memory",
     phase: "stage_03a_evidence_memory",
     title: "Stage 03a - Memory evidence",
-    detail: "Collects initial evidence pass without live web retrieval.",
+    detail: "Collects first-pass evidence from model memory for each dimension (no live web).",
     modes: ["native"],
   },
   {
     key: "stage_03b_evidence_web",
     phase: "stage_03b_evidence_web",
     title: "Stage 03b - Web evidence",
-    detail: "Collects cited web evidence and patches/extends the memory pass.",
+    detail: "Adds cited web evidence to strengthen or correct each dimension.",
     modes: ["native"],
   },
   {
@@ -46,25 +46,25 @@ const HYBRID_FLOW = [
     key: "stage_04_merge",
     phase: "stage_04_merge",
     title: "Stage 04 - Evidence merge",
-    detail: "Merges evidence drafts into one bundle with reconcile gating and provenance.",
+    detail: "Combines evidence drafts into one traceable evidence bundle.",
   },
   {
     key: "stage_05_score_confidence",
     phase: "stage_05_score_confidence",
     title: "Stage 05 - Score + confidence",
-    detail: "Scores all units and assigns calibrated confidence with explicit reasons.",
+    detail: "Applies rubric-based scoring and calibrated confidence per dimension.",
   },
   {
     key: "stage_06_source_verify",
     phase: "stage_06_source_verify",
     title: "Stage 06 - Source verification",
-    detail: "Deterministically verifies source fetchability and citation matches.",
+    detail: "Checks cited URLs and whether source content supports the cited claim.",
   },
   {
     key: "stage_07_source_assess",
     phase: "stage_07_source_assess",
     title: "Stage 07 - Source assessment",
-    detail: "Applies source-quality adjustments before recovery and critic cycle.",
+    detail: "Applies source-quality labels and confidence caps before critic review.",
   },
   {
     key: "stage_08_recover",
@@ -133,32 +133,32 @@ const MATRIX_FLOW = [
     key: "stage_01_intake",
     phase: "stage_01_intake",
     title: "Stage 01 - Input intake",
-    detail: "Validates and normalizes matrix request inputs and setup fields.",
+    detail: "Validates your matrix request and normalizes inputs before research begins.",
   },
   {
     key: "stage_01b_subject_discovery",
     phase: "stage_01b_subject_discovery",
     title: "Stage 01b - Subject discovery",
-    detail: "Discovers and deduplicates matrix subjects when they were not provided.",
+    detail: "Discovers subjects only when you did not provide them.",
   },
   {
     key: "stage_02_plan",
     phase: "stage_02_plan",
     title: "Stage 02 - Planning",
-    detail: "Builds attribute-level query plans and counterfactual probes.",
+    detail: "Builds attribute-level research queries, source targets, and gap hypotheses.",
   },
   {
     key: "stage_03a_evidence_memory",
     phase: "stage_03a_evidence_memory",
     title: "Stage 03a - Memory evidence",
-    detail: "Collects memory-grounded matrix evidence using adaptive chunking.",
+    detail: "Collects first-pass evidence from model memory for each subject × attribute cell.",
     modes: ["native"],
   },
   {
     key: "stage_03b_evidence_web",
     phase: "stage_03b_evidence_web",
     title: "Stage 03b - Web evidence",
-    detail: "Collects web-grounded matrix evidence with adaptive chunking.",
+    detail: "Adds cited web evidence for each subject × attribute cell.",
     modes: ["native"],
   },
   {
@@ -172,25 +172,25 @@ const MATRIX_FLOW = [
     key: "stage_04_merge",
     phase: "stage_04_merge",
     title: "Stage 04 - Evidence merge",
-    detail: "Builds unified matrix evidence bundle and agreement signals.",
+    detail: "Combines evidence drafts into one per-cell bundle with provenance and agreement signals.",
   },
   {
     key: "stage_05_score_confidence",
     phase: "stage_05_score_confidence",
     title: "Stage 05 - Score + confidence",
-    detail: "Assesses matrix cells with confidence and rationale.",
+    detail: "Converts per-cell evidence into assessed values with calibrated confidence.",
   },
   {
     key: "stage_06_source_verify",
     phase: "stage_06_source_verify",
     title: "Stage 06 - Source verification",
-    detail: "Deterministically verifies source fetchability and citation matches.",
+    detail: "Checks cited URLs and whether source content supports the cited claim.",
   },
   {
     key: "stage_07_source_assess",
     phase: "stage_07_source_assess",
     title: "Stage 07 - Source assessment",
-    detail: "Applies source-quality adjustments before recovery and critic cycle.",
+    detail: "Applies source-quality labels and confidence caps before critic review.",
   },
   {
     key: "stage_08_recover",
@@ -759,10 +759,8 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                   {badgeStateLabel}
                 </span>
                 {costSummary ? (
-                  <div style={{ fontSize: 10, color: "var(--ck-muted)", textAlign: "right", lineHeight: 1.35 }}>
-                    <div>Tokens: {costSummary.tokensLabel}</div>
-                    <div>Price: {costSummary.priceLabel}</div>
-                    <div>Cost: {costSummary.costLabel}</div>
+                  <div style={{ fontSize: 10, color: "var(--ck-muted)", textAlign: "right", lineHeight: 1.35, whiteSpace: "nowrap" }}>
+                    Tokens: {costSummary.tokensLabel} | Price: {costSummary.priceLabel} | Cost: {costSummary.costLabel}
                   </div>
                 ) : null}
               </div>

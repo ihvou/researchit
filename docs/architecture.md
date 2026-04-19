@@ -62,8 +62,8 @@ The canonical sequence is shared by scorecard and matrix runs.
 | `stage_03a_evidence_memory` | Native memory draft evidence | Analyst |
 | `stage_03b_evidence_web` | Native web-grounded evidence | Analyst |
 | `stage_03c_evidence_deep_assist` | Deep Research ×3 provider evidence lanes | Analyst |
-| `stage_04_merge` | Merge evidence into unified bundle | Analyst + deterministic rules |
-| `stage_05_score_confidence` | Unit scoring + confidence assignment | Analyst |
+| `stage_04_merge` | Merge evidence into unified bundle | engine |
+| `stage_05_score_confidence` | Unit/cell assessment + confidence calibration (rubric anchors for scorecard) | Analyst |
 | `stage_06_source_verify` | URL fetch/verification checks | engine |
 | `stage_07_source_assess` | Source-quality caps/penalties | engine |
 | `stage_08_recover` | Targeted low-confidence/coverage recovery | Analyst |
