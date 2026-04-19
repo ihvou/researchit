@@ -265,8 +265,8 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         userPrompt: prompt,
         tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
         timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-        // Groups run in parallel; inner retries would compound timeouts across concurrent calls.
-        maxRetries: 0,
+        // 1 retry enables parse-repair on transient JSON failures; groups are parallel so this does not compound.
+        maxRetries: 1,
         liveSearch: true,
         schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
       });

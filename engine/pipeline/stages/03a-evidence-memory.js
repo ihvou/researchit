@@ -120,8 +120,9 @@ Return JSON:
           userPrompt: prompt,
           tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
           timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
-          // Queue loop handles retry-via-splitting; inner retries would compound exponentially.
-          maxRetries: 0,
+          // 1 retry enables parse-repair (injects "return strict JSON" notice on parse failure).
+          // Queue splits on failure rather than retrying the same size, so this does not compound.
+          maxRetries: 1,
           liveSearch: false,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });

@@ -169,8 +169,9 @@ async function gatherMatrixWeb({
           userPrompt: prompt,
           tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
           timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
-          // Queue loop handles retry-via-splitting; inner retries would compound exponentially.
-          maxRetries: 0,
+          // 1 retry enables parse-repair (injects "return strict JSON" notice on parse failure).
+          // Queue splits on failure rather than retrying the same size, so this does not compound.
+          maxRetries: 1,
           liveSearch: true,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
