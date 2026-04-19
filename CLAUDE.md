@@ -18,17 +18,23 @@ No test suite yet. Verify changes by running the dev server and executing a rese
 ```
 app/                        # React + Vite + Vercel serverless routes
   api/                      # API routes: analyst.js, critic.js, providerConfig.js, providerCalls.js
-  src/App.jsx               # Main app state, run orchestration (~600 lines)
+  src/App.jsx               # Main app state, run orchestration
   src/hooks/useAnalysis.js  # Wires engine pipelines to React state
   src/components/           # UI tabs and widgets
   src/lib/export.js         # HTML + Markdown + PDF export (~2000 lines)
 engine/                     # @researchit/engine — no React, no browser APIs
-  pipeline/analysis.js      # Scorecard pipeline (~5500 lines) — THE largest file
-  pipeline/matrix.js        # Matrix pipeline (~4700 lines) — second largest
+  pipeline/orchestrator.js  # Canonical 15-stage pipeline entry point (scorecard + matrix)
+  pipeline/stages/          # One file per stage: 01-intake through 15-finalize + common.js
+  pipeline/contracts/       # reason-codes.js, run-state.js
+  pipeline/analysis.js      # Legacy scorecard adapter (still used for followUp)
+  pipeline/matrix.js        # Legacy matrix adapter
   pipeline/followUp.js      # Follow-up threads
   lib/transport.js          # Retry/timeout wrapper, dependency-injected LLM calls
+  lib/routing/              # actor-resolver.js, route-preflight.js — strict model routing
+  lib/guards/               # timeout-retry.js, decision-gate.js, coverage-gate.js, token-preflight.js
+  lib/diagnostics/          # stage-logger.js, debug-bundle.js, cost-estimator.js
   providers/openai.js       # Base OpenAI adapter
-  prompts/defaults.js       # System prompts
+  prompts/defaults.js       # System prompts (SYS_ANALYST, SYS_CRITIC, SYS_RED_TEAM, etc.)
 configs/
   research-configurations.js  # All ResearchConfig definitions + shared model config
 ```
@@ -36,70 +42,63 @@ configs/
 ## Key Architecture
 
 - **Two output modes**: Scorecard (per-dimension scores) and Matrix (subject × attribute grid)
-- **Two evidence modes**: "Research Team" (`native` — memory + web hybrid, critic debate, recovery) and "Deep Research ×3" (`deep-research-x3` — ChatGPT + Claude + Gemini Deep Research in parallel, then merged)
+- **Two evidence modes**: "Research Team" (`native` — memory + web hybrid, critic debate, recovery) and "Deep Research ×3" (`deep-research-x3` — ChatGPT Deep Research + Claude Research + Gemini Deep Research in parallel, then merged)
 - **Transport is injected**: engine never calls APIs directly; `app/api/` routes resolve providers
-- **Provider routing**: providerConfig.js resolves role → provider → model via strict precedence; routes are pinned and fail-fast (no automatic provider/model failover)
-- **ACTIVE_RUNTIME global** in analysis.js — mutable state, unsafe for concurrent runs (flagged as ENG-02)
+- **Strict routing**: `actor-resolver.js` + `route-preflight.js` enforce exact role→provider→model resolution; no automatic failover — a mismatched or missing route fails with `route_mismatch_preflight` before any token spend
+- **Canonical 15-stage orchestrator**: both scorecard and matrix run the same stage graph in `orchestrator.js`; legacy `analysis.js` / `matrix.js` are adapters only
 
-For full architecture see `docs/architecture.md`; for high-level pipeline overview see `README.md` § Analysis Pipeline.
+For full architecture see `docs/architecture.md`; for the canonical stage graph and routing policy see `docs/pipeline-architecture.md`.
 
-### Scorecard Pipeline (analysis.js → `runAnalysisLegacy`)
+### Canonical Pipeline (orchestrator.js)
 
-1. **Query Strategist** — infer niche, aliases, per-dimension query seeds + counterfactual seeds
-2. **Analyst Phase 1** — evidence collection with web search, produces per-dimension scores/confidence/sources
-3. **Targeted Recovery** — low-confidence dimensions get: query plan → search harvest → rescore (sequential per dim)
-4. **Source Verification** — fetch URLs, check quotes in page, assign verificationStatus, apply confidence penalties
-5. **Critic** — independent audit with live search, flags disagreements, proposes score changes
-6. **Reconciler (Phase 3)** — analyst responds to critic flags, updates scores with justification
-7. **Consistency & Coherence** — cross-dimension score consistency check + coherence audit
-8. **Final Source Verification** — re-verify after reconciliation
-9. **Red Team (RQ-02)** — adversarial stress test via Critic model, appends threats/missed risks per dimension
-10. **Synthesizer (RQ-09)** — independent executive narrative via different model, produces decisionImplication + dissent
-11. **Discovery** — suggests related research threads
+Both scorecard and matrix run through the same 15 stages:
 
-Deep Research ×3 inserts after step 2: three providers run **Deep Research** in parallel — OpenAI **o3** via Responses API + `web_search_preview` (ChatGPT Deep Research product); Anthropic **claude-sonnet-4** + `web_search_20250305` tool with up to 20 searches (Claude Research product); Gemini **gemini-2.5-pro** + `google_search` grounding + `thinkingConfig.thinkingBudget: -1` (extended reasoning, Gemini Deep Research equivalent) — then merge best per dimension → DA-02 recovery loop for weak dimensions → continues from step 4.
+| Stage | Title | Actor / Model |
+|-------|-------|---------------|
+| 01 | Input Intake | engine |
+| 01b | Subject Discovery *(matrix + auto-discover only)* | Analyst / gemini-2.5-pro |
+| 02 | Research Planning | Analyst / gpt-5.4 |
+| 03a | Memory Evidence *(native mode)* | Analyst / gpt-5.4 |
+| 03b | Web Evidence *(native mode)* | Analyst / gemini-2.5-pro |
+| 03c | Deep Research ×3 *(deep-research-x3 mode)* | Analyst / o3 + claude-sonnet-4 + gemini-2.5-pro |
+| 04 | Evidence Merge | engine |
+| 05 | Score + Confidence | Analyst / gpt-5.4 (scorecard) · engine (matrix) |
+| 06 | Source Verification | engine |
+| 07 | Source Assessment | engine |
+| 08 | Targeted Recovery | Analyst / gemini-2.5-pro (search) + gpt-5.4 (re-assess) |
+| 09 | Re-score | Analyst / gpt-5.4 |
+| 10 | Coherence | Critic / claude-sonnet-4 |
+| 11 | Challenge Overclaims | Critic / claude-sonnet-4 |
+| 12 | Counter-case | Critic / claude-sonnet-4 |
+| 13 | Concede / Defend | Analyst / gpt-5.4 |
+| 14 | Synthesize | Analyst / gemini-2.5-pro |
+| 15 | Finalize | engine + Analyst / gpt-5.4-mini |
 
-### Matrix Pipeline (matrix.js → `runMatrixAnalysis`)
-
-1. **Subject Discovery** (optional) — auto-discover comparison subjects if not provided
-2. **Query Strategist** — niche/alias hints + per-cell query seeds + counterfactual seeds
-3. **Analyst Pass** — populate all cells with evidence, scores, confidence via web search
-4. **Targeted Recovery** — low-confidence cells get: query plan → search harvest → rescore (sequential per cell)
-5. **Cell Source Verification** — same as scorecard but per-cell
-6. **Critic** — audits matrix cells, flags issues
-7. **Analyst Response** — resolves critic flags per cell
-8. **Consistency Audit** — cross-subject consistency check
-9. **Derived Attributes** — computed columns (e.g., composite scores)
-10. **Red Team** — adversarial counter-cases per cell via Critic model
-11. **Synthesizer** — executive synthesis: decision answer, threats, whitespace, implications
-12. **Coverage SLA** — validates minimum source/evidence thresholds
-13. **Discovery** — suggests additional subjects/attributes
-
-Deep Research ×3 inserts after step 5: same three-provider Deep Research as scorecard (o3, claude-sonnet-4, gemini-2.5-pro) → merge/reconcile → DA-02 recovery for conflicting cells → re-verify sources → then continues from step 6.
+Deep Research ×3 mode replaces stages 03a+03b with 03c (three providers in parallel). Stage 04 merge is the convergence point for both modes. Stage 01b runs only for matrix + auto-discover; all other stages run for every run type.
 
 ## Model Configuration
 
-Default roles (in configs/research-configurations.js):
-- **Analyst**: OpenAI gpt-5.4-mini
-- **Critic**: Anthropic claude-sonnet-4-20250514
-- **Retrieval**: Gemini gemini-2.5-flash
-- **Deep Research ×3 providers**: ChatGPT (gpt-5.4), Claude (claude-sonnet-4), Gemini (gemini-2.5-pro)
+Default roles (in `configs/research-configurations.js`):
+- **Analyst**: OpenAI `gpt-5.4` (planning, scoring, defend, rescore) + Gemini `gemini-2.5-pro` (web evidence, recovery search, synthesis)
+- **Critic**: Anthropic `claude-sonnet-4`
+- **Deep Research ×3**: ChatGPT (`o3` + `web_search_preview` via Responses API), Claude (`claude-sonnet-4` + `web_search`, max 20 uses), Gemini (`gemini-2.5-pro` + `google_search` + unlimited thinking budget)
 
-Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, using strict precedence order (no silent route failover). See providerConfig.js.
+Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, using strict precedence order. See `providerConfig.js`.
 
 ## Code Conventions
 
-- `cleanString()` in analysis.js, `cleanText()` in matrix.js — same function, different names (ENG-01 tech debt)
+- All shared stage helpers (`clean`, `ensureArray`, `normalizeSources`, `callActorJson`, etc.) live in `pipeline/stages/common.js`
 - Normalize everything: confidence levels, source lists, arguments, scores — defensive throughout
 - Every LLM response is parsed with `parseWithDiagnostics` / `extractJson` + retry-or-fail guardrail handling
-- `analysisMeta` object tracks all diagnostics, counters, and provenance for the run
-- Source verification: fetch URL → check quote in page → assign verificationStatus → derive displayStatus (UX-02)
+- `callActorJson()` in `common.js` wraps transport + retry + parse-repair; `maxRetries: 1` enables parse-repair (injects "return strict JSON only" on parse failure); `maxRetries: 0` disables it — always use `1` unless explicitly justified
+- **Confidence is model-expressed only**: stage 06 assigns `verificationStatus` / `citationStatus` per source; it does **not** touch confidence. `confidenceSource` is always `"model"`. URL reachability ≠ factual accuracy
+- Stage budgets (`timeoutMs`, `tokenBudget`, `retryMax`) are set in `orchestrator.js` `STAGE_BUDGETS` and always override stage-level fallbacks
+- Stage diagnostics tracked via `stage-logger.js`; orchestrator writes a "running" placeholder before each stage executes so hanging stages appear in debug bundles
 
 ## Known Tech Debt (see TASKS.md)
 
-- **ENG-01**: ~600+ lines duplicated between analysis.js and matrix.js (growing with each feature)
-- **ENG-02**: ACTIVE_RUNTIME global mutable state in analysis.js
-- **ENG-03–05**: Provider options, source verification, analysisMeta alignment gaps
+- **ENG-05**: `analysisMeta` initialized in three places (App.jsx, engine `createInitialState`, `runMatrixAnalysis`) with different field sets — needs centralization in engine only
+- **ENG-08**: source universe normalization logic duplicated across `SourcesList.jsx`, `DimensionsTab.jsx`, and `export.js`
 
 ## Key Docs
 
@@ -107,6 +106,6 @@ Provider/model resolved via env vars: `RESEARCHIT_{ROLE}_{PROVIDER}_MODEL`, usin
 - `TASKS.md` — Active task backlog with priorities
 - `docs/architecture.md` — System architecture overview
 - `docs/quality-bar.md` — Non-negotiable quality objective and no-silent-failure policy
-- `docs/pipeline-architecture.md` — Detailed pipeline flow diagrams with request/response shapes
+- `docs/pipeline-architecture.md` — Canonical stage graph, actor model, routing policy (source of truth for pipeline)
 - `docs/benchmark-manual-v1.md` — Manual benchmark protocol
 - `docs/ui-kit.md` — UI component conventions
