@@ -9,7 +9,7 @@ import {
 } from "./common.js";
 
 export const STAGE_ID = "stage_03c_evidence_deep_assist";
-export const STAGE_TITLE = "Evidence Deep Assist";
+export const STAGE_TITLE = "Evidence Deep Research x3";
 
 function normalizeProviders(config = {}) {
   const defaults = config?.deepAssist?.defaults && typeof config.deepAssist.defaults === "object"
@@ -209,7 +209,7 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
   });
 
   if (failures.length) {
-    const first = failures[0]?.error || new Error("Deep Assist provider failed.");
+    const first = failures[0]?.error || new Error("Deep Research x3 provider failed.");
     throw first;
   }
 

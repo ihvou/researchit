@@ -48,8 +48,8 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     ? "deep-research-x3"
     : "native";
   const resolvedAnalysisMode = String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
-    ? (evidenceMode === "deep-research-x3" ? "matrix-deep-assist" : "matrix")
-    : (evidenceMode === "deep-research-x3" ? "deep-assist" : "hybrid");
+    ? (evidenceMode === "deep-research-x3" ? "matrix-deep-research-x3" : "matrix")
+    : (evidenceMode === "deep-research-x3" ? "deep-research-x3" : "hybrid");
   const debugDims = String(config?.outputMode || "").trim().toLowerCase() === "matrix"
     ? (Array.isArray(config?.attributes) ? config.attributes : [])
     : (Array.isArray(config?.dimensions) ? config.dimensions : []);
@@ -68,7 +68,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
     type: "analysis_start",
     phase: String(config?.outputMode || "scorecard").trim().toLowerCase() === "matrix"
       ? "matrix_plan"
-      : (evidenceMode === "deep-research-x3" ? "deep_assist_collect" : "analyst_baseline"),
+      : (evidenceMode === "deep-research-x3" ? "deep_research_x3_collect" : "analyst_baseline"),
   });
   let debugSessionFinalized = false;
   let caughtError = null;

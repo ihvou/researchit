@@ -19,7 +19,7 @@ test("route preflight fails when retrieval stage is not gemini", () => {
   );
 });
 
-test("route preflight fails deep-assist when required provider is missing", () => {
+test("route preflight fails deep-research-x3 preflight when required provider is missing (legacy alias mode)", () => {
   const state = { mode: "deep-assist" };
   const config = {
     models: {
@@ -39,6 +39,6 @@ test("route preflight fails deep-assist when required provider is missing", () =
 
   assert.throws(
     () => runRoutePreflight({ state, config }),
-    /missing deep-assist providers/i
+    /missing deep research/i
   );
 });

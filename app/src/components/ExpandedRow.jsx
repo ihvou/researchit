@@ -24,6 +24,7 @@ const PHASE_LABELS = {
   matrix_web: "Running web-assisted matrix pass...",
   matrix_reconcile: "Reconciling baseline and web drafts...",
   matrix_targeted: "Running targeted low-confidence recovery...",
+  matrix_deep_research_x3: "Merging Deep Research ×3 provider evidence...",
   matrix_deep_assist: "Merging Deep Research ×3 provider evidence...",
   matrix_evidence: "Collecting matrix evidence...",
   matrix_critic: "Critic auditing matrix...",
@@ -34,6 +35,8 @@ const PHASE_LABELS = {
   matrix_synthesis: "Building executive synthesis...",
   matrix_summary: "Finalizing matrix...",
   matrix_discover: "Discovering missing subjects/attributes...",
+  deep_research_x3_collect: "Collecting Deep Research ×3 evidence...",
+  deep_research_x3_merge: "Merging Deep Research ×3 provider outputs...",
   deep_assist_collect: "Collecting Deep Research ×3 evidence...",
   deep_assist_merge: "Merging Deep Research ×3 provider outputs...",
   stage_01_intake: "Validating and normalizing input...",
@@ -71,7 +74,7 @@ export default function ExpandedRow({
   outputMode = "scorecard",
 }) {
   const isMatrixMode = outputMode === "matrix";
-  const isDeepAssist = uc?.analysisMeta?.evidenceMode === "deep-research-x3" || uc?.analysisMeta?.evidenceMode === "deep-assist";
+  const isDeepResearchX3 = uc?.analysisMeta?.evidenceMode === "deep-research-x3" || uc?.analysisMeta?.evidenceMode === "deep-assist";
   const matrixCriticFlags = Number(uc?.analysisMeta?.criticFlagsRaised || uc?.matrix?.coverage?.contestedCells || 0);
   const defaultTab = isMatrixMode ? "summary" : "dimensions";
   const [tab, setTab] = useState("progress");
@@ -131,10 +134,10 @@ export default function ExpandedRow({
         <div style={{ padding: "7px 16px", borderBottom: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", minWidth: 0 }}>
           <div style={{ color: "var(--ck-muted)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
             {isMatrixMode
-              ? (isDeepAssist
+              ? (isDeepResearchX3
                 ? "Matrix pipeline + Deep Research ×3 enrichment | Per-cell provider agreement and confidence calibration"
                 : "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence")
-              : (isDeepAssist
+              : (isDeepResearchX3
                 ? "Deep Research ×3 scorecard flow | ChatGPT + Claude + Gemini Deep Research merged before critic and finalization"
                 : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence")}
             {!isMatrixMode && uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (

@@ -269,6 +269,8 @@ const SCORECARD_PHASE_ALIASES = {
   final_source_verification: "stage_15_finalize",
   red_team: "stage_12_counter_case",
   synthesizer: "stage_14_synthesize",
+  deep_research_x3_collect: "stage_03c_evidence_deep_assist",
+  deep_research_x3_merge: "stage_04_merge",
   deep_assist_collect: "stage_03c_evidence_deep_assist",
   deep_assist_merge: "stage_04_merge",
   stage_01_intake: "submitted",
@@ -293,6 +295,7 @@ const SCORECARD_PHASE_ALIASES = {
 
 const MATRIX_PHASE_ALIASES = {
   matrix_evidence: "stage_03b_evidence_web",
+  matrix_deep_research_x3: "stage_03c_evidence_deep_assist",
   matrix_deep_assist: "stage_03c_evidence_deep_assist",
   matrix_red_team: "stage_12_counter_case",
   matrix_plan: "stage_02_plan",

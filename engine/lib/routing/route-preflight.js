@@ -34,7 +34,7 @@ function assertRoute(route, expectedProvider, details = {}) {
   }
 }
 
-function normalizeDeepAssistProviders(raw = {}) {
+function normalizeDeepResearchX3Providers(raw = {}) {
   const defaults = raw?.defaults && typeof raw.defaults === "object" ? raw.defaults : {};
   const list = Array.isArray(defaults.providers) ? defaults.providers : ["chatgpt", "claude", "gemini"];
   return [...new Set(list.map((value) => clean(value).toLowerCase()).filter(Boolean))];
@@ -61,7 +61,7 @@ export function runRoutePreflight({ state = {}, config = {} } = {}) {
 
   const preflightMode = clean(state?.mode).toLowerCase();
   if (preflightMode === "deep-research-x3" || preflightMode === "deep-assist") {
-    const providers = normalizeDeepAssistProviders(config?.deepAssist || state?.config?.deepAssist || {});
+    const providers = normalizeDeepResearchX3Providers(config?.deepAssist || state?.config?.deepAssist || {});
     const required = ["chatgpt", "claude", "gemini"];
     const missing = required.filter((provider) => !providers.includes(provider));
     if (missing.length) {
@@ -84,7 +84,7 @@ export function runRoutePreflight({ state = {}, config = {} } = {}) {
         err.reasonCode = REASON_CODES.ROUTE_MISMATCH_PREFLIGHT;
         throw err;
       }
-      output.routes.push({ ...route, deepAssistProvider: providerId });
+      output.routes.push({ ...route, deepResearchX3Provider: providerId, deepAssistProvider: providerId });
     });
   }
 

@@ -641,8 +641,8 @@ export default function App({
         : null,
       analysisMeta: {
         analysisMode: selectedMode === "matrix"
-          ? (normalizedEvidenceMode === "deep-research-x3" ? "matrix-deep-assist" : "matrix")
-          : (normalizedEvidenceMode === "deep-research-x3" ? "deep-assist" : INTERNAL_ANALYSIS_MODE),
+          ? (normalizedEvidenceMode === "deep-research-x3" ? "matrix-deep-research-x3" : "matrix")
+          : (normalizedEvidenceMode === "deep-research-x3" ? "deep-research-x3" : INTERNAL_ANALYSIS_MODE),
         evidenceMode: normalizedEvidenceMode,
         strictQuality,
         liveSearchRequested: true,
@@ -1152,6 +1152,8 @@ export default function App({
     analyst_baseline: "Baseline pass...",
     analyst_web: "Web pass...",
     analyst_reconcile: "Reconcile pass...",
+    deep_research_x3_collect: "Deep Research ×3 collecting...",
+    deep_research_x3_merge: "Deep Research ×3 merging...",
     deep_assist_collect: "Deep Research ×3 collecting...",
     deep_assist_merge: "Deep Research ×3 merging...",
     analyst_targeted: "Low-confidence deep search...",
@@ -1162,6 +1164,7 @@ export default function App({
     matrix_baseline: "Baseline pass...",
     matrix_web: "Web pass...",
     matrix_reconcile: "Reconcile pass...",
+    matrix_deep_research_x3: "Deep Research ×3 merging...",
     matrix_deep_assist: "Deep Research ×3 merging...",
     matrix_targeted: "Low-confidence deep search...",
     matrix_evidence: "Matrix evidence...",

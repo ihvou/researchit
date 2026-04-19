@@ -489,8 +489,8 @@ export function toUseCaseState(state = {}) {
   const webSearchCounts = collectWebSearchCounters(state);
   const analysisMeta = {
     analysisMode: outputMode === "matrix"
-      ? (state?.mode === "deep-research-x3" ? "matrix-deep-assist" : "matrix")
-      : (state?.mode === "deep-research-x3" ? "deep-assist" : "hybrid"),
+      ? (state?.mode === "deep-research-x3" ? "matrix-deep-research-x3" : "matrix")
+      : (state?.mode === "deep-research-x3" ? "deep-research-x3" : "hybrid"),
     evidenceMode: state?.mode,
     strictQuality: !!state?.strictQuality,
     qualityGrade: qualityGrade === "decision-grade" ? "standard" : qualityGrade,

@@ -138,7 +138,7 @@ test("stage 03b matrix web pass adaptively splits chunks and preserves full cell
   assert.ok((result?.diagnostics?.chunks || []).some((item) => Array.isArray(item?.splitInto)));
 });
 
-test("stage 03c fails run when any deep-assist provider fails (non-strict included)", async () => {
+test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias mode, non-strict included)", async () => {
   const runtime = {
     config: {
       models: baseModels(),
@@ -154,7 +154,7 @@ test("stage 03c fails run when any deep-assist provider fails (non-strict includ
     budgets: {
       stage_03c_evidence_deep_assist: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
     },
-    prompts: { analyst: "deep assist" },
+    prompts: { analyst: "deep research x3" },
     transport: {
       callAnalyst: async (_messages, _system, _budget, options = {}) => {
         if (String(options?.provider || "").toLowerCase() === "anthropic") {
