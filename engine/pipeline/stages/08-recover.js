@@ -238,12 +238,7 @@ export async function runStage(context = {}) {
       };
     }
 
-    const patches = [];
-    const matrixReasonCodes = [];
-    const tokenDiagnosticsList = [];
-    const modelRoutes = [];
-    let totalRetries = 0;
-    for (const group of groups) {
+    const groupResults = await Promise.all(groups.map(async (group) => {
       const prompt = `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
@@ -270,17 +265,25 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         userPrompt: prompt,
         tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
         timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-        // Group loop processes each group sequentially; inner retries would compound timeouts.
+        // Groups run in parallel; inner retries would compound timeouts across concurrent calls.
         maxRetries: 0,
         liveSearch: true,
         schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
       });
-      matrixReasonCodes.push(...ensureArray(result?.reasonCodes));
-      patches.push(...normalizeMatrixPatch(result?.parsed));
-      tokenDiagnosticsList.push(result?.tokenDiagnostics || null);
-      if (result?.route) modelRoutes.push(result.route);
-      totalRetries += Number(result?.retries || 0);
-    }
+      return {
+        patches: normalizeMatrixPatch(result?.parsed),
+        reasonCodes: ensureArray(result?.reasonCodes),
+        tokenDiagnostics: result?.tokenDiagnostics || null,
+        route: result?.route || null,
+        retries: Number(result?.retries || 0),
+      };
+    }));
+
+    const patches = groupResults.flatMap((r) => r.patches);
+    const matrixReasonCodes = groupResults.flatMap((r) => r.reasonCodes);
+    const tokenDiagnosticsList = groupResults.map((r) => r.tokenDiagnostics);
+    const modelRoutes = groupResults.map((r) => r.route).filter(Boolean);
+    const totalRetries = groupResults.reduce((sum, r) => sum + r.retries, 0);
     const aggregatedTokens = combineTokenDiagnostics(tokenDiagnosticsList);
     const modelRoute = modelRoutes[0] || null;
 

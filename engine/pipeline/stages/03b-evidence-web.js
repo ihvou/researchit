@@ -150,11 +150,11 @@ async function gatherMatrixWeb({
 }) {
   const initialSize = matrixChunkSize(subjects, attributes, runtime?.config || {});
   const rootChunks = chunkSubjects(subjects, initialSize);
-  const cells = [];
-  const reasonCodes = [];
-  const diagnostics = [];
 
-  for (const root of rootChunks) {
+  const results = await Promise.all(rootChunks.map(async (root) => {
+    const cells = [];
+    const reasonCodes = [];
+    const diagnostics = [];
     const queue = [root];
     while (queue.length) {
       const current = queue.shift();
@@ -174,7 +174,6 @@ async function gatherMatrixWeb({
           liveSearch: true,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-
         cells.push(...normalizeMatrix(result?.parsed, current, attributes));
         reasonCodes.push(...ensureArray(result?.reasonCodes));
         diagnostics.push({
@@ -199,12 +198,13 @@ async function gatherMatrixWeb({
         if (left.length) queue.unshift(left);
       }
     }
-  }
+    return { cells, reasonCodes, diagnostics };
+  }));
 
   return {
-    cells,
-    reasonCodes: [...new Set(reasonCodes)],
-    diagnostics,
+    cells: results.flatMap((r) => r.cells),
+    reasonCodes: [...new Set(results.flatMap((r) => r.reasonCodes))],
+    diagnostics: results.flatMap((r) => r.diagnostics),
   };
 }
 

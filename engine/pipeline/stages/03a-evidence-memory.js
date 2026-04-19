@@ -77,10 +77,10 @@ async function gatherMatrixChunk({
   chunkSize,
 }) {
   const initialChunks = chunkSubjects(subjects, chunkSize);
-  const cells = [];
-  const diagnostics = [];
 
-  for (const root of initialChunks) {
+  const results = await Promise.all(initialChunks.map(async (root) => {
+    const cells = [];
+    const diagnostics = [];
     const queue = [root];
     while (queue.length) {
       const current = queue.shift();
@@ -125,8 +125,7 @@ Return JSON:
           liveSearch: false,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-        const normalized = normalizeMatrixCells(result?.parsed, current, attributes);
-        cells.push(...normalized);
+        cells.push(...normalizeMatrixCells(result?.parsed, current, attributes));
         diagnostics.push({
           chunkSubjects: current.map((subject) => subject.id),
           chunkSize: current.length,
@@ -149,11 +148,12 @@ Return JSON:
         if (left.length) queue.unshift(left);
       }
     }
-  }
+    return { cells, diagnostics };
+  }));
 
   return {
-    cells,
-    diagnostics,
+    cells: results.flatMap((r) => r.cells),
+    diagnostics: results.flatMap((r) => r.diagnostics),
   };
 }
 
