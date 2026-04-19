@@ -76,24 +76,19 @@ async function gatherMatrixChunk({
   attributes,
   chunkSize,
 }) {
-  const chunks = chunkSubjects(subjects, chunkSize);
+  const initialChunks = chunkSubjects(subjects, chunkSize);
   const cells = [];
   const diagnostics = [];
 
-  for (const chunk of chunks) {
-    let localChunkSize = chunk.length;
-    let success = false;
-    let lastError = null;
-    let attempts = 0;
-
-    while (!success) {
-      attempts += 1;
-      const activeChunk = chunk.slice(0, localChunkSize);
+  for (const root of initialChunks) {
+    const queue = [root];
+    while (queue.length) {
+      const current = queue.shift();
       const prompt = `Objective: ${clean(state?.request?.objective)}\nBuild MEMORY-ONLY matrix evidence for the provided cells.
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
-Subjects:\n${activeChunk.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
+Subjects:\n${current.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
 Attributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(attribute?.brief) ? ` - ${clean(attribute.brief)}` : ""}`).join("\n")}
 
 Rules:
@@ -125,30 +120,34 @@ Return JSON:
           userPrompt: prompt,
           tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
           timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
-          // Matrix chunk loop handles retry-via-halving; inner retries would compound exponentially.
+          // Queue loop handles retry-via-splitting; inner retries would compound exponentially.
           maxRetries: 0,
           liveSearch: false,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-        const normalized = normalizeMatrixCells(result?.parsed, activeChunk, attributes);
+        const normalized = normalizeMatrixCells(result?.parsed, current, attributes);
         cells.push(...normalized);
         diagnostics.push({
-          chunkSubjects: activeChunk.map((subject) => subject.id),
-          chunkSize: localChunkSize,
+          chunkSubjects: current.map((subject) => subject.id),
+          chunkSize: current.length,
           retries: result.retries,
           tokenDiagnostics: result.tokenDiagnostics,
           modelRoute: result.route,
         });
-        success = true;
       } catch (err) {
-        lastError = err;
-        if (localChunkSize <= 1) break;
-        localChunkSize = Math.max(1, Math.floor(localChunkSize / 2));
+        if (current.length <= 1) throw err;
+        const splitAt = Math.max(1, Math.floor(current.length / 2));
+        const left = current.slice(0, splitAt);
+        const right = current.slice(splitAt);
+        diagnostics.push({
+          chunkSubjects: current.map((subject) => subject.id),
+          chunkSize: current.length,
+          splitInto: [left.map((subject) => subject.id), right.map((subject) => subject.id)],
+          splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+        });
+        if (right.length) queue.unshift(right);
+        if (left.length) queue.unshift(left);
       }
-    }
-
-    if (!success) {
-      throw lastError || new Error("Matrix memory evidence chunk failed.");
     }
   }
 
