@@ -162,9 +162,11 @@ function getMatrixCoverage(uc) {
 }
 
 function resolveResearchTitle(uc = {}) {
+  const fromInput = deriveDraftTitleFromInput(uc?.rawInput || "");
+  if (fromInput && fromInput !== "Untitled research") return fromInput;
   const explicit = String(uc?.attributes?.title || "").trim();
   if (explicit) return explicit;
-  return deriveDraftTitleFromInput(uc?.rawInput || "");
+  return "Untitled research";
 }
 
 function deriveDraftTitleFromInput(input = "") {
@@ -2483,42 +2485,7 @@ export default function App({
                           )}
                         </div>
                       </div>
-                    ) : (
-                      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
-                        <div className="research-dimension-cell">
-                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            Subjects
-                          </div>
-                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
-                            {Array.isArray(uc.matrix?.subjects) ? uc.matrix.subjects.length : 0}
-                          </div>
-                        </div>
-                        <div className="research-dimension-cell">
-                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            Attributes
-                          </div>
-                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
-                            {Array.isArray(uc.matrix?.attributes) ? uc.matrix.attributes.length : 0}
-                          </div>
-                        </div>
-                        <div className="research-dimension-cell">
-                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            Low-confidence cells
-                          </div>
-                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
-                            {matrixCoverage?.lowConfidenceCells || 0}
-                          </div>
-                        </div>
-                        <div className="research-dimension-cell">
-                          <div style={{ fontSize: 10, color: "var(--ck-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                            Critic flags
-                          </div>
-                          <div style={{ fontSize: 12, color: "var(--ck-text)", marginTop: 4 }}>
-                            {matrixCoverage?.criticFlags || 0}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    ) : null}
                   </div>
 
                   {isExpanded && (

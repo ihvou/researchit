@@ -78,6 +78,10 @@ export default function ExpandedRow({
   const matrixCriticFlags = Number(uc?.analysisMeta?.criticFlagsRaised || uc?.matrix?.coverage?.contestedCells || 0);
   const defaultTab = isMatrixMode ? "summary" : "dimensions";
   const [tab, setTab] = useState("progress");
+  const [isMobileTabs, setIsMobileTabs] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 640px)").matches;
+  });
 
   useEffect(() => {
     setTab(uc.status === "analyzing" ? "progress" : defaultTab);
@@ -91,17 +95,30 @@ export default function ExpandedRow({
     }
   }, [uc.status, defaultTab]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 640px)");
+    const onChange = () => setIsMobileTabs(media.matches);
+    onChange();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    }
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
   const tabs = isMatrixMode
     ? [
       { id: "progress", label: "Progress" },
       { id: "summary", label: "Summary" },
       { id: "matrix", label: "Matrix" },
-      { id: "debate", label: "Debate & Challenges" },
+      { id: "debate", label: isMobileTabs ? "Debate" : "Debate & Challenges" },
     ]
     : [
       { id: "progress", label: "Progress" },
       { id: "dimensions", label: "Dimensions" },
-      { id: "debate", label: "Debate & Challenges" },
+      { id: "debate", label: isMobileTabs ? "Debate" : "Debate & Challenges" },
       { id: "discover", label: "Discover" },
     ];
 

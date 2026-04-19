@@ -759,7 +759,17 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                   {badgeStateLabel}
                 </span>
                 {costSummary ? (
-                  <div style={{ fontSize: 10, color: "var(--ck-muted)", textAlign: "right", lineHeight: 1.35, whiteSpace: "nowrap" }}>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "var(--ck-muted)",
+                      textAlign: "right",
+                      lineHeight: 1.35,
+                      width: "min(48vw, 520px)",
+                      whiteSpace: "normal",
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
+                    }}>
                     Tokens: {costSummary.tokensLabel} | Price: {costSummary.priceLabel} | Cost: {costSummary.costLabel}
                   </div>
                 ) : null}

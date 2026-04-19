@@ -4,6 +4,13 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function deriveTitleFromInput(input = "") {
+  const text = clean(input).replace(/^(product concept|research brief|context)\s*:\s*/i, "");
+  if (!text) return "";
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.slice(0, 14).join(" ").replace(/[,:;.\-]+$/g, "").trim();
+}
+
 function normalizeOutputType(value) {
   return clean(value).toLowerCase() === "matrix" ? "matrix" : "scorecard";
 }
@@ -482,6 +489,7 @@ function collectWebSearchCounters(state = {}) {
 
 export function toUseCaseState(state = {}) {
   const outputMode = state?.outputType === "matrix" ? "matrix" : "scorecard";
+  const title = deriveTitleFromInput(state?.ui?.rawInput) || clean(state?.request?.titleHint) || "Untitled research";
   const qualityGrade = clean(state?.quality?.qualityGrade) || "decision-grade";
   const sourceVerification = state?.quality?.sourceVerification && typeof state.quality.sourceVerification === "object"
     ? state.quality.sourceVerification
@@ -551,7 +559,7 @@ export function toUseCaseState(state = {}) {
       ...base,
       matrix: matrixFromState(state),
       attributes: {
-        title: clean(state?.request?.titleHint) || clean(state?.ui?.rawInput),
+        title,
       },
       dimScores: null,
       critique: state?.critique || null,
@@ -567,7 +575,7 @@ export function toUseCaseState(state = {}) {
   return {
     ...base,
     attributes: {
-      title: clean(state?.request?.titleHint) || clean(state?.ui?.rawInput),
+      title,
       inputFrame: {
         objective: state?.request?.objective || "",
         decisionQuestion: state?.request?.decisionQuestion || "",

@@ -40,15 +40,6 @@ function normalizeSourceUniverse(summary = {}) {
   };
 }
 
-function redTeamSeverityCounts(cells = {}) {
-  const counts = { high: 0, medium: 0, low: 0 };
-  Object.values(cells || {}).forEach((entry) => {
-    const severity = cleanText(entry?.severityIfWrong).toLowerCase();
-    if (severity === "high" || severity === "medium" || severity === "low") counts[severity] += 1;
-  });
-  return counts;
-}
-
 export default function MatrixSummaryTab({ uc }) {
   const matrix = uc?.matrix || {};
   const summary = matrix?.executiveSummary || {};
@@ -57,30 +48,12 @@ export default function MatrixSummaryTab({ uc }) {
   const hasSummary = Object.values(summary).some((value) => cleanText(value));
   const sourceUniverse = normalizeSourceUniverse(uc?.analysisMeta?.sourceUniverse);
   const showSourceUniverse = sourceUniverse.total > 0;
-  const redTeam = matrix?.redTeam || {};
   const decisionGate = uc?.analysisMeta?.decisionGradeGate && typeof uc.analysisMeta.decisionGradeGate === "object"
     ? uc.analysisMeta.decisionGradeGate
     : null;
   const decisionGradeEnabled = !!decisionGate?.enabled;
   const decisionGradePassed = decisionGradeEnabled ? !!uc?.analysisMeta?.decisionGradePassed : true;
   const decisionGradeFailureReason = cleanText(uc?.analysisMeta?.decisionGradeFailureReason);
-  const redTeamCells = redTeam?.cells && typeof redTeam.cells === "object" ? redTeam.cells : {};
-  const redTeamCounts = redTeamSeverityCounts(redTeamCells);
-  const subjectLabelMap = new Map((Array.isArray(matrix?.subjects) ? matrix.subjects : []).map((item) => [item.id, item.label || item.id]));
-  const attributeLabelMap = new Map((Array.isArray(matrix?.attributes) ? matrix.attributes : []).map((item) => [item.id, item.label || item.id]));
-  const redTeamRows = Object.entries(redTeamCells)
-    .map(([key, entry]) => {
-      const [subjectId, attributeId] = String(key).split("::");
-      return {
-        key,
-        subjectLabel: subjectLabelMap.get(subjectId) || subjectId || "Unknown subject",
-        attributeLabel: attributeLabelMap.get(attributeId) || attributeId || "Unknown attribute",
-        threat: cleanText(entry?.threat),
-        missedRisk: cleanText(entry?.missedRisk),
-        severityIfWrong: cleanText(entry?.severityIfWrong).toLowerCase() || "medium",
-      };
-    })
-    .filter((entry) => entry.threat || entry.missedRisk);
 
   if (!hasSummary && !cells.length) {
     return (
@@ -154,44 +127,6 @@ export default function MatrixSummaryTab({ uc }) {
         </div>
       ) : null}
 
-      {(cleanText(redTeam?.redTeamVerdict) || redTeamRows.length) ? (
-        <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "10px 12px", display: "grid", gap: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-            Red Team
-          </div>
-          {cleanText(redTeam?.redTeamVerdict) ? (
-            <div style={{ fontSize: 12, color: "var(--ck-text)", lineHeight: 1.55 }}>
-              {redTeam.redTeamVerdict}
-            </div>
-          ) : null}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "var(--ck-muted)" }}>
-            <span>High severity: {redTeamCounts.high}</span>
-            <span>Medium severity: {redTeamCounts.medium}</span>
-            <span>Low severity: {redTeamCounts.low}</span>
-          </div>
-          {redTeamRows.length ? (
-            <div style={{ display: "grid", gap: 6 }}>
-              {redTeamRows.slice(0, 10).map((entry) => (
-                <div key={`matrix-red-team-${entry.key}`} style={{ border: "1px solid var(--ck-line)", background: "var(--ck-surface-soft)", borderRadius: 2, padding: "7px 9px" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>
-                    {entry.subjectLabel} - {entry.attributeLabel}
-                  </div>
-                  {entry.threat ? (
-                    <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                      <strong style={{ color: "var(--ck-text)" }}>Threat:</strong> {entry.threat}
-                    </div>
-                  ) : null}
-                  {entry.missedRisk ? (
-                    <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
-                      <strong style={{ color: "var(--ck-text)" }}>Missed risk:</strong> {entry.missedRisk}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }
