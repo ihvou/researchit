@@ -122,7 +122,7 @@ Return JSON:
           systemPrompt: runtime?.prompts?.analyst || "You produce memory-only matrix evidence.",
           userPrompt: prompt,
           tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
-          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 120000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 180000,
           // 1 retry enables parse-repair (injects "return strict JSON" notice on parse failure).
           // Queue splits on failure rather than retrying the same size, so this does not compound.
           maxRetries: 1,
