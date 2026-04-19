@@ -173,4 +173,4 @@ UI pipeline tracking uses canonical stage IDs in:
 ## 10. Related Documents
 
 - Quality objective: [quality-bar.md](./quality-bar.md)
-- Detailed stage policy/spec: [pipeline-architecture-suggestion.md](./pipeline-architecture-suggestion.md)
+- Canonical stage architecture and progress-step breakdown: [pipeline-architecture.md](./pipeline-architecture.md)

@@ -1,6 +1,7 @@
 import {
   callActorJson,
   clean,
+  combineTokenDiagnostics,
   ensureArray,
   normalizeArguments,
   normalizeConfidence,
@@ -177,6 +178,17 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     success: true,
     durationMs: 0,
   }));
+  const tokenBreakdown = successes.map((item) => ({
+    provider: clean(item?.route?.provider) || providerToLabel(item?.providerId),
+    model: clean(item?.route?.model),
+    retries: Number(item?.retries || 0),
+    ...item.tokenDiagnostics,
+  }));
+  const aggregatedTokens = combineTokenDiagnostics(tokenBreakdown);
+  if (aggregatedTokens) {
+    aggregatedTokens.breakdown = tokenBreakdown;
+  }
+  const totalRetries = successes.reduce((sum, item) => sum + Number(item?.retries || 0), 0);
 
   return {
     stageStatus: "ok",
@@ -196,11 +208,16 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       providersRequested: providers,
       providersSucceeded: successes.map((item) => item.providerId),
       providersFailed: failures.map((item) => item.providerId),
+      retries: totalRetries,
+      tokenDiagnostics: aggregatedTokens,
+      providerTokenBreakdown: tokenBreakdown,
     },
     io: {
       prompt,
       providerResponses: successes.map((item) => ({ provider: item.providerId, response: item.response })),
       providerFailures: failures.map((item) => ({ provider: item.providerId, error: String(item?.error?.message || item?.error || "") })),
     },
+    tokens: aggregatedTokens,
+    retries: totalRetries,
   };
 }

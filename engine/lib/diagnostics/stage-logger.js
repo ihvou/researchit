@@ -21,6 +21,7 @@ export function createStageRecord(stageId, meta = {}) {
     durationMs: 0,
     modelRoute: meta?.modelRoute || null,
     tokens: null,
+    cost: null,
     diagnostics: {},
   };
 }

@@ -1,6 +1,7 @@
 import {
   callActorJson,
   clean,
+  combineTokenDiagnostics,
   ensureArray,
   normalizeArguments,
   normalizeConfidence,
@@ -170,6 +171,11 @@ export async function runStage(context = {}) {
       attributes,
       chunkSize: startChunkSize,
     });
+    const aggregatedTokens = combineTokenDiagnostics(
+      matrix.diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
+    );
+    const totalRetries = matrix.diagnostics.reduce((sum, entry) => sum + Number(entry?.retries || 0), 0);
+    const modelRoute = matrix.diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
 
     return {
       stageStatus: "ok",
@@ -188,7 +194,13 @@ export async function runStage(context = {}) {
         mode: "matrix",
         cells: matrix.cells.length,
         chunks: matrix.diagnostics,
+        retries: totalRetries,
+        tokenDiagnostics: aggregatedTokens,
+        modelRoute,
       },
+      modelRoute,
+      tokens: aggregatedTokens,
+      retries: totalRetries,
     };
   }
 

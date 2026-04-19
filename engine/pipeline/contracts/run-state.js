@@ -168,7 +168,10 @@ export function createRunState({ input = {}, config = {}, runId = "" } = {}) {
       io: [],
       quality: {},
       cost: {
+        currency: "USD",
+        pricingVersion: "v1",
         estimatedByStage: {},
+        stageCostByStage: {},
         estimatedByProvider: {},
         totalEstimated: 0,
       },
@@ -471,6 +474,8 @@ export function toUseCaseState(state = {}) {
     decisionGradeGate: state?.decisionGate || null,
     decisionGradePassed: !!state?.decisionGradePassed,
     decisionGradeFailureReason: clean(state?.decisionGradeFailureReason),
+    llmCostCurrency: clean(state?.diagnostics?.cost?.currency) || "USD",
+    llmCostEstimatedUsd: Number(state?.diagnostics?.cost?.totalEstimated || 0),
     pipelineVersion: state?.pipelineVersion,
     artifactVersion: state?.artifactVersion,
   };

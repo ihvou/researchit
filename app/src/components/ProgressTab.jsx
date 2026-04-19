@@ -1,5 +1,7 @@
 import Spinner from "./Spinner";
 
+const SHOW_PROGRESS_COSTS = String(import.meta.env.VITE_SHOW_PROGRESS_COSTS ?? "true").trim().toLowerCase() !== "false";
+
 const HYBRID_FLOW = [
   {
     key: "submitted",
@@ -56,13 +58,13 @@ const HYBRID_FLOW = [
     key: "stage_06_source_verify",
     phase: "stage_06_source_verify",
     title: "Stage 06 - Source verification",
-    detail: "Deterministically verifies citation presence by URL fetch and content checks.",
+    detail: "Deterministically verifies source fetchability and citation matches.",
   },
   {
     key: "stage_07_source_assess",
     phase: "stage_07_source_assess",
     title: "Stage 07 - Source assessment",
-    detail: "Applies source-quality caps and confidence penalties after verification.",
+    detail: "Applies source-quality adjustments before recovery and critic cycle.",
   },
   {
     key: "stage_08_recover",
@@ -80,7 +82,7 @@ const HYBRID_FLOW = [
     key: "stage_10_coherence",
     phase: "stage_10_coherence",
     title: "Stage 10 - Coherence",
-    detail: "Critic checks cross-unit consistency and contradiction patterns.",
+    detail: "Critic audits cross-unit consistency and contradiction patterns.",
   },
   {
     key: "stage_11_challenge",
@@ -92,7 +94,7 @@ const HYBRID_FLOW = [
     key: "stage_12_counter_case",
     phase: "stage_12_counter_case",
     title: "Stage 12 - Counter-case",
-    detail: "Critic searches disconfirming evidence and missed risks.",
+    detail: "Critic gathers disconfirming evidence and missed-risk signals.",
   },
   {
     key: "stage_13_defend",
@@ -110,7 +112,7 @@ const HYBRID_FLOW = [
     key: "stage_15_finalize",
     phase: "stage_15_finalize",
     title: "Stage 15 - Finalize",
-    detail: "Applies decision-grade gates and emits final artifact or strict abort.",
+    detail: "Applies quality gates and emits final artifact or terminal outcome.",
   },
   {
     key: "complete",
@@ -182,13 +184,13 @@ const MATRIX_FLOW = [
     key: "stage_06_source_verify",
     phase: "stage_06_source_verify",
     title: "Stage 06 - Source verification",
-    detail: "Deterministically verifies matrix source URLs and quote/name matches.",
+    detail: "Deterministically verifies source fetchability and citation matches.",
   },
   {
     key: "stage_07_source_assess",
     phase: "stage_07_source_assess",
     title: "Stage 07 - Source assessment",
-    detail: "Applies source-quality caps and confidence penalties.",
+    detail: "Applies source-quality adjustments before recovery and critic cycle.",
   },
   {
     key: "stage_08_recover",
@@ -206,7 +208,7 @@ const MATRIX_FLOW = [
     key: "stage_10_coherence",
     phase: "stage_10_coherence",
     title: "Stage 10 - Coherence",
-    detail: "Critic audits cross-row/column coherence and contradictions.",
+    detail: "Critic audits cross-row and cross-column coherence and contradictions.",
   },
   {
     key: "stage_11_challenge",
@@ -218,7 +220,7 @@ const MATRIX_FLOW = [
     key: "stage_12_counter_case",
     phase: "stage_12_counter_case",
     title: "Stage 12 - Counter-case",
-    detail: "Critic finds disconfirming evidence and missed risks.",
+    detail: "Critic gathers disconfirming evidence and missed-risk signals.",
   },
   {
     key: "stage_13_defend",
@@ -236,7 +238,7 @@ const MATRIX_FLOW = [
     key: "stage_15_finalize",
     phase: "stage_15_finalize",
     title: "Stage 15 - Finalize",
-    detail: "Applies decision-grade matrix gate and terminal status.",
+    detail: "Applies quality gates and emits final artifact or terminal outcome.",
   },
   {
     key: "complete",
@@ -375,6 +377,60 @@ function percent(value, decimals = 0) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "-";
   return `${(n * 100).toFixed(decimals)}%`;
+}
+
+function formatInteger(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.max(0, Math.round(n)));
+}
+
+function formatUsd(value, decimals = 4) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `$${n.toFixed(decimals)}`;
+}
+
+function formatRate(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `$${n.toFixed(2)}/1M`;
+}
+
+function buildStageRecordMap(uc = {}) {
+  const map = new Map();
+  const stages = Array.isArray(uc?.diagnostics?.stages) ? uc.diagnostics.stages : [];
+  stages.forEach((entry) => {
+    const id = String(entry?.stage || "").trim();
+    if (!id) return;
+    map.set(id, entry);
+  });
+  return map;
+}
+
+function stageCostSummary(record = null) {
+  if (!record || typeof record !== "object") return null;
+  const cost = record?.cost && typeof record.cost === "object" ? record.cost : null;
+  const tokens = record?.tokens && typeof record.tokens === "object" ? record.tokens : null;
+  const inputTokens = Number(cost?.inputTokens ?? tokens?.inputTokens);
+  const outputTokens = Number(cost?.outputTokens ?? tokens?.outputTokens);
+  const totalTokens = Number(cost?.totalTokens ?? tokens?.totalTokens);
+  const estimatedCostUsd = Number(cost?.estimatedCostUsd);
+
+  const singlePrice = Number(cost?.inputRatePer1MUsd);
+  const singlePriceOut = Number(cost?.outputRatePer1MUsd);
+  const blendedPrice = Number(cost?.blendedRatePer1MUsd);
+  const priceLabel = Number.isFinite(singlePrice) && Number.isFinite(singlePriceOut)
+    ? `${formatRate(singlePrice)} in | ${formatRate(singlePriceOut)} out`
+    : (Number.isFinite(blendedPrice) ? `~${formatRate(blendedPrice)}` : "-");
+
+  return {
+    tokensLabel: Number.isFinite(totalTokens)
+      ? `${formatInteger(totalTokens)} (${formatInteger(inputTokens)} in / ${formatInteger(outputTokens)} out)`
+      : "-",
+    priceLabel,
+    costLabel: Number.isFinite(estimatedCostUsd) ? formatUsd(estimatedCostUsd) : "-",
+  };
 }
 
 export function diagnosticRows(uc, outputMode = "scorecard") {
@@ -602,6 +658,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
   const rank = phaseRankMap(flow);
   const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
   const currentIdx = rank[resolvedPhase] ?? 0;
+  const stageRecords = buildStageRecordMap(uc);
 
   return (
     <div style={{ background: "var(--ck-surface)", border: "1px solid var(--ck-line)", borderRadius: 2, padding: "14px 16px", width: "100%", maxWidth: "100%", minWidth: 0 }}>
@@ -622,6 +679,11 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
         {flow.map((step, idx) => {
           const state = getStepState(step, idx, currentIdx, uc);
           const isActive = state === "active";
+          const stageRecord = stageRecords.get(step.phase) || null;
+          const shouldShowCost = SHOW_PROGRESS_COSTS && String(step.phase || "").startsWith("stage_");
+          const costSummary = shouldShowCost
+            ? (stageCostSummary(stageRecord) || { tokensLabel: "-", priceLabel: "-", costLabel: "-" })
+            : null;
           return (
             <div
               key={step.key}
@@ -646,23 +708,32 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>{step.title}</div>
                 <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>{step.detail}</div>
               </div>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: stateColor(state),
-                  background: stateBackground(state),
-                  border: "1px solid var(--ck-line)",
-                  borderRadius: 2,
-                  padding: "2px 7px",
-                  whiteSpace: "nowrap",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                {isActive ? <Spinner size={9} color="var(--ck-text)" /> : null}
-                {stateLabel(state)}
-              </span>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: stateColor(state),
+                    background: stateBackground(state),
+                    border: "1px solid var(--ck-line)",
+                    borderRadius: 2,
+                    padding: "2px 7px",
+                    whiteSpace: "nowrap",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}>
+                  {isActive ? <Spinner size={9} color="var(--ck-text)" /> : null}
+                  {stateLabel(state)}
+                </span>
+                {costSummary ? (
+                  <div style={{ fontSize: 10, color: "var(--ck-muted)", textAlign: "right", lineHeight: 1.35 }}>
+                    <div>Tokens: {costSummary.tokensLabel}</div>
+                    <div>Price: {costSummary.priceLabel}</div>
+                    <div>Cost: {costSummary.costLabel}</div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           );
         })}

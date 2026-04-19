@@ -1,6 +1,7 @@
 import {
   callActorJson,
   clean,
+  combineTokenDiagnostics,
   ensureArray,
   normalizeArguments,
   normalizeConfidence,
@@ -221,6 +222,11 @@ export async function runStage(context = {}) {
     });
     const normalizedWeb = matrixWeb.cells;
     const merged = mergeMatrixCells(ensureArray(memory?.matrix?.cells), normalizedWeb);
+    const aggregatedTokens = combineTokenDiagnostics(
+      matrixWeb.diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
+    );
+    const totalRetries = matrixWeb.diagnostics.reduce((sum, entry) => sum + Number(entry?.retries || 0), 0);
+    const modelRoute = matrixWeb.diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
     return {
       stageStatus: "ok",
       reasonCodes: matrixWeb.reasonCodes,
@@ -243,7 +249,13 @@ export async function runStage(context = {}) {
         mode: "matrix",
         cells: merged.length,
         chunks: matrixWeb.diagnostics,
+        retries: totalRetries,
+        tokenDiagnostics: aggregatedTokens,
+        modelRoute,
       },
+      modelRoute,
+      tokens: aggregatedTokens,
+      retries: totalRetries,
     };
   }
 

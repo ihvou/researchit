@@ -1,6 +1,7 @@
 import {
   callActorJson,
   clean,
+  combineTokenDiagnostics,
   ensureArray,
   normalizeArguments,
   normalizeConfidence,
@@ -210,6 +211,9 @@ export async function runStage(context = {}) {
 
     const patches = [];
     const matrixReasonCodes = [];
+    const tokenDiagnosticsList = [];
+    const modelRoutes = [];
+    let totalRetries = 0;
     for (const group of groups) {
       const prompt = `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
@@ -242,7 +246,12 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       });
       matrixReasonCodes.push(...ensureArray(result?.reasonCodes));
       patches.push(...normalizeMatrixPatch(result?.parsed));
+      tokenDiagnosticsList.push(result?.tokenDiagnostics || null);
+      if (result?.route) modelRoutes.push(result.route);
+      totalRetries += Number(result?.retries || 0);
     }
+    const aggregatedTokens = combineTokenDiagnostics(tokenDiagnosticsList);
+    const modelRoute = modelRoutes[0] || null;
 
     return {
       stageStatus: "ok",
@@ -262,7 +271,13 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         requestedBudget: selection.requestedBudget,
         effectiveBudget: selection.effectiveBudget,
         attributeCoverageFloorReserved: selection.floorReserved,
+        retries: totalRetries,
+        tokenDiagnostics: aggregatedTokens,
+        modelRoute,
       },
+      modelRoute,
+      tokens: aggregatedTokens,
+      retries: totalRetries,
     };
   }
 

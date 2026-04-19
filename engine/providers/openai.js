@@ -2,6 +2,41 @@ function normalizeMessageContent(content) {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
+function toFinite(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeUsage(raw = {}) {
+  if (!raw || typeof raw !== "object") return null;
+  const inputTokens = toFinite(
+    raw.input_tokens
+    ?? raw.prompt_tokens
+    ?? raw.promptTokens
+    ?? raw.inputTokens,
+    0
+  );
+  const outputTokens = toFinite(
+    raw.output_tokens
+    ?? raw.completion_tokens
+    ?? raw.outputTokens
+    ?? raw.completionTokens,
+    0
+  );
+  const totalTokens = toFinite(
+    raw.total_tokens
+    ?? raw.totalTokens
+    ?? (inputTokens + outputTokens),
+    0
+  );
+  if (!inputTokens && !outputTokens && !totalTokens) return null;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens || (inputTokens + outputTokens),
+  };
+}
+
 export function buildChatMessages(messages, systemPrompt) {
   return [
     { role: "system", content: systemPrompt },
@@ -128,6 +163,7 @@ async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, ma
       model,
       liveSearchUsed: false,
       webSearchCalls: 0,
+      usage: normalizeUsage(data?.usage),
       ...extraMeta,
     },
   };
@@ -159,6 +195,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
       model,
       liveSearchUsed: false,
       webSearchCalls: 0,
+      usage: normalizeUsage(data?.usage),
       ...extraMeta,
     },
   };
@@ -201,6 +238,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
         model,
         liveSearchUsed: true,
         webSearchCalls: countWebSearchCalls(data),
+        usage: normalizeUsage(data?.usage),
       },
     };
   }

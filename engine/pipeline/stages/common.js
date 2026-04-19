@@ -16,6 +16,50 @@ export function ensureArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function toFiniteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function estimateTokensFromText(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return 0;
+  return Math.max(1, Math.ceil(raw.length / 4));
+}
+
+function normalizeUsage(meta = {}) {
+  const usage = meta?.usage && typeof meta.usage === "object"
+    ? meta.usage
+    : (meta?.tokenUsage && typeof meta.tokenUsage === "object" ? meta.tokenUsage : {});
+  const inputTokens = toFiniteNumber(
+    usage?.inputTokens
+    ?? usage?.input_tokens
+    ?? usage?.prompt_tokens
+    ?? usage?.promptTokenCount,
+    0
+  );
+  const outputTokens = toFiniteNumber(
+    usage?.outputTokens
+    ?? usage?.output_tokens
+    ?? usage?.completion_tokens
+    ?? usage?.candidatesTokenCount,
+    0
+  );
+  const totalTokens = toFiniteNumber(
+    usage?.totalTokens
+    ?? usage?.total_tokens
+    ?? usage?.totalTokenCount
+    ?? (inputTokens + outputTokens),
+    0
+  );
+  if (!inputTokens && !outputTokens && !totalTokens) return null;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens || (inputTokens + outputTokens),
+  };
+}
+
 export function uniqBy(items = [], keyFn = (item) => item) {
   const out = [];
   const seen = new Set();
@@ -26,6 +70,61 @@ export function uniqBy(items = [], keyFn = (item) => item) {
     out.push(item);
   });
   return out;
+}
+
+export function combineTokenDiagnostics(items = []) {
+  const list = ensureArray(items).filter((item) => item && typeof item === "object");
+  if (!list.length) return null;
+
+  let estimatedInput = 0;
+  let estimatedOutput = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let retries = 0;
+  let tokenBudget = 0;
+  let splitApplied = false;
+  let compactionApplied = false;
+  let sawProviderUsage = false;
+  let sawEstimated = false;
+
+  list.forEach((item) => {
+    estimatedInput += toFiniteNumber(item?.estimatedInput, 0);
+    estimatedOutput += toFiniteNumber(item?.estimatedOutput, 0);
+    inputTokens += toFiniteNumber(item?.inputTokens, 0);
+    outputTokens += toFiniteNumber(item?.outputTokens, 0);
+    totalTokens += toFiniteNumber(item?.totalTokens, 0);
+    retries += toFiniteNumber(item?.retries, 0);
+    tokenBudget += toFiniteNumber(item?.tokenBudget, 0);
+    splitApplied = splitApplied || !!item?.splitApplied;
+    compactionApplied = compactionApplied || !!item?.compactionApplied;
+    const source = clean(item?.tokenSource).toLowerCase();
+    if (source === "provider_usage") sawProviderUsage = true;
+    if (source === "estimated_text") sawEstimated = true;
+    if (source === "mixed") {
+      sawProviderUsage = true;
+      sawEstimated = true;
+    }
+  });
+
+  const inferredTotal = totalTokens || (inputTokens + outputTokens);
+  let tokenSource = "estimated_text";
+  if (sawProviderUsage && sawEstimated) tokenSource = "mixed";
+  else if (sawProviderUsage) tokenSource = "provider_usage";
+
+  return {
+    estimatedInput,
+    estimatedOutput,
+    inputTokens,
+    outputTokens,
+    totalTokens: inferredTotal,
+    retries,
+    tokenBudget: tokenBudget || null,
+    splitApplied,
+    compactionApplied,
+    tokenSource,
+    calls: list.length,
+  };
 }
 
 function chooseTransportCall(transport, actor = "analyst") {
@@ -166,6 +265,22 @@ export async function callActorJson({
     throw err;
   }
 
+  const estimatedInput = toFiniteNumber(promptPrep.estimatedTokens, 0);
+  const estimatedOutput = estimateTokensFromText(execution?.result?.text || "");
+  const usage = normalizeUsage(execution?.result?.meta || {});
+
+  let inputTokens = usage?.inputTokens ?? estimatedInput;
+  let outputTokens = usage?.outputTokens ?? estimatedOutput;
+  let totalTokens = usage?.totalTokens ?? (inputTokens + outputTokens);
+
+  if (usage?.totalTokens != null && usage.inputTokens != null && usage.outputTokens == null) {
+    outputTokens = Math.max(0, usage.totalTokens - inputTokens);
+  }
+  if (usage?.totalTokens != null && usage.outputTokens != null && usage.inputTokens == null) {
+    inputTokens = Math.max(0, usage.totalTokens - outputTokens);
+  }
+  if (!totalTokens) totalTokens = inputTokens + outputTokens;
+
   return {
     ...execution.result,
     route,
@@ -173,10 +288,16 @@ export async function callActorJson({
     durationMs: execution.durationMs,
     reasonCodes: normalizeReasonCodes(reasonCodes),
     tokenDiagnostics: {
-      estimatedInput: promptPrep.estimatedTokens,
+      estimatedInput,
+      estimatedOutput,
+      inputTokens: toFiniteNumber(inputTokens, 0),
+      outputTokens: toFiniteNumber(outputTokens, 0),
+      totalTokens: toFiniteNumber(totalTokens, 0),
       tokenBudget,
       splitApplied: !!promptPrep.splitApplied,
       compactionApplied: reasonCodes.includes(REASON_CODES.PROMPT_COMPACTION_APPLIED),
+      tokenSource: usage ? "provider_usage" : "estimated_text",
+      usage,
     },
   };
 }

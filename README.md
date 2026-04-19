@@ -75,7 +75,7 @@ All run types share this stage order:
 
 Native vs deep-assist differs only inside Stage 03 (03a/03b vs 03c); downstream stages are shared.
 
-For the full stage contract and policy details, see [docs/pipeline-architecture-suggestion.md](docs/pipeline-architecture-suggestion.md).
+For the canonical pipeline architecture and stage breakdown, see [docs/pipeline-architecture.md](docs/pipeline-architecture.md).
 
 ## Scorecard and Matrix Parity
 
@@ -180,6 +180,12 @@ Minimum for OpenAI-only experimentation:
 OPENAI_API_KEY=sk-...
 ```
 
+Optional UI feature flag:
+
+```bash
+VITE_SHOW_PROGRESS_COSTS=true   # set false to hide per-stage tokens/price/cost in Progress tab
+```
+
 Recommended for canonical multi-provider routing:
 
 ```bash
@@ -207,5 +213,5 @@ Primary architecture contract:
 Quality policy:
 - [docs/quality-bar.md](docs/quality-bar.md)
 
-Pipeline spec and stage-level details:
-- [docs/pipeline-architecture-suggestion.md](docs/pipeline-architecture-suggestion.md)
+Pipeline architecture and stage-level breakdown:
+- [docs/pipeline-architecture.md](docs/pipeline-architecture.md)

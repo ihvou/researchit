@@ -13,6 +13,7 @@ import {
   pushReasonCodes,
 } from "../lib/diagnostics/stage-logger.js";
 import { buildDebugBundle } from "../lib/diagnostics/debug-bundle.js";
+import { estimateStageCost } from "../lib/diagnostics/cost-estimator.js";
 
 import { runStage as run01, STAGE_ID as STAGE_01_ID, STAGE_TITLE as STAGE_01_TITLE } from "./stages/01-intake.js";
 import { runStage as run01b, STAGE_ID as STAGE_01B_ID, STAGE_TITLE as STAGE_01B_TITLE } from "./stages/01b-subject-discovery.js";
@@ -172,6 +173,61 @@ function appendQualityReasonCodes(state = {}, reasonCodes = []) {
   return state;
 }
 
+function appendCostDiagnostics(state = {}, stageRecord = {}) {
+  if (!state?.diagnostics || typeof state.diagnostics !== "object") return state;
+  const stageId = clean(stageRecord?.stage);
+  const stageCost = stageRecord?.cost && typeof stageRecord.cost === "object"
+    ? stageRecord.cost
+    : null;
+  if (!stageId || !stageCost) return state;
+
+  const current = state.diagnostics.cost && typeof state.diagnostics.cost === "object"
+    ? state.diagnostics.cost
+    : {};
+
+  const estimatedByStage = current.estimatedByStage && typeof current.estimatedByStage === "object"
+    ? { ...current.estimatedByStage }
+    : {};
+  const stageCostByStage = current.stageCostByStage && typeof current.stageCostByStage === "object"
+    ? { ...current.stageCostByStage }
+    : {};
+  const estimatedByProvider = current.estimatedByProvider && typeof current.estimatedByProvider === "object"
+    ? { ...current.estimatedByProvider }
+    : {};
+
+  estimatedByStage[stageId] = Number(stageCost?.estimatedCostUsd || 0);
+  stageCostByStage[stageId] = stageCost;
+
+  const registerProviderCost = (providerKey, amount) => {
+    const provider = clean(providerKey).toLowerCase() || "unknown";
+    const currentAmount = Number(estimatedByProvider[provider] || 0);
+    estimatedByProvider[provider] = currentAmount + Number(amount || 0);
+  };
+
+  if (Array.isArray(stageCost?.breakdown) && stageCost.breakdown.length) {
+    stageCost.breakdown.forEach((entry) => {
+      registerProviderCost(entry?.provider, entry?.estimatedCostUsd);
+    });
+  } else if (stageCost?.provider) {
+    registerProviderCost(stageCost.provider, stageCost.estimatedCostUsd);
+  }
+
+  const totalEstimated = Object.values(estimatedByStage).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+
+  state.diagnostics.cost = {
+    currency: clean(stageCost?.currency) || clean(current?.currency) || "USD",
+    pricingVersion: clean(current?.pricingVersion) || "v1",
+    estimatedByStage,
+    stageCostByStage,
+    estimatedByProvider,
+    totalEstimated,
+  };
+  return state;
+}
+
 function enforceStrictReasonCodeInvariant(state = {}, reasonCodes = []) {
   const normalized = normalizeReasonCodes(reasonCodes);
   if (!state?.strictQuality) return normalized;
@@ -271,7 +327,13 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         tokens: result?.tokens || null,
         diagnostics: result?.diagnostics || {},
       });
+      completedRecord.cost = estimateStageCost({
+        tokens: completedRecord.tokens,
+        modelRoute: completedRecord.modelRoute,
+        config: runtime?.config || state?.config || {},
+      });
       appendStageRecord(state, completedRecord);
+      appendCostDiagnostics(state, completedRecord);
 
       appendProgressRecord(state, {
         stageId: stage.id,
@@ -300,6 +362,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         },
       });
       appendStageRecord(state, completedRecord);
+      appendCostDiagnostics(state, completedRecord);
       appendQualityReasonCodes(state, reasonCodes);
       pushReasonCodes(state, reasonCodes);
       appendProgressRecord(state, {

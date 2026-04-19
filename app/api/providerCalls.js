@@ -7,6 +7,23 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function toFinite(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeUsage({ inputTokens = 0, outputTokens = 0, totalTokens = 0 } = {}) {
+  const input = toFinite(inputTokens, 0);
+  const output = toFinite(outputTokens, 0);
+  const total = toFinite(totalTokens, input + output) || (input + output);
+  if (!input && !output && !total) return null;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+  };
+}
+
 function normalizeMessageContent(content) {
   if (typeof content === "string") return content;
   return JSON.stringify(content);
@@ -128,6 +145,11 @@ async function callAnthropic({
       model: resolvedModel,
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      usage: normalizeUsage({
+        inputTokens: data?.usage?.input_tokens,
+        outputTokens: data?.usage?.output_tokens,
+        totalTokens: (toFinite(data?.usage?.input_tokens, 0) + toFinite(data?.usage?.output_tokens, 0)),
+      }),
     },
   };
 }
@@ -247,6 +269,11 @@ async function callGemini({
       model: cleanText(model),
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      usage: normalizeUsage({
+        inputTokens: data?.usageMetadata?.promptTokenCount,
+        outputTokens: data?.usageMetadata?.candidatesTokenCount,
+        totalTokens: data?.usageMetadata?.totalTokenCount,
+      }),
     },
   };
 }
