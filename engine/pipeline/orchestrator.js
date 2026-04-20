@@ -439,6 +439,14 @@ function toSerializableStageResult(result = {}) {
   };
 }
 
+function isCacheableStageResult(result = {}) {
+  const stageStatus = clean(result?.stageStatus).toLowerCase();
+  if (stageStatus === "failed" || stageStatus === "error") return false;
+  const uiStatus = clean(result?.statePatch?.ui?.status).toLowerCase();
+  if (uiStatus === "error") return false;
+  return true;
+}
+
 function ensureCacheDiagnosticsContainer(state = {}) {
   if (!state?.diagnostics || typeof state.diagnostics !== "object") return {};
   const existing = state.diagnostics.cacheDiagnostics && typeof state.diagnostics.cacheDiagnostics === "object"
@@ -617,9 +625,17 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
               missReason: clean(entry?.missReason) || (entry?.cacheHit ? null : "no_entry"),
             };
             if (entry?.cacheHit && entry?.output && typeof entry.output === "object") {
-              result = entry.output;
-              fromCache = true;
-              cacheBytes = JSON.stringify(entry.output).length;
+              if (isCacheableStageResult(entry.output)) {
+                result = entry.output;
+                fromCache = true;
+                cacheBytes = JSON.stringify(entry.output).length;
+              } else {
+                cacheDiagnostics = {
+                  ...cacheDiagnostics,
+                  cacheHit: false,
+                  missReason: "stale_failed_entry",
+                };
+              }
             }
           }
         } catch (cacheErr) {
@@ -656,7 +672,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
 
       if (result?.io) appendIoRecord(state, { stageId: stage.id, ...result.io });
 
-      if (!fromCache && cacheEnabled && typeof runtime.stageCache?.set === "function") {
+      if (!fromCache && cacheEnabled && isCacheableStageResult(result) && typeof runtime.stageCache?.set === "function") {
         try {
           const serializable = toSerializableStageResult(result);
           cacheBytes = JSON.stringify(serializable).length;
