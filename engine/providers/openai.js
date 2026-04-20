@@ -161,6 +161,53 @@ export function countWebSearchCalls(payload) {
   return count;
 }
 
+function isHttpUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function extractWebSearchUrls(payload = {}) {
+  const urls = [];
+  const stack = [payload];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      for (const item of node) stack.push(item);
+      continue;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === "string" && (key === "url" || key === "uri" || key.endsWith("_url"))) {
+        if (isHttpUrl(value)) urls.push(String(value).trim());
+      } else if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return [...new Set(urls)];
+}
+
+function sourcesFromUrls(urls = []) {
+  return (Array.isArray(urls) ? urls : [])
+    .map((url, idx) => {
+      const value = String(url || "").trim();
+      if (!value) return null;
+      return {
+        name: `OpenAI source ${idx + 1}`,
+        quote: "",
+        url: value,
+        sourceType: "independent",
+      };
+    })
+    .filter(Boolean);
+}
+
 async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl, extraMeta = {} }) {
   const response = await fetch(`${baseUrl}/v1/responses`, {
     method: "POST",
@@ -270,6 +317,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
 
     return {
       text,
+      sources: sourcesFromUrls(extractWebSearchUrls(data)),
       meta: {
         model,
         liveSearchUsed: true,

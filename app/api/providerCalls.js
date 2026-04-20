@@ -71,6 +71,38 @@ function uniqueSourcesFromUrls(urls = [], labelPrefix = "Web source") {
   return out;
 }
 
+function isHttpUrl(value = "") {
+  const raw = cleanText(value);
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function extractHttpUrlsDeep(payload = {}) {
+  const urls = [];
+  const stack = [payload];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      node.forEach((item) => stack.push(item));
+      continue;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === "string" && (key === "url" || key === "uri" || key.endsWith("_url"))) {
+        if (isHttpUrl(value)) urls.push(cleanText(value));
+      } else if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return urls;
+}
+
 async function callAnthropic({
   apiKey,
   model,
@@ -141,14 +173,20 @@ async function callAnthropic({
   }
 
   const webSearchCalls = Number(data?.usage?.server_tool_use?.web_search_requests || 0);
+  const sources = uniqueSourcesFromUrls(extractHttpUrlsDeep(data), "Anthropic source");
   return {
     text,
-    sources: [],
+    sources,
     meta: {
       providerId: "anthropic",
       model: resolvedModel,
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      groundedSourcesResolved: {
+        total: sources.length,
+        resolved: sources.length,
+        unresolved: 0,
+      },
       usage: normalizeUsage({
         inputTokens: data?.usage?.input_tokens,
         outputTokens: data?.usage?.output_tokens,
@@ -212,7 +250,129 @@ function extractGeminiGroundingSources(data = {}) {
       if (url) urls.push(url);
     });
   });
-  return uniqueSourcesFromUrls(urls, "Grounded source");
+  return urls;
+}
+
+function isGeminiGroundingRedirect(url = "") {
+  const value = cleanText(url).toLowerCase();
+  return value.includes("vertexaisearch.cloud.google.com/grounding-api-redirect")
+    || value.includes("grounding-api-redirect");
+}
+
+async function resolveCanonicalUrl(url = "", timeoutMs = 1800) {
+  const input = cleanText(url);
+  if (!isHttpUrl(input)) {
+    return {
+      originalRedirectUri: input,
+      url: input,
+      resolutionStatus: "invalid",
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch (_) {
+      // no-op
+    }
+  }, Math.max(250, Number(timeoutMs) || 1800));
+
+  const headers = {
+    "User-Agent": "Researchit/1.0 (+https://github.com/ihvou/researchit)",
+    Accept: "text/html, text/plain;q=0.9, application/json;q=0.7, */*;q=0.5",
+  };
+
+  try {
+    let response;
+    try {
+      response = await fetch(input, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: controller.signal,
+        headers,
+      });
+      if (response.status === 405 || response.status === 501) {
+        response = await fetch(input, {
+          method: "GET",
+          redirect: "follow",
+          signal: controller.signal,
+          headers,
+        });
+      }
+    } catch (_) {
+      response = await fetch(input, {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers,
+      });
+    }
+    const resolved = cleanText(response?.url || input);
+    const unresolved = !resolved || isGeminiGroundingRedirect(resolved);
+    return {
+      originalRedirectUri: input,
+      url: unresolved ? input : resolved,
+      resolutionStatus: unresolved ? "unresolved" : "resolved",
+      responseStatus: Number(response?.status || 0),
+    };
+  } catch (_) {
+    return {
+      originalRedirectUri: input,
+      url: input,
+      resolutionStatus: "unresolved",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveCanonicalGeminiSources(urls = [], { concurrency = 8, timeoutMs = 1800 } = {}) {
+  const inputs = Array.isArray(urls) ? urls.filter((url) => isHttpUrl(url)) : [];
+  if (!inputs.length) {
+    return {
+      sources: [],
+      diagnostics: { total: 0, resolved: 0, unresolved: 0 },
+    };
+  }
+
+  const uniqueInputs = [...new Set(inputs.map((url) => cleanText(url)).filter(Boolean))];
+  const out = [];
+  let cursor = 0;
+
+  const workers = Array.from({ length: Math.max(1, Math.min(Number(concurrency) || 8, 16)) }, async () => {
+    while (cursor < uniqueInputs.length) {
+      const idx = cursor;
+      cursor += 1;
+      const raw = uniqueInputs[idx];
+      const entry = await resolveCanonicalUrl(raw, timeoutMs);
+      out.push({
+        name: "Grounded source",
+        quote: "",
+        sourceType: "independent",
+        originalRedirectUri: cleanText(entry?.originalRedirectUri || raw),
+        url: cleanText(entry?.url || raw),
+        resolutionStatus: cleanText(entry?.resolutionStatus || "unresolved"),
+      });
+    }
+  });
+  await Promise.all(workers);
+
+  const deduped = [];
+  const seen = new Set();
+  out.forEach((source) => {
+    const key = `${cleanText(source?.url)}|${cleanText(source?.originalRedirectUri)}`;
+    if (!source?.url || seen.has(key)) return;
+    seen.add(key);
+    deduped.push(source);
+  });
+
+  const diagnostics = {
+    total: deduped.length,
+    resolved: deduped.filter((source) => cleanText(source?.resolutionStatus) === "resolved").length,
+    unresolved: deduped.filter((source) => cleanText(source?.resolutionStatus) !== "resolved").length,
+  };
+  return { sources: deduped, diagnostics };
 }
 
 async function callGemini({
@@ -270,14 +430,20 @@ async function callGemini({
   }
 
   const webSearchCalls = countGeminiSearchCalls(data);
+  const groundingUrls = extractGeminiGroundingSources(data);
+  const grounded = await resolveCanonicalGeminiSources(groundingUrls, {
+    concurrency: 8,
+    timeoutMs: 1800,
+  });
   return {
     text,
-    sources: extractGeminiGroundingSources(data),
+    sources: grounded.sources,
     meta: {
       providerId: "gemini",
       model: cleanText(model),
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      groundedSourcesResolved: grounded.diagnostics,
       usage: normalizeUsage({
         inputTokens: data?.usageMetadata?.promptTokenCount,
         outputTokens: data?.usageMetadata?.candidatesTokenCount,

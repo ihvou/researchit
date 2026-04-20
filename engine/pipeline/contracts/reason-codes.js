@@ -14,9 +14,12 @@ export const REASON_CODES = {
   RESPONSE_PARSE_FAILED: "response_parse_failed",
   RESPONSE_SCHEMA_INVALID: "response_schema_invalid",
   PARTIAL_PAYLOAD_REJECTED: "partial_payload_rejected",
+  CONFIDENCE_SCALE_COERCED: "confidence_scale_coerced",
+  DEFEND_NOTE_MISSING: "defend_note_missing",
 
   COVERAGE_CATASTROPHIC: "coverage_catastrophic",
   DECISION_GATE_FAILED: "decision_gate_failed",
+  DECISION_GATE_FABRICATION_FLAGGED: "decision_gate_fabrication_flagged",
   CRITICAL_UNITS_UNRESOLVED: "critical_units_unresolved",
   RECONCILE_REJECTED_NO_LIFT: "reconcile_rejected_no_lift",
   RECOVERY_BUDGET_STARVED: "recovery_budget_starved",

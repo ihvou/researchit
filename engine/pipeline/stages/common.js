@@ -86,6 +86,8 @@ export function combineTokenDiagnostics(items = []) {
   let splitApplied = false;
   let compactionApplied = false;
   let webSearchCalls = 0;
+  let groundedSourceCount = 0;
+  let confidenceScaleCoerced = 0;
   let sawProviderUsage = false;
   let sawEstimated = false;
 
@@ -100,6 +102,8 @@ export function combineTokenDiagnostics(items = []) {
     splitApplied = splitApplied || !!item?.splitApplied;
     compactionApplied = compactionApplied || !!item?.compactionApplied;
     webSearchCalls += toFiniteNumber(item?.webSearchCalls, 0);
+    groundedSourceCount += toFiniteNumber(item?.groundedSourceCount, 0);
+    confidenceScaleCoerced += toFiniteNumber(item?.confidenceScaleCoerced, 0);
     const source = clean(item?.tokenSource).toLowerCase();
     if (source === "provider_usage") sawProviderUsage = true;
     if (source === "estimated_text") sawEstimated = true;
@@ -125,6 +129,8 @@ export function combineTokenDiagnostics(items = []) {
     splitApplied,
     compactionApplied,
     webSearchCalls,
+    groundedSourceCount,
+    confidenceScaleCoerced,
     tokenSource,
     calls: list.length,
   };
@@ -233,7 +239,10 @@ export async function callActorJson({
       return {
         parsed,
         text,
-        meta: response?.meta || null,
+        meta: {
+          ...(response?.meta && typeof response.meta === "object" ? response.meta : {}),
+          groundedSources: ensureArray(response?.sources || response?.meta?.groundedSources),
+        },
       };
     },
     {
@@ -313,6 +322,7 @@ export async function callActorJson({
       provider: clean(meta?.providerId || route.provider).toLowerCase(),
       model: clean(meta?.model || route.model),
       webSearchCalls: toFiniteNumber(meta?.webSearchCalls, 0),
+      groundedSourceCount: groundedSourceCount(meta?.groundedSources),
       liveSearchUsed: !!meta?.liveSearchUsed,
     },
   };
@@ -324,10 +334,24 @@ export function compactText(value, maxLen = 1400) {
   return `${text.slice(0, Math.max(64, maxLen)).trimEnd()}...`;
 }
 
-export function normalizeConfidence(value) {
-  const lower = clean(value).toLowerCase();
+export function normalizeConfidence(value, stats = null) {
+  const raw = value;
+  const lower = clean(raw).toLowerCase();
   if (lower.startsWith("h")) return "high";
   if (lower.startsWith("m")) return "medium";
+  if (lower.startsWith("l")) return "low";
+
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    if (typeof raw === "number" || /^[+-]?\d+(\.\d+)?$/.test(String(raw || "").trim())) {
+      if (stats && typeof stats === "object") {
+        stats.coerced = Number(stats.coerced || 0) + 1;
+      }
+      if (numeric <= 2) return "low";
+      if (numeric >= 4) return "high";
+      return "medium";
+    }
+  }
   return "low";
 }
 
@@ -357,7 +381,10 @@ export function normalizeSource(raw = {}) {
     sourceType: clean(raw?.sourceType || raw?.type || "").toLowerCase() || undefined,
     provider: clean(raw?.provider || "") || undefined,
     verificationStatus: clean(raw?.verificationStatus || "") || undefined,
+    verificationTier: clean(raw?.verificationTier || "") || undefined,
     citationStatus: normalizeCitationStatus(raw?.citationStatus),
+    groundedByProvider: raw?.groundedByProvider === true,
+    groundedSetAvailable: raw?.groundedSetAvailable === true,
     displayStatus: clean(raw?.displayStatus || "") || undefined,
     publishedYear: Number.isFinite(Number(raw?.publishedYear)) ? Number(raw.publishedYear) : null,
   };
@@ -410,4 +437,61 @@ export function summarizeSourceUniverse(units = []) {
 
   summary.total = Object.values(summary).reduce((acc, value) => acc + Number(value || 0), 0);
   return summary;
+}
+
+export function normalizeUrlForCompare(value = "") {
+  const raw = clean(value);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    const host = clean(url.hostname).toLowerCase();
+    const pathname = clean(url.pathname).replace(/\/+$/, "") || "/";
+    const search = clean(url.search);
+    return `${host}${pathname}${search}`;
+  } catch {
+    return clean(raw).toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+export function groundedSourceCount(value = []) {
+  return ensureArray(value).filter((item) => clean(item?.url)).length;
+}
+
+export function buildGroundedSourceSet(items = []) {
+  return new Set(
+    ensureArray(items)
+      .map((item) => normalizeUrlForCompare(item?.url || item))
+      .filter(Boolean)
+  );
+}
+
+export function annotateSourcesWithGrounding(sources = [], groundedSources = []) {
+  const groundedSet = buildGroundedSourceSet(groundedSources);
+  const groundedSetAvailable = groundedSet.size > 0;
+  const annotated = normalizeSources(sources).map((source) => {
+    const normalizedUrl = normalizeUrlForCompare(source?.url);
+    const groundedByProvider = groundedSetAvailable && !!normalizedUrl && groundedSet.has(normalizedUrl);
+    return {
+      ...source,
+      groundedByProvider,
+      groundedSetAvailable,
+    };
+  });
+  return {
+    sources: annotated,
+    groundedSetAvailable,
+    groundedCount: annotated.filter((source) => source?.groundedByProvider).length,
+  };
+}
+
+export function fabricationSignalFromSources(sources = [], { liveSearchUsed = false, groundedSourceCount: count = 0 } = {}) {
+  const normalized = normalizeSources(sources);
+  if (!normalized.length) return "low";
+  const considered = normalized.filter((source) => clean(source?.url));
+  if (!considered.length) return liveSearchUsed ? "medium" : "low";
+  const grounded = considered.filter((source) => source?.groundedByProvider === true).length;
+  if (!liveSearchUsed || count <= 0) return grounded ? "low" : "medium";
+  if (grounded === considered.length) return "low";
+  if (grounded === 0) return "high";
+  return "medium";
 }

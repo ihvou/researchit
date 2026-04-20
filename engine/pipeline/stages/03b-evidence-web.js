@@ -1,43 +1,36 @@
 import {
+  annotateSourcesWithGrounding,
   callActorJson,
   clean,
   combineTokenDiagnostics,
   ensureArray,
+  fabricationSignalFromSources,
   normalizeArguments,
   normalizeConfidence,
   normalizeSources,
 } from "./common.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_03b_evidence_web";
 export const STAGE_TITLE = "Evidence Web";
 
-function isGroundingRedirectUrl(url = "") {
-  const value = clean(url).toLowerCase();
-  return value.includes("vertexaisearch.cloud.google.com/grounding-api-redirect")
-    || value.includes("grounding-api-redirect");
+function confidenceRank(value = "") {
+  const normalized = normalizeConfidence(value);
+  if (normalized === "high") return 3;
+  if (normalized === "medium") return 2;
+  return 1;
 }
 
-function emptyGroundingDiagnostics() {
-  return {
-    detected: 0,
-    resolved: 0,
-    unresolved: 0,
-    dropped: 0,
-    remaining: 0,
-    skipped: false,
-  };
+function mergeConfidence(memoryConfidence, webConfidence) {
+  const memory = normalizeConfidence(memoryConfidence);
+  const web = normalizeConfidence(webConfidence);
+  return confidenceRank(web) >= confidenceRank(memory) ? web : memory;
 }
 
-function mergeGroundingDiagnostics(items = []) {
-  return ensureArray(items).reduce((acc, item) => {
-    acc.detected += Number(item?.detected || 0);
-    acc.resolved += Number(item?.resolved || 0);
-    acc.unresolved += Number(item?.unresolved || 0);
-    acc.dropped += Number(item?.dropped || 0);
-    acc.remaining += Number(item?.remaining || 0);
-    acc.skipped = acc.skipped || !!item?.skipped;
-    return acc;
-  }, emptyGroundingDiagnostics());
+function mergeConfidenceReason(memoryReason = "", webReason = "") {
+  const parts = [clean(memoryReason), clean(webReason)].filter(Boolean);
+  if (!parts.length) return "";
+  return [...new Set(parts)].join(" | ");
 }
 
 function mergeSourceLists(a = [], b = []) {
@@ -50,17 +43,47 @@ function mergeSourceLists(a = [], b = []) {
   return [...map.values()];
 }
 
+function computeGroundingCoverage(units = []) {
+  let totalUrls = 0;
+  let groundedUrls = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      if (!clean(source?.url)) return;
+      totalUrls += 1;
+      if (source?.groundedByProvider === true) groundedUrls += 1;
+    });
+  });
+  return {
+    totalUrls,
+    groundedUrls,
+    groundedRatio: totalUrls > 0 ? (groundedUrls / totalUrls) : 1,
+  };
+}
+
+function computeFabricationSignalForMergedSources(sources = []) {
+  const list = normalizeSources(sources);
+  const groundedSetAvailable = list.some((source) => source?.groundedSetAvailable === true);
+  const groundedCount = list.filter((source) => source?.groundedByProvider === true).length;
+  return fabricationSignalFromSources(list, {
+    liveSearchUsed: groundedSetAvailable,
+    groundedSourceCount: groundedSetAvailable ? Math.max(1, groundedCount) : 0,
+  });
+}
+
 function mergeScorecard(memory = [], web = []) {
   const webById = new Map(web.map((unit) => [clean(unit?.id), unit]));
   return memory.map((unit) => {
     const patch = webById.get(unit.id) || {};
+    const mergedSources = mergeSourceLists(unit?.sources, patch?.sources);
     return {
       ...unit,
       brief: clean(patch?.brief || unit?.brief),
       full: clean(patch?.full || unit?.full),
-      confidence: normalizeConfidence(patch?.confidence || unit?.confidence),
-      confidenceReason: clean(patch?.confidenceReason || unit?.confidenceReason),
-      sources: mergeSourceLists(unit?.sources, patch?.sources),
+      confidence: mergeConfidence(unit?.confidence, patch?.confidence),
+      confidenceReason: mergeConfidenceReason(unit?.confidenceReason, patch?.confidenceReason),
+      sources: mergedSources,
+      fabricationSignal: clean(patch?.fabricationSignal || unit?.fabricationSignal)
+        || computeFabricationSignalForMergedSources(mergedSources),
       arguments: {
         supporting: [...ensureArray(unit?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
         limiting: [...ensureArray(unit?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
@@ -75,13 +98,16 @@ function mergeMatrixCells(memory = [], web = []) {
   const webByKey = new Map(web.map((cell) => [`${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`, cell]));
   return memory.map((cell) => {
     const patch = webByKey.get(`${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`) || {};
+    const mergedSources = mergeSourceLists(cell?.sources, patch?.sources);
     return {
       ...cell,
       value: clean(patch?.value || cell?.value),
       full: clean(patch?.full || cell?.full),
-      confidence: normalizeConfidence(patch?.confidence || cell?.confidence),
-      confidenceReason: clean(patch?.confidenceReason || cell?.confidenceReason),
-      sources: mergeSourceLists(cell?.sources, patch?.sources),
+      confidence: mergeConfidence(cell?.confidence, patch?.confidence),
+      confidenceReason: mergeConfidenceReason(cell?.confidenceReason, patch?.confidenceReason),
+      sources: mergedSources,
+      fabricationSignal: clean(patch?.fabricationSignal || cell?.fabricationSignal)
+        || computeFabricationSignalForMergedSources(mergedSources),
       arguments: {
         supporting: [...ensureArray(cell?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
         limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
@@ -92,17 +118,27 @@ function mergeMatrixCells(memory = [], web = []) {
   });
 }
 
-function normalizeScorecard(parsed = {}, dimensions = []) {
+function normalizeScorecard(parsed = {}, dimensions = [], options = {}) {
   const byId = new Map(ensureArray(parsed?.dimensions).map((item) => [clean(item?.id || item?.unitId), item]));
+  const groundedSources = ensureArray(options?.groundedSources);
+  const confidenceStats = options?.confidenceStats || { coerced: 0 };
+  const providerGroundedCount = groundedSources.length;
+  const liveSearchUsed = options?.liveSearchUsed === true;
+
   return dimensions.map((dim) => {
     const unit = byId.get(dim.id) || {};
+    const grounded = annotateSourcesWithGrounding(unit?.sources || [], groundedSources);
     return {
       id: dim.id,
       brief: clean(unit?.brief),
       full: clean(unit?.full),
-      confidence: normalizeConfidence(unit?.confidence),
+      confidence: normalizeConfidence(unit?.confidence, confidenceStats),
       confidenceReason: clean(unit?.confidenceReason),
-      sources: normalizeSources(unit?.sources || []),
+      sources: grounded.sources,
+      fabricationSignal: fabricationSignalFromSources(grounded.sources, {
+        liveSearchUsed,
+        groundedSourceCount: providerGroundedCount,
+      }),
       arguments: normalizeArguments(unit?.arguments || {}, `${dim.id}-web`),
       risks: clean(unit?.risks),
       missingEvidence: clean(unit?.missingEvidence),
@@ -110,20 +146,30 @@ function normalizeScorecard(parsed = {}, dimensions = []) {
   });
 }
 
-function normalizeMatrix(parsed = {}, subjects = [], attributes = []) {
+function normalizeMatrix(parsed = {}, subjects = [], attributes = [], options = {}) {
   const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
+  const groundedSources = ensureArray(options?.groundedSources);
+  const confidenceStats = options?.confidenceStats || { coerced: 0 };
+  const providerGroundedCount = groundedSources.length;
+  const liveSearchUsed = options?.liveSearchUsed === true;
+
   const cells = [];
   subjects.forEach((subject) => {
     attributes.forEach((attribute) => {
       const patch = byKey.get(`${subject.id}::${attribute.id}`) || {};
+      const grounded = annotateSourcesWithGrounding(patch?.sources || [], groundedSources);
       cells.push({
         subjectId: subject.id,
         attributeId: attribute.id,
         value: clean(patch?.value),
         full: clean(patch?.full),
-        confidence: normalizeConfidence(patch?.confidence),
+        confidence: normalizeConfidence(patch?.confidence, confidenceStats),
         confidenceReason: clean(patch?.confidenceReason),
-        sources: normalizeSources(patch?.sources || []),
+        sources: grounded.sources,
+        fabricationSignal: fabricationSignalFromSources(grounded.sources, {
+          liveSearchUsed,
+          groundedSourceCount: providerGroundedCount,
+        }),
         arguments: normalizeArguments(patch?.arguments || {}, `${subject.id}-${attribute.id}-web`),
         risks: clean(patch?.risks),
         missingEvidence: clean(patch?.missingEvidence),
@@ -131,92 +177,6 @@ function normalizeMatrix(parsed = {}, subjects = [], attributes = []) {
     });
   });
   return cells;
-}
-
-async function resolveGroundingRedirectUrl(url = "", fetchSource, cache = new Map()) {
-  const normalizedUrl = clean(url);
-  if (!isGroundingRedirectUrl(normalizedUrl)) return normalizedUrl;
-  if (typeof fetchSource !== "function") return "";
-  if (cache.has(normalizedUrl)) {
-    return cache.get(normalizedUrl);
-  }
-
-  const pending = (async () => {
-    try {
-      const payload = await fetchSource(normalizedUrl, {
-        resolveOnly: true,
-        timeoutMs: 10000,
-        retry: { maxRetries: 0 },
-      });
-      const candidate = clean(payload?.resolvedUrl || payload?.url || "");
-      return (!candidate || isGroundingRedirectUrl(candidate)) ? "" : candidate;
-    } catch (err) {
-      const candidate = clean(err?.resolvedUrl || err?.url || "");
-      return (!candidate || isGroundingRedirectUrl(candidate)) ? "" : candidate;
-    }
-  })();
-
-  cache.set(normalizedUrl, pending);
-  return pending;
-}
-
-async function canonicalizeGroundingSources(sources = [], fetchSource, cache = new Map()) {
-  const diagnostics = emptyGroundingDiagnostics();
-  const normalized = ensureArray(sources).map((source) => ({ ...source }));
-  await Promise.all(normalized.map(async (source) => {
-    const url = clean(source?.url);
-    if (!isGroundingRedirectUrl(url)) return;
-    diagnostics.detected += 1;
-    const resolved = await resolveGroundingRedirectUrl(url, fetchSource, cache);
-    if (resolved) {
-      source.url = resolved;
-      diagnostics.resolved += 1;
-      return;
-    }
-    source.url = undefined;
-    diagnostics.unresolved += 1;
-    diagnostics.dropped += 1;
-  }));
-
-  diagnostics.remaining = normalized.filter((source) => isGroundingRedirectUrl(source?.url)).length;
-  if (typeof fetchSource !== "function") diagnostics.skipped = true;
-
-  return {
-    sources: normalized,
-    diagnostics,
-  };
-}
-
-async function canonicalizeMatrixCells(cells = [], fetchSource, cache = new Map()) {
-  const diagnostics = [];
-  const normalized = await Promise.all(ensureArray(cells).map(async (cell) => {
-    const canonical = await canonicalizeGroundingSources(cell?.sources || [], fetchSource, cache);
-    diagnostics.push(canonical.diagnostics);
-    return {
-      ...cell,
-      sources: canonical.sources,
-    };
-  }));
-  return {
-    cells: normalized,
-    diagnostics: mergeGroundingDiagnostics(diagnostics),
-  };
-}
-
-async function canonicalizeScorecardUnits(units = [], fetchSource, cache = new Map()) {
-  const diagnostics = [];
-  const normalized = await Promise.all(ensureArray(units).map(async (unit) => {
-    const canonical = await canonicalizeGroundingSources(unit?.sources || [], fetchSource, cache);
-    diagnostics.push(canonical.diagnostics);
-    return {
-      ...unit,
-      sources: canonical.sources,
-    };
-  }));
-  return {
-    units: normalized,
-    diagnostics: mergeGroundingDiagnostics(diagnostics),
-  };
 }
 
 function chunkSubjects(subjects = [], size = 1) {
@@ -253,6 +213,8 @@ ${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(at
 Rules:
 - Cover every listed subject x attribute cell.
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - If uncertain, lower confidence and state what is missing.
 - Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
 - For each non-empty source, include a valid public https URL, a concise quote/snippet, and "sourceType".
@@ -272,7 +234,6 @@ async function gatherMatrixWeb({
 }) {
   const initialSize = matrixChunkSize(subjects, attributes, runtime?.config || {});
   const rootChunks = chunkSubjects(subjects, initialSize);
-  const groundingCache = new Map();
 
   const results = await Promise.all(rootChunks.map(async (root) => {
     const cells = [];
@@ -298,21 +259,30 @@ async function gatherMatrixWeb({
           liveSearch: true,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-        const normalizedChunk = normalizeMatrix(result?.parsed, current, attributes);
-        const canonical = await canonicalizeMatrixCells(
-          normalizedChunk,
-          runtime?.transport?.fetchSource,
-          groundingCache
-        );
-        cells.push(...canonical.cells);
-        reasonCodes.push(...ensureArray(result?.reasonCodes));
+        const confidenceStats = { coerced: 0 };
+        const normalizedChunk = normalizeMatrix(result?.parsed, current, attributes, {
+          groundedSources: result?.meta?.groundedSources || [],
+          liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+          confidenceStats,
+        });
+        const tokenDiagnostics = {
+          ...(result?.tokenDiagnostics || {}),
+          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+        };
+        cells.push(...normalizedChunk);
+        const chunkReasonCodes = [
+          ...ensureArray(result?.reasonCodes),
+          ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+        ];
+        reasonCodes.push(...chunkReasonCodes);
         diagnostics.push({
           chunkSubjects: current.map((subject) => subject.id),
           chunkSize: current.length,
           retries: result.retries,
-          tokenDiagnostics: result.tokenDiagnostics,
+          tokenDiagnostics,
           modelRoute: result.route,
-          groundingRedirects: canonical.diagnostics,
+          citations: computeGroundingCoverage(normalizedChunk),
+          groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
         });
       } catch (err) {
         if (current.length <= 1) throw err;
@@ -332,10 +302,31 @@ async function gatherMatrixWeb({
     return { cells, reasonCodes, diagnostics };
   }));
 
+  const allDiagnostics = results.flatMap((r) => r.diagnostics);
+  const citationAggregate = allDiagnostics.reduce((acc, item) => {
+    const stats = item?.citations || {};
+    acc.totalUrls += Number(stats?.totalUrls || 0);
+    acc.groundedUrls += Number(stats?.groundedUrls || 0);
+    return acc;
+  }, { totalUrls: 0, groundedUrls: 0 });
+
+  const groundedSourcesResolved = allDiagnostics.reduce((acc, item) => {
+    const stats = item?.groundedSourcesResolved || {};
+    acc.total += Number(stats?.total || 0);
+    acc.resolved += Number(stats?.resolved || 0);
+    acc.unresolved += Number(stats?.unresolved || 0);
+    return acc;
+  }, { total: 0, resolved: 0, unresolved: 0 });
+
   return {
     cells: results.flatMap((r) => r.cells),
-    reasonCodes: [...new Set(results.flatMap((r) => r.reasonCodes))],
-    diagnostics: results.flatMap((r) => r.diagnostics),
+    reasonCodes: normalizeReasonCodes(results.flatMap((r) => r.reasonCodes)),
+    diagnostics: allDiagnostics,
+    citations: {
+      ...citationAggregate,
+      groundedRatio: citationAggregate.totalUrls > 0 ? citationAggregate.groundedUrls / citationAggregate.totalUrls : 1,
+    },
+    groundedSourcesResolved,
   };
 }
 
@@ -356,9 +347,6 @@ export async function runStage(context = {}) {
     const merged = mergeMatrixCells(ensureArray(memory?.matrix?.cells), normalizedWeb);
     const aggregatedTokens = combineTokenDiagnostics(
       matrixWeb.diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
-    );
-    const groundingRedirects = mergeGroundingDiagnostics(
-      matrixWeb.diagnostics.map((entry) => entry?.groundingRedirects).filter(Boolean)
     );
     const totalRetries = matrixWeb.diagnostics.reduce((sum, entry) => sum + Number(entry?.retries || 0), 0);
     const modelRoute = matrixWeb.diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
@@ -384,7 +372,8 @@ export async function runStage(context = {}) {
         mode: "matrix",
         cells: merged.length,
         chunks: matrixWeb.diagnostics,
-        groundingRedirects,
+        citations: matrixWeb.citations,
+        groundedSourcesResolved: matrixWeb.groundedSourcesResolved,
         retries: totalRetries,
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
@@ -406,6 +395,8 @@ ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${
 
 Rules:
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - If uncertain, lower confidence and state what is missing.
 - Use sources that can be cited with specific canonical public URLs when possible.
 - Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
@@ -431,18 +422,26 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
-  const normalizedWebRaw = normalizeScorecard(result?.parsed, dimensions);
-  const canonicalScorecard = await canonicalizeScorecardUnits(
-    normalizedWebRaw,
-    runtime?.transport?.fetchSource,
-    new Map()
-  );
-  const normalizedWeb = canonicalScorecard.units;
+  const confidenceStats = { coerced: 0 };
+  const normalizedWeb = normalizeScorecard(result?.parsed, dimensions, {
+    groundedSources: result?.meta?.groundedSources || [],
+    liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+    confidenceStats,
+  });
+  const tokenDiagnostics = {
+    ...(result?.tokenDiagnostics || {}),
+    confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+  };
   const merged = mergeScorecard(ensureArray(memory?.scorecard?.dimensions), normalizedWeb);
+
+  const reasonCodes = [
+    ...ensureArray(result?.reasonCodes),
+    ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+  ];
 
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: normalizeReasonCodes(reasonCodes),
     statePatch: {
       ui: { phase: STAGE_ID },
       evidenceDrafts: {
@@ -458,20 +457,21 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
         },
       },
     },
-      diagnostics: {
-        mode: "scorecard",
-        dimensions: merged.length,
-        groundingRedirects: canonicalScorecard.diagnostics,
-        retries: result.retries,
-        modelRoute: result.route,
-        tokenDiagnostics: result.tokenDiagnostics,
+    diagnostics: {
+      mode: "scorecard",
+      dimensions: merged.length,
+      citations: computeGroundingCoverage(normalizedWeb),
+      groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+      retries: result.retries,
+      modelRoute: result.route,
+      tokenDiagnostics,
     },
     io: {
       prompt,
       response: result.text,
     },
     modelRoute: result.route,
-    tokens: result.tokenDiagnostics,
+    tokens: tokenDiagnostics,
     retries: result.retries,
   };
 }

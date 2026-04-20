@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { callActorJson } from "../pipeline/stages/common.js";
+import { callActorJson, normalizeConfidence } from "../pipeline/stages/common.js";
 import { runStage as run03b } from "../pipeline/stages/03b-evidence-web.js";
 import { runStage as run03c } from "../pipeline/stages/03c-evidence-deep-assist.js";
 import { runStage as run02 } from "../pipeline/stages/02-plan.js";
@@ -21,6 +21,16 @@ function baseModels() {
     critic: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
   };
 }
+
+test("normalizeConfidence maps numeric scales and reports coercion", () => {
+  const stats = { coerced: 0 };
+  assert.equal(normalizeConfidence("high", stats), "high");
+  assert.equal(normalizeConfidence(5, stats), "high");
+  assert.equal(normalizeConfidence("3", stats), "medium");
+  assert.equal(normalizeConfidence(2, stats), "low");
+  assert.equal(normalizeConfidence(null, stats), "low");
+  assert.equal(stats.coerced, 3);
+});
 
 test("callActorJson parse retry applies repair prompt and reduces scope", async () => {
   const prompts = [];
@@ -140,10 +150,9 @@ test("stage 03b matrix web pass adaptively splits chunks and preserves full cell
   assert.ok((result?.diagnostics?.chunks || []).some((item) => Array.isArray(item?.splitInto)));
 });
 
-test("stage 03b rewrites Gemini grounding redirect URLs to canonical targets", async () => {
+test("stage 03b marks grounded sources from provider metadata", async () => {
   const attrs = [{ id: "a1", label: "Attr 1" }];
   const subjects = [{ id: "s1", label: "Subject 1" }];
-  const groundingUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZI-test";
   const canonicalUrl = "https://example.com/canonical-source";
 
   const runtime = {
@@ -165,22 +174,13 @@ test("stage 03b rewrites Gemini grounding redirect URLs to canonical targets", a
             full: "full",
             confidence: "medium",
             confidenceReason: "reason",
-            sources: [{ name: "Grounded", url: groundingUrl, sourceType: "news" }],
+            sources: [{ name: "Grounded", url: canonicalUrl, sourceType: "news" }],
             arguments: { supporting: [], limiting: [] },
             risks: "",
           }],
         }),
+        sources: [{ name: "Grounded", url: canonicalUrl, sourceType: "news" }],
       }),
-      fetchSource: async (_url, options = {}) => {
-        assert.equal(options?.resolveOnly, true);
-        return {
-          url: groundingUrl,
-          resolvedUrl: canonicalUrl,
-          responseStatus: 200,
-          reachable: true,
-          sourceFetchStatus: "resolved",
-        };
-      },
       callCritic: async () => ({ text: '{"ok":true}' }),
       callSynthesizer: async () => ({ text: '{"ok":true}' }),
     },
@@ -210,13 +210,13 @@ test("stage 03b rewrites Gemini grounding redirect URLs to canonical targets", a
   };
 
   const result = await run03b({ state, runtime });
-  const sourceUrl = result?.statePatch?.evidenceDrafts?.web?.matrix?.cells?.[0]?.sources?.[0]?.url;
-  const grounding = result?.diagnostics?.groundingRedirects || {};
+  const source = result?.statePatch?.evidenceDrafts?.web?.matrix?.cells?.[0]?.sources?.[0] || {};
+  const groundedRatio = Number(result?.diagnostics?.citations?.groundedRatio || 0);
 
-  assert.equal(sourceUrl, canonicalUrl);
-  assert.equal(grounding.detected, 1);
-  assert.equal(grounding.resolved, 1);
-  assert.equal(grounding.remaining, 0);
+  assert.equal(source.url, canonicalUrl);
+  assert.equal(source.groundedByProvider, true);
+  assert.equal(source.groundedSetAvailable, true);
+  assert.equal(groundedRatio, 1);
 });
 
 test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias mode, non-strict included)", async () => {
@@ -326,7 +326,7 @@ test("stage 08 reserves per-attribute recovery floor before pressure fill", asyn
   assert.equal(result?.statePatch?.recoveredPatch?.matrix?.cells?.length, 2);
 });
 
-test("stage 06 applies tiered verification and avoids counting vendor/analyst access blocks as fetchFailed", async () => {
+test("stage 06 applies verification tiers and isolates infrastructure noise", async () => {
   const runtime = {
     transport: {
       fetchSource: async (url, options = {}) => {
@@ -392,9 +392,14 @@ test("stage 06 applies tiered verification and avoids counting vendor/analyst ac
   assert.equal(counters.fetchFailed, 1);
   assert.equal(counters.paywalled, 1);
   assert.equal(counters.unverifiable, 2);
+  assert.equal(counters.verificationTierCounts?.unreachableInfrastructure, 3);
+  assert.equal(counters.verificationTierCounts?.fabricated, 0);
   assert.equal(sources.find((s) => s.sourceType === "vendor")?.verificationStatus, "unverifiable");
   assert.equal(sources.find((s) => s.sourceType === "analyst")?.verificationStatus, "paywalled");
   assert.equal(sources.find((s) => s.sourceType === "research")?.verificationStatus, "fetch_failed");
+  assert.equal(sources.find((s) => s.sourceType === "vendor")?.verificationTier, "unreachable_infrastructure");
+  assert.equal(sources.find((s) => s.sourceType === "analyst")?.verificationTier, "unreachable_infrastructure");
+  assert.equal(sources.find((s) => s.sourceType === "research")?.verificationTier, "unreachable_infrastructure");
 });
 
 test("stage 07 preserves model confidence and sets citation status separately", async () => {
@@ -714,6 +719,58 @@ test("stage 13 marks omitted flag outcomes as no_response without fabricated dis
   assert.match(String(omitted?.analystNote || ""), /No analyst response returned/i);
 });
 
+test("stage 13 keeps resolved outcomes when analyst note is missing and emits reason code", async () => {
+  const runtime = {
+    config: { models: baseModels() },
+    budgets: {
+      stage_13_defend: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
+    },
+    prompts: { analystResponse: "defend" },
+    transport: {
+      callAnalyst: async () => ({
+        text: JSON.stringify({
+          outcomes: [{
+            flagId: "flag-1",
+            resolved: true,
+            disposition: "accepted",
+            analystNote: "",
+            sources: [],
+          }],
+          analystSummary: "summary",
+        }),
+      }),
+      callCritic: async () => ({ text: '{"ok":true}' }),
+      callSynthesizer: async () => ({ text: '{"ok":true}' }),
+    },
+  };
+
+  const state = {
+    outputType: "scorecard",
+    assessment: {
+      scorecard: {
+        byId: {
+          dim1: { id: "dim1", score: 3, confidence: "medium" },
+        },
+      },
+    },
+    critique: {
+      flags: [
+        { id: "flag-1", unitKey: "dim1", severity: "medium", category: "overclaim", note: "n1" },
+      ],
+      counterCase: { entries: [] },
+    },
+    mode: "native",
+  };
+
+  const result = await run13({ state, runtime });
+  const outcome = result?.statePatch?.resolved?.flagOutcomes?.[0] || {};
+
+  assert.equal(outcome.resolved, true);
+  assert.equal(outcome.disposition, "accepted");
+  assert.match(String(outcome.analystNote || ""), /resolution without note/i);
+  assert.ok((result?.reasonCodes || []).includes("defend_note_missing"));
+});
+
 test("stage 15 strict mode never emits run_completed_degraded", async () => {
   const state = {
     strictQuality: true,
@@ -763,4 +820,72 @@ test("stage 15 strict mode never emits run_completed_degraded", async () => {
 
   const result = await run15({ state, runtime });
   assert.equal(result?.reasonCodes?.includes("run_completed_degraded"), false);
+});
+
+test("stage 15 classifies quality failure causes in diagnostics", async () => {
+  const state = {
+    strictQuality: true,
+    outputType: "scorecard",
+    assessment: {
+      scorecard: {
+        byId: {
+          dim1: {
+            id: "dim1",
+            score: 3,
+            confidence: "low",
+            sources: [
+              { sourceType: "research", verificationTier: "fabricated", citationStatus: "not_found" },
+            ],
+          },
+        },
+      },
+    },
+    resolved: {
+      assessment: {
+        scorecard: {
+          byId: {
+            dim1: {
+              id: "dim1",
+              score: 3,
+              confidence: "low",
+              sources: [
+                { sourceType: "research", verificationTier: "fabricated", citationStatus: "not_found" },
+              ],
+            },
+          },
+        },
+      },
+      flagOutcomes: [],
+    },
+    diagnostics: {
+      stages: [{
+        stage: "stage_03b_evidence_web",
+        reasonCodes: ["confidence_scale_coerced"],
+      }],
+    },
+  };
+  const runtime = {
+    config: {
+      quality: { hardAbortCoverageFloor: 0.0 },
+      limits: {
+        matrixDecisionGradeGate: {
+          minCoverageRatio: 0.5,
+          maxLowConfidenceRatio: 0,
+          minSourcesPerCriticalUnit: 1,
+          minIndependentSourcesPerCriticalUnit: 0,
+          maxUnresolvedCriticFlags: 0,
+          maxUnverifiedSourceRatio: 1,
+          maxFabricatedSourceRatio: 0.01,
+        },
+      },
+    },
+  };
+
+  const result = await run15({ state, runtime });
+  const causes = result?.statePatch?.quality?.failureCauses || [];
+  const types = causes.map((cause) => cause?.type);
+
+  assert.ok(types.includes("fabrication"));
+  assert.ok(types.includes("pipeline_coercion"));
+  assert.ok(types.includes("data_gap"));
 });

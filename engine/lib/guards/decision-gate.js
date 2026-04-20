@@ -1,5 +1,9 @@
 import { REASON_CODES } from "../../pipeline/contracts/reason-codes.js";
 import { collectCoverageMetrics } from "./coverage-gate.js";
+import {
+  isIndependentSource,
+  sourceRequiresStrictCitationCheck,
+} from "../sources/source-type.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -10,90 +14,6 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function sourceTypeNormalized(value) {
-  const type = clean(value).toLowerCase();
-  if (!type) return "";
-  if (["gov", "government", "public_registry", "regulator"].includes(type)) return "government";
-  if (["research", "academic", "journal", "paper", "study"].includes(type)) return "research";
-  if (["press", "press_release", "press-release"].includes(type)) return "press_release";
-  if (["news", "media"].includes(type)) return "news";
-  if (["analyst", "analysis"].includes(type)) return "analyst";
-  if (["independent"].includes(type)) return "independent";
-  if (["vendor", "company", "official"].includes(type)) return "vendor";
-  if (["marketing", "sponsored"].includes(type)) return "marketing";
-  if (["registry"].includes(type)) return "registry";
-  return type;
-}
-
-function hostFromUrl(value) {
-  const raw = clean(value);
-  if (!raw) return "";
-  try {
-    return new URL(raw).hostname.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function inferSourceType(source = {}) {
-  const explicit = sourceTypeNormalized(source?.sourceType);
-  if (explicit) return explicit;
-  const host = hostFromUrl(source?.url);
-  if (!host) return "";
-  if (host.endsWith(".gov")) return "government";
-  if (
-    host.includes("ncbi.nlm.nih.gov")
-    || host.includes("nature.com")
-    || host.includes("thelancet.com")
-    || host.includes("jamanetwork.com")
-    || host.includes("bmj.com")
-    || host.includes("nejm.org")
-    || host.includes("sciencedirect.com")
-    || host.includes("arxiv.org")
-    || host.includes("doi.org")
-  ) {
-    return "research";
-  }
-  if (
-    host.includes("reuters.com")
-    || host.includes("bloomberg.com")
-    || host.includes("ft.com")
-    || host.includes("nytimes.com")
-    || host.includes("wsj.com")
-    || host.includes("statnews.com")
-    || host.includes("beckershospitalreview.com")
-  ) {
-    return "news";
-  }
-  if (
-    host.includes("gartner.com")
-    || host.includes("forrester.com")
-    || host.includes("klasresearch.com")
-    || host.includes("cbinsights.com")
-    || host.includes("pitchbook.com")
-  ) {
-    return "analyst";
-  }
-  if (
-    host.includes("businesswire.com")
-    || host.includes("prnewswire.com")
-    || host.includes("globenewswire.com")
-  ) {
-    return "press_release";
-  }
-  return "";
-}
-
-function isIndependentSource(source = {}) {
-  const type = inferSourceType(source);
-  return type === "independent"
-    || type === "research"
-    || type === "news"
-    || type === "analyst"
-    || type === "government"
-    || type === "registry";
-}
-
 function normalizeCitationStatus(value = "") {
   const status = clean(value).toLowerCase();
   if (status === "verified") return "verified";
@@ -101,13 +21,14 @@ function normalizeCitationStatus(value = "") {
   return "not_found";
 }
 
-function sourceRequiresStrictCitationCheck(source = {}) {
-  const type = inferSourceType(source);
-  return type === "independent"
-    || type === "research"
-    || type === "news"
-    || type === "government"
-    || type === "registry";
+function normalizeVerificationTier(value = "") {
+  const tier = clean(value).toLowerCase();
+  if (tier === "verified") return "verified";
+  if (tier === "fabricated") return "fabricated";
+  if (tier === "unreachable_infrastructure") return "unreachable_infrastructure";
+  if (tier === "unreachable_stale") return "unreachable_stale";
+  if (tier === "unverifiable") return "unverifiable";
+  return "";
 }
 
 function getUnits(state = {}) {
@@ -160,11 +81,36 @@ function citationCoverageMetrics(units = []) {
   const totals = {
     totalRelevant: relevantSources.length,
     verified: 0,
+    fabricated: 0,
+    unreachableInfrastructure: 0,
+    unreachableStale: 0,
     unverifiable: 0,
     notFound: 0,
   };
 
   relevantSources.forEach((source) => {
+    const tier = normalizeVerificationTier(source?.verificationTier);
+    if (tier === "verified") {
+      totals.verified += 1;
+      return;
+    }
+    if (tier === "fabricated") {
+      totals.fabricated += 1;
+      return;
+    }
+    if (tier === "unreachable_infrastructure") {
+      totals.unreachableInfrastructure += 1;
+      return;
+    }
+    if (tier === "unreachable_stale") {
+      totals.unreachableStale += 1;
+      return;
+    }
+    if (tier === "unverifiable") {
+      totals.unverifiable += 1;
+      return;
+    }
+
     const status = normalizeCitationStatus(source?.citationStatus);
     if (status === "verified") totals.verified += 1;
     else if (status === "unverifiable") totals.unverifiable += 1;
@@ -172,10 +118,13 @@ function citationCoverageMetrics(units = []) {
   });
 
   const denom = Math.max(1, totals.totalRelevant);
+  const unresolvedNumerator = totals.fabricated + totals.unreachableStale + totals.unverifiable + totals.notFound;
   return {
     ...totals,
+    unresolvedNumerator,
     verifiedRatio: totals.totalRelevant ? (totals.verified / denom) : 1,
-    unresolvedRatio: totals.totalRelevant ? ((totals.unverifiable + totals.notFound) / denom) : 0,
+    unresolvedRatio: totals.totalRelevant ? (unresolvedNumerator / denom) : 0,
+    fabricationRatio: totals.totalRelevant ? (totals.fabricated / denom) : 0,
   };
 }
 
@@ -188,7 +137,7 @@ export function evaluateDecisionGate(state = {}, options = {}) {
     minIndependentSourcesPerCriticalUnit: 1,
     maxUnresolvedCriticFlags: 0,
     maxUnverifiedSourceRatio: 1,
-    minCitedSourceRatio: 0,
+    maxFabricatedSourceRatio: 1,
   };
   const gate = {
     ...defaults,
@@ -204,27 +153,39 @@ export function evaluateDecisionGate(state = {}, options = {}) {
   const criticalUnits = criticalUnitsForSourceCheck(state, gate, units);
   const sourceCheckFailed = criticalUnits.some((unit) => {
     const sources = Array.isArray(unit?.sources) ? unit.sources : [];
-    const independentCount = sources.filter(isIndependentSource).length;
-    return sources.length < gate.minSourcesPerCriticalUnit
+    const eligibleSources = sources.filter((source) => normalizeVerificationTier(source?.verificationTier) !== "fabricated");
+    const independentCount = eligibleSources.filter(isIndependentSource).length;
+    return eligibleSources.length < gate.minSourcesPerCriticalUnit
       || independentCount < gate.minIndependentSourcesPerCriticalUnit;
   });
 
   const critic = unresolvedCriticCounts(state);
   const citationCoverage = citationCoverageMetrics(units);
-  const citationCoverageFailed = citationCoverage.verifiedRatio < Number(gate.minCitedSourceRatio || 0)
-    || citationCoverage.unresolvedRatio > Number(gate.maxUnverifiedSourceRatio || 1);
+  const citationCoverageFailed = citationCoverage.unresolvedRatio > Number(gate.maxUnverifiedSourceRatio || 1);
+  const fabricationFailed = citationCoverage.fabricationRatio > Number(gate.maxFabricatedSourceRatio || 1);
 
   const checks = {
     coverage: coverageRatio >= gate.minCoverageRatio,
     confidence: lowConfidenceRatio <= gate.maxLowConfidenceRatio,
     sourceSufficiency: !sourceCheckFailed,
     citationCoverage: !citationCoverageFailed,
+    fabrication: !fabricationFailed,
     criticResolution: critic.unresolvedCount <= gate.maxUnresolvedCriticFlags,
     highSeverityCoverage: critic.unresolvedHighWithoutMitigationCount === 0,
   };
 
   const passed = Object.values(checks).every(Boolean);
-  const reasonCodes = passed ? [] : [REASON_CODES.DECISION_GATE_FAILED];
+  const reasonCodes = passed
+    ? []
+    : [
+      REASON_CODES.DECISION_GATE_FAILED,
+      ...(fabricationFailed ? [REASON_CODES.DECISION_GATE_FABRICATION_FLAGGED] : []),
+    ];
+
+  const deprecatedConfigUsed = [];
+  if (Object.prototype.hasOwnProperty.call(gate, "minCitedSourceRatio")) {
+    deprecatedConfigUsed.push("minCitedSourceRatio");
+  }
 
   return {
     passed,
@@ -238,6 +199,9 @@ export function evaluateDecisionGate(state = {}, options = {}) {
       lowConfidenceRatio,
       criticalUnitsChecked: criticalUnits.length,
       citationCoverage,
+    },
+    diagnostics: {
+      deprecatedConfigUsed,
     },
   };
 }

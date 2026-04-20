@@ -1,8 +1,10 @@
 import {
+  annotateSourcesWithGrounding,
   callActorJson,
   clean,
   combineTokenDiagnostics,
   ensureArray,
+  fabricationSignalFromSources,
   normalizeArguments,
   normalizeConfidence,
   normalizeSources,
@@ -265,33 +267,72 @@ function selectMatrixUnits(state = {}, budget = 12) {
   };
 }
 
-function normalizeScorecardPatch(parsed = {}) {
-  return ensureArray(parsed?.dimensions).map((unit) => ({
+function normalizeScorecardPatch(parsed = {}, options = {}) {
+  const groundedSources = ensureArray(options?.groundedSources || []);
+  const confidenceStats = options?.confidenceStats || { coerced: 0 };
+  const providerGroundedCount = groundedSources.length;
+  const liveSearchUsed = options?.liveSearchUsed === true;
+  return ensureArray(parsed?.dimensions).map((unit) => {
+    const grounded = annotateSourcesWithGrounding(unit?.sources || [], groundedSources);
+    return {
     id: clean(unit?.id || unit?.unitId),
     brief: clean(unit?.brief),
     full: clean(unit?.full),
-    confidence: normalizeConfidence(unit?.confidence),
+    confidence: normalizeConfidence(unit?.confidence, confidenceStats),
     confidenceReason: clean(unit?.confidenceReason),
-    sources: normalizeSources(unit?.sources || []),
+    sources: grounded.sources,
+    fabricationSignal: fabricationSignalFromSources(grounded.sources, {
+      liveSearchUsed,
+      groundedSourceCount: providerGroundedCount,
+    }),
     arguments: normalizeArguments(unit?.arguments || {}, `recover-${clean(unit?.id || unit?.unitId)}`),
     risks: clean(unit?.risks),
     missingEvidence: clean(unit?.missingEvidence),
-  })).filter((unit) => unit.id);
+  };
+  }).filter((unit) => unit.id);
 }
 
-function normalizeMatrixPatch(parsed = {}) {
-  return ensureArray(parsed?.cells).map((cell) => ({
+function normalizeMatrixPatch(parsed = {}, options = {}) {
+  const groundedSources = ensureArray(options?.groundedSources || []);
+  const confidenceStats = options?.confidenceStats || { coerced: 0 };
+  const providerGroundedCount = groundedSources.length;
+  const liveSearchUsed = options?.liveSearchUsed === true;
+  return ensureArray(parsed?.cells).map((cell) => {
+    const grounded = annotateSourcesWithGrounding(cell?.sources || [], groundedSources);
+    return {
     subjectId: clean(cell?.subjectId),
     attributeId: clean(cell?.attributeId),
     value: clean(cell?.value),
     full: clean(cell?.full),
-    confidence: normalizeConfidence(cell?.confidence),
+    confidence: normalizeConfidence(cell?.confidence, confidenceStats),
     confidenceReason: clean(cell?.confidenceReason),
-    sources: normalizeSources(cell?.sources || []),
+    sources: grounded.sources,
+    fabricationSignal: fabricationSignalFromSources(grounded.sources, {
+      liveSearchUsed,
+      groundedSourceCount: providerGroundedCount,
+    }),
     arguments: normalizeArguments(cell?.arguments || {}, `recover-${clean(cell?.subjectId)}-${clean(cell?.attributeId)}`),
     risks: clean(cell?.risks),
     missingEvidence: clean(cell?.missingEvidence),
-  })).filter((cell) => cell.subjectId && cell.attributeId);
+  };
+  }).filter((cell) => cell.subjectId && cell.attributeId);
+}
+
+function computeGroundingCoverage(units = []) {
+  let totalUrls = 0;
+  let groundedUrls = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      if (!clean(source?.url)) return;
+      totalUrls += 1;
+      if (source?.groundedByProvider === true) groundedUrls += 1;
+    });
+  });
+  return {
+    totalUrls,
+    groundedUrls,
+    groundedRatio: totalUrls > 0 ? groundedUrls / totalUrls : 1,
+  };
 }
 
 export async function runStage(context = {}) {
@@ -330,6 +371,8 @@ ${group.map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${ite
 Rules:
 - Focus on what is weak for each listed cell.
 - Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, or reputable news) over vendor claims.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - For each non-empty source, include a valid canonical public https URL, a concise quote/snippet, and "sourceType".
 - Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
 - If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
@@ -352,12 +395,28 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         liveSearch: true,
         schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
       });
+      const confidenceStats = { coerced: 0 };
+      const patches = normalizeMatrixPatch(result?.parsed, {
+        groundedSources: result?.meta?.groundedSources || [],
+        liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+        confidenceStats,
+      });
+      const tokenDiagnostics = {
+        ...(result?.tokenDiagnostics || {}),
+        confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+      };
+      const reasonCodes = [
+        ...ensureArray(result?.reasonCodes),
+        ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+      ];
       return {
-        patches: normalizeMatrixPatch(result?.parsed),
-        reasonCodes: ensureArray(result?.reasonCodes),
-        tokenDiagnostics: result?.tokenDiagnostics || null,
+        patches,
+        reasonCodes,
+        tokenDiagnostics,
+        citations: computeGroundingCoverage(patches),
         route: result?.route || null,
         retries: Number(result?.retries || 0),
+        groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
       };
     }));
 
@@ -367,6 +426,20 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
     const modelRoutes = groupResults.map((r) => r.route).filter(Boolean);
     const totalRetries = groupResults.reduce((sum, r) => sum + r.retries, 0);
     const aggregatedTokens = combineTokenDiagnostics(tokenDiagnosticsList);
+    const citations = groupResults.reduce((acc, row) => {
+      const stats = row?.citations || {};
+      acc.totalUrls += Number(stats?.totalUrls || 0);
+      acc.groundedUrls += Number(stats?.groundedUrls || 0);
+      return acc;
+    }, { totalUrls: 0, groundedUrls: 0 });
+    citations.groundedRatio = citations.totalUrls > 0 ? (citations.groundedUrls / citations.totalUrls) : 1;
+    const groundedSourcesResolved = groupResults.reduce((acc, row) => {
+      const stats = row?.groundedSourcesResolved || {};
+      acc.total += Number(stats?.total || 0);
+      acc.resolved += Number(stats?.resolved || 0);
+      acc.unresolved += Number(stats?.unresolved || 0);
+      return acc;
+    }, { total: 0, resolved: 0, unresolved: 0 });
     const modelRoute = modelRoutes[0] || null;
 
     return {
@@ -388,6 +461,8 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         effectiveBudget: selection.effectiveBudget,
         attributeCoverageFloorReserved: selection.floorReserved,
         adaptiveBudget: budgetPlan.diagnostics,
+        citations,
+        groundedSourcesResolved,
         retries: totalRetries,
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
@@ -428,6 +503,8 @@ ${selected.map((item) => `- ${item.key}: ${item.label}
 Rules:
 - Focus on closing the specific weakness for each target.
 - Use high-quality sources whenever possible; prefer independent evidence (government, research, analyst, reputable news).
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - For each non-empty source, include a valid canonical public https URL, concise quote/snippet, and "sourceType".
 - Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
 - If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
@@ -450,11 +527,25 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
-  const patch = normalizeScorecardPatch(result?.parsed);
+  const confidenceStats = { coerced: 0 };
+  const patch = normalizeScorecardPatch(result?.parsed, {
+    groundedSources: result?.meta?.groundedSources || [],
+    liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+    confidenceStats,
+  });
+  const scorecardReasonCodes = [
+    ...reasonCodes,
+    ...ensureArray(result?.reasonCodes),
+    ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+  ];
+  const tokenDiagnostics = {
+    ...(result?.tokenDiagnostics || {}),
+    confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+  };
 
   return {
     stageStatus: "ok",
-    reasonCodes: [...reasonCodes, ...(result.reasonCodes || [])],
+    reasonCodes: normalizeReasonCodes(scorecardReasonCodes),
     statePatch: {
       ui: { phase: STAGE_ID },
       recoveredPatch: {
@@ -469,16 +560,18 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       requestedBudget: selection.requestedBudget,
       effectiveBudget: selection.effectiveBudget,
       coverageFloorReserved: selection.floorReserved,
+      citations: computeGroundingCoverage(patch),
+      groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
       retries: result.retries,
       modelRoute: result.route,
-      tokenDiagnostics: result.tokenDiagnostics,
+      tokenDiagnostics,
     },
     io: {
       prompt,
       response: result.text,
     },
     modelRoute: result.route,
-    tokens: result.tokenDiagnostics,
+    tokens: tokenDiagnostics,
     retries: result.retries,
   };
 }

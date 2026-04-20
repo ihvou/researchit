@@ -498,6 +498,9 @@ export function toUseCaseState(state = {}) {
   const sourceVerification = state?.quality?.sourceVerification && typeof state.quality.sourceVerification === "object"
     ? state.quality.sourceVerification
     : {};
+  const failureCauses = Array.isArray(state?.quality?.failureCauses)
+    ? state.quality.failureCauses
+    : (Array.isArray(state?.decisionGateResult?.failureCauses) ? state.decisionGateResult.failureCauses : []);
   const webSearchCounts = collectWebSearchCounters(state);
   const analysisMeta = {
     analysisMode: outputMode === "matrix"
@@ -519,6 +522,26 @@ export function toUseCaseState(state = {}) {
     sourceVerificationInvalidUrl: Number(sourceVerification?.invalidUrl || 0),
     sourceVerificationPartialMatch: Number(sourceVerification?.partial || 0),
     sourceVerificationNameOnly: Number(sourceVerification?.nameOnly || 0),
+    sourceVerificationFabricated: Number(
+      sourceVerification?.fabricated
+      || sourceVerification?.verificationTierCounts?.fabricated
+      || 0
+    ),
+    sourceVerificationUnreachableInfrastructure: Number(
+      sourceVerification?.unreachableInfrastructure
+      || sourceVerification?.verificationTierCounts?.unreachableInfrastructure
+      || 0
+    ),
+    sourceVerificationUnreachableStale: Number(
+      sourceVerification?.unreachableStale
+      || sourceVerification?.verificationTierCounts?.unreachableStale
+      || 0
+    ),
+    sourceVerificationUnverifiableTier: Number(
+      sourceVerification?.unverifiableTier
+      || sourceVerification?.verificationTierCounts?.unverifiable
+      || 0
+    ),
     criticFlagsRaised: Number(state?.critique?.flags?.length || 0),
     webSearchCalls: Number(webSearchCounts.analyst || 0),
     criticWebSearchCalls: Number(webSearchCounts.critic || 0),
@@ -536,6 +559,10 @@ export function toUseCaseState(state = {}) {
     decisionGradeGate: state?.decisionGate || null,
     decisionGradePassed: !!state?.decisionGradePassed,
     decisionGradeFailureReason: clean(state?.decisionGradeFailureReason),
+    failureCauses: failureCauses.map((cause) => ({
+      type: clean(cause?.type),
+      detail: clean(cause?.detail),
+    })).filter((cause) => cause.type),
     llmCostCurrency: clean(state?.diagnostics?.cost?.currency) || "USD",
     llmCostEstimatedUsd: Number(state?.diagnostics?.cost?.totalEstimated || 0),
     pipelineVersion: state?.pipelineVersion,

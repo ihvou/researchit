@@ -7,11 +7,12 @@ import {
   normalizeConfidence,
   normalizeSources,
 } from "./common.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_03a_evidence_memory";
 export const STAGE_TITLE = "Evidence Memory";
 
-function normalizeScorecardEvidence(parsed = {}, dimensions = []) {
+function normalizeScorecardEvidence(parsed = {}, dimensions = [], confidenceStats = { coerced: 0 }) {
   const byId = new Map((ensureArray(parsed?.dimensions)).map((item) => [clean(item?.id || item?.unitId), item]));
   return dimensions.map((dim) => {
     const unit = byId.get(dim.id) || {};
@@ -20,7 +21,7 @@ function normalizeScorecardEvidence(parsed = {}, dimensions = []) {
       brief: clean(unit?.brief || unit?.summary),
       full: clean(unit?.full || unit?.analysis),
       value: clean(unit?.value),
-      confidence: normalizeConfidence(unit?.confidence),
+      confidence: normalizeConfidence(unit?.confidence, confidenceStats),
       confidenceReason: clean(unit?.confidenceReason),
       sources: normalizeSources(unit?.sources || []),
       arguments: normalizeArguments(unit?.arguments || {}, `${dim.id}-mem`),
@@ -39,7 +40,7 @@ function chunkSubjects(subjects = [], size = 4) {
   return list;
 }
 
-function normalizeMatrixCells(parsed = {}, subjects = [], attributes = []) {
+function normalizeMatrixCells(parsed = {}, subjects = [], attributes = [], confidenceStats = { coerced: 0 }) {
   const rawCells = ensureArray(parsed?.cells);
   const byKey = new Map(rawCells.map((cell) => [
     `${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`,
@@ -56,7 +57,7 @@ function normalizeMatrixCells(parsed = {}, subjects = [], attributes = []) {
         attributeId: attribute.id,
         value: clean(source?.value),
         full: clean(source?.full || source?.analysis),
-        confidence: normalizeConfidence(source?.confidence),
+        confidence: normalizeConfidence(source?.confidence, confidenceStats),
         confidenceReason: clean(source?.confidenceReason),
         sources: normalizeSources(source?.sources || []),
         arguments: normalizeArguments(source?.arguments || {}, `${subject.id}-${attribute.id}-mem`),
@@ -80,6 +81,7 @@ async function gatherMatrixChunk({
 
   const results = await Promise.all(initialChunks.map(async (root) => {
     const cells = [];
+    const reasonCodes = [];
     const diagnostics = [];
     const queue = [root];
     while (queue.length) {
@@ -94,6 +96,8 @@ Attributes:\n${attributes.map((attribute) => `- ${attribute.id}: ${attribute.lab
 Rules:
 - Use only model memory and prior knowledge; do not fabricate sources.
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - If uncertain, lower confidence and explain what is missing.
 - If you are not certain a public URL is correct, omit the URL instead of guessing.
 - If credible evidence is unavailable, keep "sources" empty, set low confidence, and explain the gap in "missingEvidence".
@@ -129,12 +133,19 @@ Return JSON:
           liveSearch: false,
           schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
         });
-        cells.push(...normalizeMatrixCells(result?.parsed, current, attributes));
+        const confidenceStats = { coerced: 0 };
+        cells.push(...normalizeMatrixCells(result?.parsed, current, attributes, confidenceStats));
+        const tokenDiagnostics = {
+          ...(result?.tokenDiagnostics || {}),
+          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+        };
+        reasonCodes.push(...ensureArray(result?.reasonCodes));
+        if (confidenceStats.coerced > 0) reasonCodes.push(REASON_CODES.CONFIDENCE_SCALE_COERCED);
         diagnostics.push({
           chunkSubjects: current.map((subject) => subject.id),
           chunkSize: current.length,
           retries: result.retries,
-          tokenDiagnostics: result.tokenDiagnostics,
+          tokenDiagnostics,
           modelRoute: result.route,
         });
       } catch (err) {
@@ -152,11 +163,12 @@ Return JSON:
         if (left.length) queue.unshift(left);
       }
     }
-    return { cells, diagnostics };
+    return { cells, reasonCodes, diagnostics };
   }));
 
   return {
     cells: results.flatMap((r) => r.cells),
+    reasonCodes: normalizeReasonCodes(results.flatMap((r) => r.reasonCodes)),
     diagnostics: results.flatMap((r) => r.diagnostics),
   };
 }
@@ -183,7 +195,7 @@ export async function runStage(context = {}) {
 
     return {
       stageStatus: "ok",
-      reasonCodes: [],
+      reasonCodes: matrix.reasonCodes,
       statePatch: {
         ui: { phase: STAGE_ID },
         evidenceDrafts: {
@@ -220,6 +232,8 @@ ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${
 Rules:
 - Use only memory and prior knowledge.
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- Example: {"confidence":"high"}
 - If uncertain, lower confidence and explain what is missing.
 - If you are not certain a public URL is correct, omit the URL instead of guessing.
 - If evidence cannot be found confidently, keep "sources" empty and document what is missing in "missingEvidence".
@@ -253,10 +267,19 @@ Return JSON:
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
-  const normalized = normalizeScorecardEvidence(result?.parsed, dimensions);
+  const confidenceStats = { coerced: 0 };
+  const normalized = normalizeScorecardEvidence(result?.parsed, dimensions, confidenceStats);
+  const reasonCodes = [
+    ...ensureArray(result?.reasonCodes),
+    ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+  ];
+  const tokenDiagnostics = {
+    ...(result?.tokenDiagnostics || {}),
+    confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+  };
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: normalizeReasonCodes(reasonCodes),
     statePatch: {
       ui: { phase: STAGE_ID },
       evidenceDrafts: {
@@ -271,7 +294,7 @@ Return JSON:
       mode: "scorecard",
       dimensions: normalized.length,
       retries: result.retries,
-      tokenDiagnostics: result.tokenDiagnostics,
+      tokenDiagnostics,
       modelRoute: result.route,
     },
     io: {
@@ -279,7 +302,7 @@ Return JSON:
       response: result.text,
     },
     modelRoute: result.route,
-    tokens: result.tokenDiagnostics,
+    tokens: tokenDiagnostics,
     retries: result.retries,
   };
 }

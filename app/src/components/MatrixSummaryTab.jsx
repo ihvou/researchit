@@ -54,6 +54,9 @@ export default function MatrixSummaryTab({ uc }) {
   const decisionGradeEnabled = !!decisionGate?.enabled;
   const decisionGradePassed = decisionGradeEnabled ? !!uc?.analysisMeta?.decisionGradePassed : true;
   const decisionGradeFailureReason = cleanText(uc?.analysisMeta?.decisionGradeFailureReason);
+  const failureCauses = Array.isArray(uc?.analysisMeta?.failureCauses)
+    ? uc.analysisMeta.failureCauses.filter((item) => cleanText(item?.type))
+    : [];
 
   if (!hasSummary && !cells.length) {
     return (
@@ -76,6 +79,18 @@ export default function MatrixSummaryTab({ uc }) {
           {!decisionGradePassed && decisionGradeFailureReason ? (
             <div style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.5 }}>
               {decisionGradeFailureReason}
+            </div>
+          ) : null}
+          {!decisionGradePassed && failureCauses.length ? (
+            <div style={{ display: "grid", gap: 4 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ck-muted)", textTransform: "uppercase", letterSpacing: 0.7 }}>
+                Failure Causes
+              </div>
+              {failureCauses.map((cause) => (
+                <div key={`${cause.type}-${cause.detail}`} style={{ fontSize: 11, color: "var(--ck-muted)", lineHeight: 1.45 }}>
+                  {cleanText(cause.type).replace(/_/g, " ")}: {cleanText(cause.detail) || "No detail"}
+                </div>
+              ))}
             </div>
           ) : null}
         </div>

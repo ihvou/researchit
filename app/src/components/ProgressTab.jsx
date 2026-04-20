@@ -585,12 +585,26 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
   if (outputMode === "matrix") {
     const coverage = uc?.matrix?.coverage || {};
     if (meta?.decisionGradeGate?.enabled) {
+      const failureCauses = Array.isArray(meta?.failureCauses)
+        ? meta.failureCauses
+          .map((item) => {
+            const type = String(item?.type || "").trim();
+            if (!type) return "";
+            const detail = String(item?.detail || "").trim();
+            return detail ? `${type}: ${detail}` : type;
+          })
+          .filter(Boolean)
+        : [];
       rows.push({
         label: "Decision grade",
         value: meta.decisionGradePassed ? "Passed" : "Not passed",
         detail: meta.decisionGradePassed
           ? "All decision-grade checks passed."
-          : String(meta.decisionGradeFailureReason || "Decision-grade requirements were not met."),
+          : (
+            failureCauses.length
+              ? failureCauses.join(" | ")
+              : String(meta.decisionGradeFailureReason || "Decision-grade requirements were not met.")
+          ),
       });
     }
     const criticFlags = Number(meta.criticFlagsRaised || 0);
@@ -629,6 +643,30 @@ export function diagnosticRows(uc, outputMode = "scorecard") {
       });
     }
   } else {
+    if (meta?.decisionGradeGate?.enabled) {
+      const failureCauses = Array.isArray(meta?.failureCauses)
+        ? meta.failureCauses
+          .map((item) => {
+            const type = String(item?.type || "").trim();
+            if (!type) return "";
+            const detail = String(item?.detail || "").trim();
+            return detail ? `${type}: ${detail}` : type;
+          })
+          .filter(Boolean)
+        : [];
+      rows.push({
+        label: "Decision grade",
+        value: meta.decisionGradePassed ? "Passed" : "Not passed",
+        detail: meta.decisionGradePassed
+          ? "All decision-grade checks passed."
+          : (
+            failureCauses.length
+              ? failureCauses.join(" | ")
+              : String(meta.decisionGradeFailureReason || "Decision-grade requirements were not met.")
+          ),
+      });
+    }
+
     const hybrid = meta.hybridStats || {};
     if (hybrid && Object.keys(hybrid).length) {
       rows.push({

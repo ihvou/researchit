@@ -1,4 +1,5 @@
 import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_13_defend";
 export const STAGE_TITLE = "Concede Defend";
@@ -11,7 +12,8 @@ function normalizeOutcome(raw = {}, fallback = {}) {
     ? rawDisposition
     : "";
   const analystNote = clean(raw?.analystNote);
-  const resolved = raw?.resolved === true && !!analystNote;
+  const resolved = raw?.resolved === true;
+  const noteMissing = resolved && !analystNote;
   const disposition = validDisposition
     || (generatedFallback ? "no_response" : (resolved ? "accepted" : "rejected_with_evidence"));
   const outcome = {
@@ -23,10 +25,14 @@ function normalizeOutcome(raw = {}, fallback = {}) {
     },
     resolved,
     disposition,
-    analystNote: analystNote || (generatedFallback ? "No analyst response returned for this flag." : ""),
+    analystNote: analystNote
+      || (generatedFallback
+        ? "No analyst response returned for this flag."
+        : (noteMissing ? "Model returned resolution without note." : "")),
     mitigationNote: clean(raw?.mitigationNote || "") || undefined,
     sources: normalizeSources(raw?.sources || []),
-    responseMissing: generatedFallback || !analystNote,
+    responseMissing: generatedFallback,
+    noteMissing,
   };
   return outcome;
 }
@@ -224,12 +230,17 @@ ${JSON.stringify(flagContexts).slice(0, 28000)}`;
     !outcome.resolved
     && clean(outcome?.flag?.severity).toLowerCase() === "high"
   )).length;
+  const noteMissingCount = normalizedOutcomes.filter((outcome) => outcome?.noteMissing).length;
 
   const adjustedAssessment = applyAcceptedAdjustments(state, normalizedOutcomes);
+  const stageReasonCodes = normalizeReasonCodes([
+    ...ensureArray(result?.reasonCodes),
+    ...(noteMissingCount > 0 ? [REASON_CODES.DEFEND_NOTE_MISSING] : []),
+  ]);
 
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: stageReasonCodes,
     statePatch: {
       ui: { phase: STAGE_ID },
       resolved: {
@@ -244,6 +255,7 @@ ${JSON.stringify(flagContexts).slice(0, 28000)}`;
       outcomes: normalizedOutcomes.length,
       unresolvedHighSeverityCount,
       missingResponses: normalizedOutcomes.filter((outcome) => outcome?.responseMissing).length,
+      noteMissingCount,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,
