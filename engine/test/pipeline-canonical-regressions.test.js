@@ -13,7 +13,7 @@ import { runStage as run11 } from "../pipeline/stages/11-challenge.js";
 import { runStage as run13 } from "../pipeline/stages/13-defend.js";
 import { runStage as run14 } from "../pipeline/stages/14-synthesize.js";
 import { runStage as run15 } from "../pipeline/stages/15-finalize.js";
-import { classifyStageFailureCause } from "../pipeline/orchestrator.js";
+import { classifyStageFailureCause, reasonCodesForUpstreamHash } from "../pipeline/orchestrator.js";
 import { toUseCaseState } from "../pipeline/contracts/run-state.js";
 
 function baseModels() {
@@ -122,6 +122,22 @@ test("toUseCaseState exposes safetyGuardrails in analysisMeta", () => {
   assert.equal(Array.isArray(uc?.analysisMeta?.safetyGuardrails), true);
   assert.equal(uc.analysisMeta.safetyGuardrails.length, 1);
   assert.equal(uc.analysisMeta.safetyGuardrails[0].type, "parse_failure_aborted");
+});
+
+test("reasonCodesForUpstreamHash excludes cache_hit when stage result is cached", () => {
+  const fromCached = reasonCodesForUpstreamHash({
+    fromCache: true,
+    result: { reasonCodes: ["prompt_compaction_applied"] },
+    reasonCodes: ["prompt_compaction_applied", "cache_hit"],
+  });
+  assert.deepEqual(fromCached, ["prompt_compaction_applied"]);
+
+  const fromFresh = reasonCodesForUpstreamHash({
+    fromCache: false,
+    result: { reasonCodes: ["prompt_compaction_applied"] },
+    reasonCodes: ["prompt_compaction_applied", "cache_hit"],
+  });
+  assert.deepEqual(fromFresh, ["prompt_compaction_applied", "cache_hit"]);
 });
 
 test("stage 03b matrix web pass adaptively splits chunks and preserves full cell coverage", async () => {

@@ -447,6 +447,11 @@ function isCacheableStageResult(result = {}) {
   return true;
 }
 
+export function reasonCodesForUpstreamHash({ fromCache = false, result = {}, reasonCodes = [] } = {}) {
+  if (fromCache) return normalizeReasonCodes(result?.reasonCodes || []);
+  return normalizeReasonCodes(reasonCodes || []);
+}
+
 function ensureCacheDiagnosticsContainer(state = {}) {
   if (!state?.diagnostics || typeof state.diagnostics !== "object") return {};
   const existing = state.diagnostics.cacheDiagnostics && typeof state.diagnostics.cacheDiagnostics === "object"
@@ -732,9 +737,14 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         status: fromCache ? "cached" : (result?.stageStatus || "ok"),
         reasonCodes,
       });
+      const hashReasonCodes = reasonCodesForUpstreamHash({
+        fromCache,
+        result,
+        reasonCodes,
+      });
       upstreamHash = hashCanonicalValue({
         stage: stage.id,
-        reasonCodes,
+        reasonCodes: hashReasonCodes,
         statePatch,
         tokens: result?.tokens || null,
       });
