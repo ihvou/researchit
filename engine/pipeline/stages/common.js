@@ -60,6 +60,17 @@ function normalizeUsage(meta = {}) {
   };
 }
 
+function normalizeFinishReason(value = "") {
+  const raw = clean(value).toLowerCase();
+  if (!raw) return "unknown";
+  if (["stop", "completed", "end_turn"].includes(raw)) return "stop";
+  if (["length", "max_tokens", "max_output_tokens", "incomplete"].includes(raw)) return "length";
+  if (["content_filter", "safety", "blocked"].includes(raw)) return "content_filter";
+  if (raw.includes("tool")) return "tool_use";
+  if (raw.includes("error")) return "error";
+  return "unknown";
+}
+
 export function uniqBy(items = [], keyFn = (item) => item) {
   const out = [];
   const seen = new Set();
@@ -88,6 +99,7 @@ export function combineTokenDiagnostics(items = []) {
   let webSearchCalls = 0;
   let groundedSourceCount = 0;
   let confidenceScaleCoerced = 0;
+  let outputTruncatedCount = 0;
   let sawProviderUsage = false;
   let sawEstimated = false;
 
@@ -104,6 +116,7 @@ export function combineTokenDiagnostics(items = []) {
     webSearchCalls += toFiniteNumber(item?.webSearchCalls, 0);
     groundedSourceCount += toFiniteNumber(item?.groundedSourceCount, 0);
     confidenceScaleCoerced += toFiniteNumber(item?.confidenceScaleCoerced, 0);
+    outputTruncatedCount += item?.outputTruncated ? 1 : 0;
     const source = clean(item?.tokenSource).toLowerCase();
     if (source === "provider_usage") sawProviderUsage = true;
     if (source === "estimated_text") sawEstimated = true;
@@ -131,6 +144,8 @@ export function combineTokenDiagnostics(items = []) {
     webSearchCalls,
     groundedSourceCount,
     confidenceScaleCoerced,
+    outputTruncatedCount,
+    outputTruncatedRate: list.length > 0 ? outputTruncatedCount / list.length : 0,
     tokenSource,
     calls: list.length,
   };
@@ -211,6 +226,7 @@ export async function callActorJson({
     timeoutMs,
   };
   let parseFailureCount = 0;
+  let parseFailureTruncationSuspected = false;
 
   const execution = await executeWithRetry(
     async () => {
@@ -231,8 +247,25 @@ export async function callActorJson({
       try {
         parsed = safeParseJSON(text);
       } catch (parseErr) {
+        const responseMeta = response?.meta && typeof response.meta === "object"
+          ? response.meta
+          : {};
+        const usage = normalizeUsage(responseMeta);
+        const finishReason = normalizeFinishReason(responseMeta?.finishReason || responseMeta?.stopReason);
+        const outputTokens = Number(
+          responseMeta?.outputTokens
+          ?? usage?.outputTokens
+          ?? 0
+        ) || 0;
+        const outputTokensCap = Number(responseMeta?.outputTokensCap ?? tokenBudget) || 0;
+        const outputTruncated = finishReason === "length"
+          || (outputTokensCap > 0 && outputTokens >= Math.floor(outputTokensCap * 0.95));
         const err = new Error(parseErr?.message || "JSON parse failed");
         err.reasonCode = REASON_CODES.RESPONSE_PARSE_FAILED;
+        err.finishReason = finishReason;
+        err.outputTokens = outputTokens;
+        err.outputTokensCap = outputTokensCap;
+        err.outputTruncated = outputTruncated;
         throw err;
       }
 
@@ -250,9 +283,16 @@ export async function callActorJson({
       maxRetries,
       initialBackoffMs: 300,
       backoffFactor: 2,
-      onRetry: async ({ failureType }) => {
+      onRetry: async ({ failureType, error }) => {
         if (failureType !== "parse") return;
-        parseRepairNotice = "Previous response failed JSON parsing. Return strict JSON only. No prose, no markdown, no code fences.";
+        const truncated = !!error?.outputTruncated;
+        if (truncated) {
+          parseFailureTruncationSuspected = true;
+          reasonCodes.push(REASON_CODES.TRUNCATION_SUSPECTED);
+        }
+        parseRepairNotice = truncated
+          ? "Previous response appears truncated. Return strict JSON only and keep it concise. No prose, no markdown, no code fences."
+          : "Previous response failed JSON parsing. Return strict JSON only. No prose, no markdown, no code fences.";
         parseFailureCount += 1;
         if (parseFailureCount >= 2) {
           workingPromptBody = promptSplitHalf(workingPromptBody);
@@ -275,6 +315,14 @@ export async function callActorJson({
   if (!execution.ok) {
     const err = execution.error || new Error("Stage actor call failed.");
     const executionCodes = execution.reasonCodes || [];
+    if (err?.abortReason && typeof err.abortReason === "object") {
+      err.abortReason = {
+        source: clean(err.abortReason?.source) || "unknown",
+        layer: clean(err.abortReason?.layer) || undefined,
+        deadlineMs: Number.isFinite(Number(err.abortReason?.deadlineMs)) ? Number(err.abortReason.deadlineMs) : undefined,
+        elapsedMs: Number.isFinite(Number(err.abortReason?.elapsedMs)) ? Number(err.abortReason.elapsedMs) : undefined,
+      };
+    }
     err.reasonCodes = normalizeReasonCodes([
       ...reasonCodes,
       ...executionCodes,
@@ -289,6 +337,8 @@ export async function callActorJson({
   const meta = execution?.result?.meta && typeof execution.result.meta === "object"
     ? execution.result.meta
     : {};
+  const finishReason = normalizeFinishReason(meta?.finishReason || meta?.stopReason);
+  const outputTokensCap = toFiniteNumber(meta?.outputTokensCap, tokenBudget);
 
   let inputTokens = usage?.inputTokens ?? estimatedInput;
   let outputTokens = usage?.outputTokens ?? estimatedOutput;
@@ -301,6 +351,11 @@ export async function callActorJson({
     inputTokens = Math.max(0, usage.totalTokens - outputTokens);
   }
   if (!totalTokens) totalTokens = inputTokens + outputTokens;
+  const outputTruncated = finishReason === "length"
+    || (outputTokensCap > 0 && Number(outputTokens || 0) >= Math.floor(outputTokensCap * 0.95));
+  if (parseFailureTruncationSuspected) {
+    reasonCodes.push(REASON_CODES.TRUNCATION_SUSPECTED);
+  }
 
   return {
     ...execution.result,
@@ -324,6 +379,9 @@ export async function callActorJson({
       webSearchCalls: toFiniteNumber(meta?.webSearchCalls, 0),
       groundedSourceCount: groundedSourceCount(meta?.groundedSources),
       liveSearchUsed: !!meta?.liveSearchUsed,
+      finishReason,
+      outputTokensCap: toFiniteNumber(outputTokensCap, 0),
+      outputTruncated,
     },
   };
 }

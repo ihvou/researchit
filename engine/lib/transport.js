@@ -1,3 +1,5 @@
+import { attachAbortReason, normalizeAbortReason } from "./abort-reason.js";
+
 function ensureFunction(callFn) {
   if (typeof callFn !== "function") {
     throw new Error("createTransport requires a callFn(role, payload) function");
@@ -52,11 +54,17 @@ function timeoutError(label, timeoutMs) {
 async function withTimeout(fn, timeoutMs, label) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fn();
   const controller = new AbortController();
+  const startedAt = Date.now();
   let timedOut = false;
   const onTimeout = () => {
     timedOut = true;
     try {
-      controller.abort();
+      controller.abort({
+        source: "provider_timeout",
+        layer: "transport_timeout",
+        deadlineMs: timeoutMs,
+        elapsedMs: Date.now() - startedAt,
+      });
     } catch (_) {
       // no-op
     }
@@ -65,9 +73,16 @@ async function withTimeout(fn, timeoutMs, label) {
   try {
     return await fn(controller.signal);
   } catch (err) {
-    if (timedOut) {
-      throw timeoutError(label, timeoutMs);
+    const abortReason = normalizeAbortReason(
+      err?.abortReason || controller?.signal?.reason,
+      timedOut ? "provider_timeout" : "unknown"
+    );
+    if (timedOut || String(err?.name || "").toLowerCase() === "aborterror") {
+      const timeoutErr = timeoutError(label, timeoutMs);
+      attachAbortReason(timeoutErr, abortReason, timedOut ? "provider_timeout" : "unknown");
+      throw timeoutErr;
     }
+    attachAbortReason(err instanceof Error ? err : new Error(String(err || "Abort error")), abortReason, "unknown");
     throw err;
   } finally {
     clearTimeout(timer);
@@ -77,6 +92,9 @@ async function withTimeout(fn, timeoutMs, label) {
 function normalizeError(err) {
   if (err instanceof Error) return err;
   const wrapped = new Error(String(err || "Unknown transport error"));
+  if (err?.abortReason) {
+    wrapped.abortReason = normalizeAbortReason(err.abortReason, "unknown");
+  }
   return wrapped;
 }
 
@@ -164,6 +182,9 @@ function normalizeResult(data, includeMeta = false) {
     const err = new Error(String(data.error));
     err.status = Number(data?.status || 0) || undefined;
     err.reasonCode = String(data?.reasonCode || "").trim() || undefined;
+    err.abortReason = data?.abortReason && typeof data.abortReason === "object"
+      ? normalizeAbortReason(data.abortReason, "unknown")
+      : undefined;
     throw err;
   }
   if (includeMeta) return data;
@@ -192,6 +213,9 @@ async function callWithRetry({
       return normalizeResult(data, includeMeta);
     } catch (rawErr) {
       const err = normalizeError(rawErr);
+      if (err?.abortReason && typeof err.abortReason === "object") {
+        err.abortReason = normalizeAbortReason(err.abortReason, "unknown");
+      }
       lastErr = err;
       const retryable = isRetryableError(err, policy);
       const finalAttempt = attempt >= maxAttempts;

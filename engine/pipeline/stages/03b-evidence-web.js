@@ -10,9 +10,20 @@ import {
   normalizeSources,
 } from "./common.js";
 import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
+import {
+  createInitialMatrixCellChunks,
+  makeChunkManifest,
+  splitMatrixCellChunk,
+  toChunkManifestEntry,
+} from "../../lib/chunking/matrix-chunks.js";
 
 export const STAGE_ID = "stage_03b_evidence_web";
 export const STAGE_TITLE = "Evidence Web";
+export const PROMPT_VERSION = "v2";
+
+function nowIso() {
+  return new Date().toISOString();
+}
 
 function confidenceRank(value = "") {
   const normalized = normalizeConfidence(value);
@@ -146,75 +157,81 @@ function normalizeScorecard(parsed = {}, dimensions = [], options = {}) {
   });
 }
 
-function normalizeMatrix(parsed = {}, subjects = [], attributes = [], options = {}) {
+function normalizeMatrixChunk(parsed = {}, chunk = {}, options = {}) {
   const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
   const groundedSources = ensureArray(options?.groundedSources);
   const confidenceStats = options?.confidenceStats || { coerced: 0 };
   const providerGroundedCount = groundedSources.length;
   const liveSearchUsed = options?.liveSearchUsed === true;
 
-  const cells = [];
-  subjects.forEach((subject) => {
-    attributes.forEach((attribute) => {
-      const patch = byKey.get(`${subject.id}::${attribute.id}`) || {};
-      const grounded = annotateSourcesWithGrounding(patch?.sources || [], groundedSources);
-      cells.push({
-        subjectId: subject.id,
-        attributeId: attribute.id,
-        value: clean(patch?.value),
-        full: clean(patch?.full),
-        confidence: normalizeConfidence(patch?.confidence, confidenceStats),
-        confidenceReason: clean(patch?.confidenceReason),
-        sources: grounded.sources,
-        fabricationSignal: fabricationSignalFromSources(grounded.sources, {
-          liveSearchUsed,
-          groundedSourceCount: providerGroundedCount,
-        }),
-        arguments: normalizeArguments(patch?.arguments || {}, `${subject.id}-${attribute.id}-web`),
-        risks: clean(patch?.risks),
-        missingEvidence: clean(patch?.missingEvidence),
-      });
-    });
+  return ensureArray(chunk?.cells).map((cell) => {
+    const patch = byKey.get(`${cell.subjectId}::${cell.attributeId}`) || {};
+    const grounded = annotateSourcesWithGrounding(patch?.sources || [], groundedSources);
+    return {
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      value: clean(patch?.value),
+      full: clean(patch?.full),
+      confidence: normalizeConfidence(patch?.confidence, confidenceStats),
+      confidenceReason: clean(patch?.confidenceReason),
+      sources: grounded.sources,
+      fabricationSignal: fabricationSignalFromSources(grounded.sources, {
+        liveSearchUsed,
+        groundedSourceCount: providerGroundedCount,
+      }),
+      arguments: normalizeArguments(patch?.arguments || {}, `${cell.subjectId}-${cell.attributeId}-web`),
+      risks: clean(patch?.risks),
+      missingEvidence: clean(patch?.missingEvidence),
+    };
   });
-  return cells;
 }
 
-function chunkSubjects(subjects = [], size = 1) {
-  const safeSize = Math.max(1, Number(size) || 1);
-  const chunks = [];
-  for (let idx = 0; idx < subjects.length; idx += safeSize) {
-    chunks.push(subjects.slice(idx, idx + safeSize));
-  }
-  return chunks;
-}
+function buildMatrixPrompt(state = {}, chunk = {}, subjectsById = new Map(), attributesById = new Map()) {
+  const cells = ensureArray(chunk?.cells);
+  const uniqueSubjectLines = [...new Set(
+    cells
+      .map((cell) => cell?.subjectId)
+      .filter(Boolean)
+      .map((subjectId) => {
+        const subject = subjectsById.get(subjectId) || {};
+        return `- ${subjectId}: ${clean(subject?.label) || subjectId}`;
+      })
+  )].join("\n");
+  const uniqueAttributeLines = [...new Set(
+    cells
+      .map((cell) => cell?.attributeId)
+      .filter(Boolean)
+      .map((attributeId) => {
+        const attribute = attributesById.get(attributeId) || {};
+        const brief = clean(attribute?.brief);
+        return `- ${attributeId}: ${clean(attribute?.label) || attributeId}${brief ? ` - ${brief}` : ""}`;
+      })
+  )].join("\n");
+  const cellLines = cells
+    .map((cell) => {
+      const subject = subjectsById.get(cell.subjectId) || {};
+      const attribute = attributesById.get(cell.attributeId) || {};
+      const brief = clean(attribute?.brief);
+      return `- subjectId=${cell.subjectId}; attributeId=${cell.attributeId} (${clean(subject?.label) || cell.subjectId} x ${clean(attribute?.label) || cell.attributeId})${brief ? ` | brief: ${brief}` : ""}`;
+    })
+    .join("\n");
 
-function matrixChunkSize(subjects = [], attributes = [], config = {}) {
-  const subjectCount = Math.max(1, ensureArray(subjects).length);
-  const attrCount = Math.max(1, ensureArray(attributes).length);
-  const maxCells = Math.max(
-    attrCount,
-    Number(config?.limits?.matrixWebChunkMaxCells) || 16
-  );
-  const byCells = Math.max(1, Math.floor(maxCells / attrCount));
-  return Math.max(1, Math.min(subjectCount, byCells));
-}
-
-function buildMatrixPrompt(state = {}, subjects = [], attributes = []) {
   return `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
 Collect WEB evidence for each matrix cell below and return structured JSON.
-Subjects:
-${subjects.map((subject) => `- ${subject.id}: ${subject.label}`).join("\n")}
-Attributes:
-${attributes.map((attribute) => `- ${attribute.id}: ${attribute.label}${clean(attribute?.brief) ? ` - ${clean(attribute.brief)}` : ""}`).join("\n")}
+Subjects in this chunk:
+${uniqueSubjectLines || "- none"}
+Attributes in this chunk:
+${uniqueAttributeLines || "- none"}
+Cells to cover:
+${cellLines || "- none"}
 
 Rules:
-- Cover every listed subject x attribute cell.
+- Cover every listed cell exactly once.
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
 - Return confidence as one of these strings only: high, medium, low. Do not return numbers.
-- Example: {"confidence":"high"}
 - If uncertain, lower confidence and state what is missing.
 - Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
 - For each non-empty source, include a valid public https URL, a concise quote/snippet, and "sourceType".
@@ -226,90 +243,186 @@ Rules:
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 }
 
+function summarizeChunkEvents(trace = []) {
+  const events = ensureArray(trace);
+  const started = events.filter((entry) => entry?.event === "started").length;
+  const completed = events.filter((entry) => entry?.event === "completed").length;
+  const failed = events.filter((entry) => entry?.event === "failed").length;
+  const retries = events.filter((entry) => entry?.event === "retried").length;
+  const splitDepthMax = events.reduce((maxDepth, entry) => {
+    const depth = Number(entry?.depth || 0);
+    return depth > maxDepth ? depth : maxDepth;
+  }, 0);
+  return {
+    chunksStarted: started,
+    chunksCompleted: completed,
+    chunksFailed: failed,
+    chunkRetriesTotal: retries,
+    chunkSplitDepthMax: splitDepthMax,
+  };
+}
+
 async function gatherMatrixWeb({
   state,
   runtime,
   subjects,
   attributes,
 }) {
-  const initialSize = matrixChunkSize(subjects, attributes, runtime?.config || {});
-  const rootChunks = chunkSubjects(subjects, initialSize);
+  const limits = runtime?.config?.limits || {};
+  const cellsPerChunk = Math.max(1, Number(limits?.matrixWebCellsPerChunk || limits?.matrixCellsPerChunk || 12));
+  const { chunks: rootChunks, allCells } = createInitialMatrixCellChunks({
+    subjects,
+    attributes,
+    cellsPerChunk,
+  });
+  const subjectsById = new Map(subjects.map((subject) => [clean(subject?.id), subject]));
+  const attributesById = new Map(attributes.map((attribute) => [clean(attribute?.id), attribute]));
 
-  const results = await Promise.all(rootChunks.map(async (root) => {
-    const cells = [];
-    const reasonCodes = [];
-    const diagnostics = [];
-    const queue = [root];
-    while (queue.length) {
-      const current = queue.shift();
-      const prompt = buildMatrixPrompt(state, current, attributes);
-      try {
-        const result = await callActorJson({
-          state,
-          runtime,
-          stageId: STAGE_ID,
-          actor: "analyst",
-          systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
-          userPrompt: prompt,
-          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
-          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
-          // 1 retry enables parse-repair (injects "return strict JSON" notice on parse failure).
-          // Queue splits on failure rather than retrying the same size, so this does not compound.
-          maxRetries: 1,
-          liveSearch: true,
-          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+  const queue = [...rootChunks];
+  const manifestMap = new Map(rootChunks.map((chunk) => [chunk.chunkId, toChunkManifestEntry(chunk)]));
+  const cellsByKey = new Map();
+  const reasonCodes = [];
+  const diagnostics = [];
+  const chunkTrace = [];
+
+  while (queue.length) {
+    const current = queue.shift();
+    const prompt = buildMatrixPrompt(state, current, subjectsById, attributesById);
+    chunkTrace.push({
+      chunkId: current.chunkId,
+      event: "started",
+      timestamp: nowIso(),
+      depth: Number(current?.depth || 0),
+      cellCount: ensureArray(current?.cells).length,
+    });
+    try {
+      const result = await callActorJson({
+        state,
+        runtime,
+        stageId: STAGE_ID,
+        actor: "analyst",
+        systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
+        userPrompt: prompt,
+        tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
+        timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
+        maxRetries: 1,
+        liveSearch: true,
+        schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+      });
+      const confidenceStats = { coerced: 0 };
+      const normalizedChunk = normalizeMatrixChunk(result?.parsed, current, {
+        groundedSources: result?.meta?.groundedSources || [],
+        liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+        confidenceStats,
+      });
+      normalizedChunk.forEach((cell) => {
+        cellsByKey.set(`${cell.subjectId}::${cell.attributeId}`, cell);
+      });
+
+      const tokenDiagnostics = {
+        ...(result?.tokenDiagnostics || {}),
+        confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+      };
+      const chunkReasonCodes = [
+        ...ensureArray(result?.reasonCodes),
+        ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+      ];
+      reasonCodes.push(...chunkReasonCodes);
+
+      const retryCount = Number(result?.retries || 0);
+      for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+        chunkTrace.push({
+          chunkId: current.chunkId,
+          event: "retried",
+          timestamp: nowIso(),
+          retryIndex,
+          reason: "call_retry",
+          depth: Number(current?.depth || 0),
         });
-        const confidenceStats = { coerced: 0 };
-        const normalizedChunk = normalizeMatrix(result?.parsed, current, attributes, {
-          groundedSources: result?.meta?.groundedSources || [],
-          liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
-          confidenceStats,
-        });
-        const tokenDiagnostics = {
-          ...(result?.tokenDiagnostics || {}),
-          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-        };
-        cells.push(...normalizedChunk);
-        const chunkReasonCodes = [
-          ...ensureArray(result?.reasonCodes),
-          ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
-        ];
-        reasonCodes.push(...chunkReasonCodes);
-        diagnostics.push({
-          chunkSubjects: current.map((subject) => subject.id),
-          chunkSize: current.length,
-          retries: result.retries,
-          tokenDiagnostics,
-          modelRoute: result.route,
-          citations: computeGroundingCoverage(normalizedChunk),
-          groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
-        });
-      } catch (err) {
-        if (current.length <= 1) throw err;
-        const splitAt = Math.max(1, Math.floor(current.length / 2));
-        const left = current.slice(0, splitAt);
-        const right = current.slice(splitAt);
-        diagnostics.push({
-          chunkSubjects: current.map((subject) => subject.id),
-          chunkSize: current.length,
-          splitInto: [left.map((subject) => subject.id), right.map((subject) => subject.id)],
-          splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
-        });
-        if (right.length) queue.unshift(right);
-        if (left.length) queue.unshift(left);
+      }
+      chunkTrace.push({
+        chunkId: current.chunkId,
+        event: "completed",
+        timestamp: nowIso(),
+        depth: Number(current?.depth || 0),
+        outputSize: normalizedChunk.length,
+        outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
+        finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
+      });
+      diagnostics.push({
+        chunkId: current.chunkId,
+        parentId: current.parentId || null,
+        depth: Number(current?.depth || 0),
+        cellCount: ensureArray(current?.cells).length,
+        retries: retryCount,
+        tokenDiagnostics,
+        modelRoute: result.route,
+        citations: computeGroundingCoverage(normalizedChunk),
+        groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+      });
+    } catch (err) {
+      chunkTrace.push({
+        chunkId: current.chunkId,
+        event: "failed",
+        timestamp: nowIso(),
+        depth: Number(current?.depth || 0),
+        error: clean(err?.message || "chunk_failure"),
+        abortReason: err?.abortReason || null,
+        finishReason: clean(err?.finishReason) || "unknown",
+      });
+      if (ensureArray(current?.cells).length <= 1) throw err;
+      const children = splitMatrixCellChunk(current);
+      if (!children.length) throw err;
+      children.forEach((child) => {
+        manifestMap.set(child.chunkId, toChunkManifestEntry(child));
+      });
+      chunkTrace.push({
+        chunkId: current.chunkId,
+        event: "split",
+        timestamp: nowIso(),
+        depth: Number(current?.depth || 0),
+        parentId: current.chunkId,
+        childIds: children.map((child) => child.chunkId),
+        reason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+      });
+      diagnostics.push({
+        chunkId: current.chunkId,
+        parentId: current.parentId || null,
+        depth: Number(current?.depth || 0),
+        cellCount: ensureArray(current?.cells).length,
+        splitInto: children.map((child) => child.chunkId),
+        splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+        error: clean(err?.message || "chunk_failure"),
+        abortReason: err?.abortReason || null,
+      });
+      for (let idx = children.length - 1; idx >= 0; idx -= 1) {
+        queue.unshift(children[idx]);
       }
     }
-    return { cells, reasonCodes, diagnostics };
-  }));
+  }
 
-  const allDiagnostics = results.flatMap((r) => r.diagnostics);
+  const completedCells = allCells.map((cell) => (
+    cellsByKey.get(cell.key) || {
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      value: "",
+      full: "",
+      confidence: "low",
+      confidenceReason: "No web evidence returned for this cell.",
+      sources: [],
+      fabricationSignal: "high",
+      arguments: { supporting: [], limiting: [] },
+      risks: "",
+      missingEvidence: "No web evidence returned.",
+    }
+  ));
+  const allDiagnostics = diagnostics;
   const citationAggregate = allDiagnostics.reduce((acc, item) => {
     const stats = item?.citations || {};
     acc.totalUrls += Number(stats?.totalUrls || 0);
     acc.groundedUrls += Number(stats?.groundedUrls || 0);
     return acc;
   }, { totalUrls: 0, groundedUrls: 0 });
-
   const groundedSourcesResolved = allDiagnostics.reduce((acc, item) => {
     const stats = item?.groundedSourcesResolved || {};
     acc.total += Number(stats?.total || 0);
@@ -317,16 +430,24 @@ async function gatherMatrixWeb({
     acc.unresolved += Number(stats?.unresolved || 0);
     return acc;
   }, { total: 0, resolved: 0, unresolved: 0 });
+  const tokenDiagnostics = combineTokenDiagnostics(
+    allDiagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
+  );
+  const modelRoute = allDiagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
 
   return {
-    cells: results.flatMap((r) => r.cells),
-    reasonCodes: normalizeReasonCodes(results.flatMap((r) => r.reasonCodes)),
+    cells: completedCells,
+    reasonCodes: normalizeReasonCodes(reasonCodes),
     diagnostics: allDiagnostics,
+    chunkTrace,
+    chunkManifest: makeChunkManifest([...manifestMap.values()]),
     citations: {
       ...citationAggregate,
       groundedRatio: citationAggregate.totalUrls > 0 ? citationAggregate.groundedUrls / citationAggregate.totalUrls : 1,
     },
     groundedSourcesResolved,
+    tokenDiagnostics,
+    modelRoute,
   };
 }
 
@@ -343,22 +464,21 @@ export async function runStage(context = {}) {
       subjects,
       attributes,
     });
-    const normalizedWeb = matrixWeb.cells;
-    const merged = mergeMatrixCells(ensureArray(memory?.matrix?.cells), normalizedWeb);
-    const aggregatedTokens = combineTokenDiagnostics(
-      matrixWeb.diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
-    );
-    const totalRetries = matrixWeb.diagnostics.reduce((sum, entry) => sum + Number(entry?.retries || 0), 0);
-    const modelRoute = matrixWeb.diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
+    const merged = mergeMatrixCells(ensureArray(memory?.matrix?.cells), matrixWeb.cells);
+    const chunkSummary = summarizeChunkEvents(matrixWeb.chunkTrace);
     return {
       stageStatus: "ok",
       reasonCodes: matrixWeb.reasonCodes,
       statePatch: {
         ui: { phase: STAGE_ID },
+        chunkManifest: {
+          ...(state?.chunkManifest || {}),
+          [STAGE_ID]: matrixWeb.chunkManifest,
+        },
         evidenceDrafts: {
           web: {
             matrix: {
-              cells: normalizedWeb,
+              cells: matrixWeb.cells,
             },
           },
           merged: {
@@ -372,15 +492,19 @@ export async function runStage(context = {}) {
         mode: "matrix",
         cells: merged.length,
         chunks: matrixWeb.diagnostics,
+        chunkTrace: matrixWeb.chunkTrace,
+        chunkManifest: matrixWeb.chunkManifest,
+        chunkTruncationRate: Number(matrixWeb?.tokenDiagnostics?.outputTruncatedRate || 0),
         citations: matrixWeb.citations,
         groundedSourcesResolved: matrixWeb.groundedSourcesResolved,
-        retries: totalRetries,
-        tokenDiagnostics: aggregatedTokens,
-        modelRoute,
+        retries: Number(matrixWeb?.tokenDiagnostics?.retries || 0),
+        tokenDiagnostics: matrixWeb.tokenDiagnostics,
+        modelRoute: matrixWeb.modelRoute,
+        ...chunkSummary,
       },
-      modelRoute,
-      tokens: aggregatedTokens,
-      retries: totalRetries,
+      modelRoute: matrixWeb.modelRoute,
+      tokens: matrixWeb.tokenDiagnostics,
+      retries: Number(matrixWeb?.tokenDiagnostics?.retries || 0),
     };
   }
 
@@ -396,7 +520,6 @@ ${dimensions.map((dim) => `- ${dim.id}: ${dim.label}${clean(dim?.brief) ? ` - ${
 Rules:
 - Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
 - Return confidence as one of these strings only: high, medium, low. Do not return numbers.
-- Example: {"confidence":"high"}
 - If uncertain, lower confidence and state what is missing.
 - Use sources that can be cited with specific canonical public URLs when possible.
 - Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.

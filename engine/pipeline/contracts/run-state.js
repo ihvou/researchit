@@ -149,6 +149,7 @@ export function createRunState({ input = {}, config = {}, runId = "" } = {}) {
     critique: null,
     resolved: null,
     synthesis: null,
+    chunkManifest: {},
     quality: {
       strictQuality,
       qualityGrade: "decision-grade",
@@ -185,6 +186,13 @@ export function createRunState({ input = {}, config = {}, runId = "" } = {}) {
       },
       progress: [],
       reasonCodes: [],
+      cacheDiagnostics: {
+        totalHits: 0,
+        totalMisses: 0,
+        totalBytes: 0,
+        stagesCached: [],
+        stagesMissed: [],
+      },
     },
     ui: {
       rawInput: clean(input?.description),
@@ -502,6 +510,9 @@ export function toUseCaseState(state = {}) {
     ? state.quality.failureCauses
     : (Array.isArray(state?.decisionGateResult?.failureCauses) ? state.decisionGateResult.failureCauses : []);
   const webSearchCounts = collectWebSearchCounters(state);
+  const cacheDiagnostics = state?.diagnostics?.cacheDiagnostics && typeof state.diagnostics.cacheDiagnostics === "object"
+    ? state.diagnostics.cacheDiagnostics
+    : {};
   const analysisMeta = {
     analysisMode: outputMode === "matrix"
       ? (state?.mode === "deep-research-x3" ? "matrix-deep-research-x3" : "matrix")
@@ -565,6 +576,10 @@ export function toUseCaseState(state = {}) {
     })).filter((cause) => cause.type),
     llmCostCurrency: clean(state?.diagnostics?.cost?.currency) || "USD",
     llmCostEstimatedUsd: Number(state?.diagnostics?.cost?.totalEstimated || 0),
+    cacheHits: Number(cacheDiagnostics?.totalHits || 0),
+    cacheMisses: Number(cacheDiagnostics?.totalMisses || 0),
+    cacheStagesHit: Array.isArray(cacheDiagnostics?.stagesCached) ? cacheDiagnostics.stagesCached : [],
+    cacheStagesMissed: Array.isArray(cacheDiagnostics?.stagesMissed) ? cacheDiagnostics.stagesMissed : [],
     pipelineVersion: state?.pipelineVersion,
     artifactVersion: state?.artifactVersion,
   };

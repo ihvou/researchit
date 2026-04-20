@@ -91,8 +91,12 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const detail = err?.message || "Unknown provider error";
+    const abortReason = err?.abortReason && typeof err.abortReason === "object"
+      ? err.abortReason
+      : undefined;
     return res.status(500).json({
       error: `Pinned analyst provider route failed (${resolved.providerId}): ${detail}`,
+      ...(abortReason ? { abortReason } : {}),
     });
   }
 }

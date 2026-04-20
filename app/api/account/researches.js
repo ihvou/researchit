@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { requireSessionUser } from "../_lib/auth.js";
 import {
   assertPersistentStoreAvailable,
+  deleteRunStageCache,
   deleteUserResearch,
   getUserResearches,
   upsertUserResearches,
@@ -75,6 +76,9 @@ export default async function handler(req, res) {
     }
     try {
       const deleted = await deleteUserResearch(auth.user.id, id);
+      if (deleted) {
+        await deleteRunStageCache(auth.user.id, id).catch(() => null);
+      }
       return res.status(200).json({ ok: true, deleted });
     } catch (err) {
       return res.status(500).json({ error: err?.message || "Failed to delete research" });

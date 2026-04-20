@@ -24,6 +24,17 @@ function normalizeUsage({ inputTokens = 0, outputTokens = 0, totalTokens = 0 } =
   };
 }
 
+function normalizeFinishReason(raw = "") {
+  const value = cleanText(raw).toLowerCase();
+  if (!value) return "unknown";
+  if (["stop", "end_turn", "completed", "finish", "done"].includes(value)) return "stop";
+  if (["length", "max_tokens", "max_output_tokens", "max_token", "max_tokens_reached", "max_tokens_exceeded"].includes(value)) return "length";
+  if (["content_filter", "safety", "blocked"].includes(value)) return "content_filter";
+  if (value.includes("tool")) return "tool_use";
+  if (value.includes("error")) return "error";
+  return "unknown";
+}
+
 function normalizeMessageContent(content) {
   if (typeof content === "string") return content;
   return JSON.stringify(content);
@@ -174,6 +185,12 @@ async function callAnthropic({
 
   const webSearchCalls = Number(data?.usage?.server_tool_use?.web_search_requests || 0);
   const sources = uniqueSourcesFromUrls(extractHttpUrlsDeep(data), "Anthropic source");
+  const usage = normalizeUsage({
+    inputTokens: data?.usage?.input_tokens,
+    outputTokens: data?.usage?.output_tokens,
+    totalTokens: (toFinite(data?.usage?.input_tokens, 0) + toFinite(data?.usage?.output_tokens, 0)),
+  });
+  const outputTokensCap = Math.max(256, Number(maxTokens) || 4000);
   return {
     text,
     sources,
@@ -182,16 +199,15 @@ async function callAnthropic({
       model: resolvedModel,
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      finishReason: normalizeFinishReason(data?.stop_reason || data?.stopReason || data?.type),
+      outputTokens: Number(usage?.outputTokens || 0),
+      outputTokensCap,
       groundedSourcesResolved: {
         total: sources.length,
         resolved: sources.length,
         unresolved: 0,
       },
-      usage: normalizeUsage({
-        inputTokens: data?.usage?.input_tokens,
-        outputTokens: data?.usage?.output_tokens,
-        totalTokens: (toFinite(data?.usage?.input_tokens, 0) + toFinite(data?.usage?.output_tokens, 0)),
-      }),
+      usage,
     },
   };
 }
@@ -270,9 +286,15 @@ async function resolveCanonicalUrl(url = "", timeoutMs = 1800) {
   }
 
   const controller = new AbortController();
+  const startedAt = Date.now();
   const timer = setTimeout(() => {
     try {
-      controller.abort();
+      controller.abort({
+        source: "provider_timeout",
+        layer: "canonical_url_resolution",
+        deadlineMs: Math.max(250, Number(timeoutMs) || 1800),
+        elapsedMs: Date.now() - startedAt,
+      });
     } catch (_) {
       // no-op
     }
@@ -435,6 +457,13 @@ async function callGemini({
     concurrency: 8,
     timeoutMs: 1800,
   });
+  const firstCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+  const usage = normalizeUsage({
+    inputTokens: data?.usageMetadata?.promptTokenCount,
+    outputTokens: data?.usageMetadata?.candidatesTokenCount,
+    totalTokens: data?.usageMetadata?.totalTokenCount,
+  });
+  const outputTokensCap = Math.max(256, Number(maxTokens) || 4000);
   return {
     text,
     sources: grounded.sources,
@@ -443,12 +472,11 @@ async function callGemini({
       model: cleanText(model),
       liveSearchUsed: webSearchCalls > 0,
       webSearchCalls,
+      finishReason: normalizeFinishReason(firstCandidate?.finishReason || firstCandidate?.finish_reason),
+      outputTokens: Number(usage?.outputTokens || 0),
+      outputTokensCap,
       groundedSourcesResolved: grounded.diagnostics,
-      usage: normalizeUsage({
-        inputTokens: data?.usageMetadata?.promptTokenCount,
-        outputTokens: data?.usageMetadata?.candidatesTokenCount,
-        totalTokens: data?.usageMetadata?.totalTokenCount,
-      }),
+      usage,
     },
   };
 }

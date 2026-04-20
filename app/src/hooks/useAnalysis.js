@@ -12,6 +12,9 @@ import {
   startRunDebugCapture,
   stopRunDebugCapture,
 } from "../lib/debugUI";
+import { createStageCacheClient } from "../lib/stageCache";
+
+const stageCacheClient = createStageCacheClient();
 
 function mergeConfig(baseConfig, dims) {
   return {
@@ -93,6 +96,7 @@ export async function runAnalysis(desc, dims, updateUC, id, options = {}) {
       config,
       {
         transport: appTransport,
+        stageCache: stageCacheClient,
         onProgress: (phase, nextState) => {
           appendAnalysisDebugEvent(fallbackDebugSession, {
             type: "phase_update",

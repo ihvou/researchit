@@ -37,6 +37,17 @@ function normalizeUsage(raw = {}) {
   };
 }
 
+function normalizeFinishReason(raw = "") {
+  const value = String(raw || "").trim().toLowerCase();
+  if (!value) return "unknown";
+  if (["stop", "completed"].includes(value)) return "stop";
+  if (["length", "max_output_tokens", "max_tokens", "incomplete"].includes(value)) return "length";
+  if (["content_filter"].includes(value)) return "content_filter";
+  if (value.includes("tool")) return "tool_use";
+  if (value.includes("error")) return "error";
+  return "unknown";
+}
+
 async function readJson(response) {
   const text = await response.text();
   if (!text) return {};
@@ -235,6 +246,9 @@ async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, ma
       liveSearchUsed: false,
       webSearchCalls: 0,
       usage: normalizeUsage(data?.usage),
+      finishReason: normalizeFinishReason(data?.incomplete_details?.reason || data?.status),
+      outputTokens: Number(data?.usage?.output_tokens || 0),
+      outputTokensCap: Math.max(256, Number(maxTokens) || 5000),
       ...extraMeta,
     },
   };
@@ -260,6 +274,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
   const text = extractChatCompletionsText(data);
   if (!text) throw new Error("No text content in OpenAI chat completions output");
 
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
   return {
     text,
     meta: {
@@ -267,6 +282,9 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
       liveSearchUsed: false,
       webSearchCalls: 0,
       usage: normalizeUsage(data?.usage),
+      finishReason: normalizeFinishReason(choice?.finish_reason || data?.finish_reason),
+      outputTokens: Number(data?.usage?.completion_tokens || data?.usage?.output_tokens || 0),
+      outputTokensCap: Math.max(256, Number(maxTokens) || 5000),
       ...extraMeta,
     },
   };
@@ -323,6 +341,9 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
         liveSearchUsed: true,
         webSearchCalls: countWebSearchCalls(data),
         usage: normalizeUsage(data?.usage),
+        finishReason: normalizeFinishReason(data?.incomplete_details?.reason || data?.status),
+        outputTokens: Number(data?.usage?.output_tokens || 0),
+        outputTokensCap: Math.max(256, Number(maxTokens) || 5000),
       },
     };
   }

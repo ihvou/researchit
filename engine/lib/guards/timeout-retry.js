@@ -1,4 +1,5 @@
 import { REASON_CODES } from "../../pipeline/contracts/reason-codes.js";
+import { attachAbortReason } from "../abort-reason.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
@@ -14,6 +15,7 @@ function isRateLimitError(err) {
 function isTimeoutError(err) {
   const code = String(err?.code || "").toLowerCase();
   if (code.includes("timeout")) return true;
+  if (String(err?.name || "").toLowerCase() === "aborterror") return true;
   const message = String(err?.message || "").toLowerCase();
   return message.includes("timed out") || message.includes("timeout");
 }
@@ -50,6 +52,12 @@ export async function executeWithRetry(work, options = {}) {
             setTimeout(() => {
               const err = new Error(`stage timed out after ${Math.round(timeoutMs)}ms`);
               err.code = "STAGE_TIMEOUT";
+              attachAbortReason(err, {
+                source: "stage_timeout",
+                layer: "retry_guard",
+                deadlineMs: timeoutMs,
+                elapsedMs: Date.now() - start,
+              });
               reject(err);
             }, timeoutMs);
           }),

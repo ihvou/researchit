@@ -344,7 +344,11 @@ function flowByEvidenceMode(flow = [], evidenceMode = "native") {
   });
 }
 
-function getStepState(step, idx, currentIdx, uc) {
+function getStepState(step, idx, currentIdx, uc, stageRecord = null) {
+  const stageStatus = String(stageRecord?.status || "").trim().toLowerCase();
+  if (stageStatus === "cached") return "done";
+  if (stageRecord?.diagnostics?.skipped) return "done";
+  if (stageStatus === "failed") return "failed";
   if (step.phase === "submitted") return "done";
   if (step.phase === "complete") {
     return uc.status === "complete" ? "done" : "pending";
@@ -735,12 +739,13 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {flow.map((step, idx) => {
-          const baseState = getStepState(step, idx, currentIdx, uc);
+          const stageRecord = stageRecords.get(step.phase) || null;
+          const baseState = getStepState(step, idx, currentIdx, uc, stageRecord);
           const state = baseState;
           const isActive = state === "active";
-          const stageRecord = stageRecords.get(step.phase) || null;
+          const isCached = String(stageRecord?.status || "").trim().toLowerCase() === "cached";
           const skipped = !!stageRecord?.diagnostics?.skipped;
-          const showActiveSpinner = isActive && !skipped;
+          const showActiveSpinner = isActive && !skipped && !isCached;
           const skipReason = skipped
             ? skipReasonLabel(stageRecord?.diagnostics?.reason, stageRecord?.diagnostics || {})
             : "";
@@ -748,7 +753,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
           const costSummary = shouldShowCost
             ? (stageCostSummary(stageRecord) || { tokensLabel: "-", priceLabel: "-", costLabel: "-" })
             : null;
-          const badgeStateLabel = skipped ? "Skipped" : stateLabel(state);
+          const badgeStateLabel = skipped ? "Skipped" : (isCached ? "Cached" : stateLabel(state));
           return (
             <div
               key={step.key}
@@ -767,7 +772,7 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
                   <Spinner size={10} color="var(--ck-text)" />
                 </div>
               ) : (
-                <input type="checkbox" checked={state === "done" || skipped} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
+                <input type="checkbox" checked={state === "done" || skipped || isCached} readOnly style={{ marginTop: 2, accentColor: "var(--ck-accent)" }} />
               )}
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ck-text)", marginBottom: 2 }}>{step.title}</div>

@@ -9,6 +9,40 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function summarizeChunkTrace(chunkTrace = []) {
+  const trace = ensureArray(chunkTrace);
+  if (!trace.length) {
+    return {
+      chunksStarted: 0,
+      chunksCompleted: 0,
+      chunksFailed: 0,
+      chunkRetriesTotal: 0,
+      chunkSplitDepthMax: 0,
+    };
+  }
+  const summary = {
+    chunksStarted: 0,
+    chunksCompleted: 0,
+    chunksFailed: 0,
+    chunkRetriesTotal: 0,
+    chunkSplitDepthMax: 0,
+  };
+  trace.forEach((entry) => {
+    const event = String(entry?.event || "").trim().toLowerCase();
+    const depth = toNumber(entry?.depth, 0);
+    if (depth > summary.chunkSplitDepthMax) summary.chunkSplitDepthMax = depth;
+    if (event === "started") summary.chunksStarted += 1;
+    if (event === "completed") summary.chunksCompleted += 1;
+    if (event === "failed") summary.chunksFailed += 1;
+    if (event === "retried") summary.chunkRetriesTotal += 1;
+  });
+  return summary;
+}
+
 export function createStageRecord(stageId, meta = {}) {
   return {
     stage: stageId,
@@ -88,4 +122,34 @@ export function pushReasonCodes(state = {}, reasonCodes = []) {
   ]);
   state.diagnostics.reasonCodes = merged;
   return state;
+}
+
+export function finalizeStageDiagnostics(diagnostics = {}) {
+  const out = diagnostics && typeof diagnostics === "object"
+    ? { ...diagnostics }
+    : {};
+  const trace = ensureArray(out?.chunkTrace);
+  if (trace.length) {
+    out.chunkTrace = trace.map((entry) => ({
+      timestamp: nowIso(),
+      ...entry,
+    }));
+    const traceSummary = summarizeChunkTrace(trace);
+    Object.keys(traceSummary).forEach((key) => {
+      if (out[key] == null) out[key] = traceSummary[key];
+    });
+  }
+  if (out?.cacheDiagnostics && typeof out.cacheDiagnostics === "object") {
+    out.cacheDiagnostics = {
+      cacheKey: String(out.cacheDiagnostics?.cacheKey || ""),
+      hash: String(out.cacheDiagnostics?.hash || ""),
+      cacheHit: out.cacheDiagnostics?.cacheHit === true,
+      cacheAgeMs: toNumber(out.cacheDiagnostics?.cacheAgeMs, 0),
+      hashInputs: out.cacheDiagnostics?.hashInputs && typeof out.cacheDiagnostics.hashInputs === "object"
+        ? out.cacheDiagnostics.hashInputs
+        : {},
+      missReason: String(out.cacheDiagnostics?.missReason || ""),
+    };
+  }
+  return out;
 }

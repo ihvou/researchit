@@ -28,6 +28,7 @@ export function buildDebugBundle(state = {}, extras = {}) {
       decisionGate: state?.decisionGateResult || null,
     },
     cost: diagnostics?.cost || {},
+    cacheDiagnostics: diagnostics?.cacheDiagnostics || {},
     progress: Array.isArray(diagnostics?.progress) ? diagnostics.progress : [],
     outputPreview: {
       outputMode: state?.outputType || null,

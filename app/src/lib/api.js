@@ -1,6 +1,19 @@
 import { createTransport, DEFAULT_RETRYABLE_STATUS } from "@researchit/engine";
 import { appendRunDebugNetworkEvent } from "./debug";
 
+function normalizeAbortReason(value, fallbackSource = "unknown") {
+  if (value && typeof value === "object") {
+    return {
+      source: String(value?.source || "").trim() || fallbackSource,
+      layer: String(value?.layer || "").trim() || undefined,
+      deadlineMs: Number.isFinite(Number(value?.deadlineMs)) ? Number(value.deadlineMs) : undefined,
+      elapsedMs: Number.isFinite(Number(value?.elapsedMs)) ? Number(value.elapsedMs) : undefined,
+      message: String(value?.message || "").trim() || undefined,
+    };
+  }
+  return { source: fallbackSource };
+}
+
 async function callRoute(role, payload, runtime = {}) {
   appendRunDebugNetworkEvent({
     channel: "transport",
@@ -28,6 +41,10 @@ async function callRoute(role, payload, runtime = {}) {
     const networkErr = new Error(err?.message || `Network error: /api/${role}`);
     networkErr.role = role;
     networkErr.retryable = true;
+    if (String(err?.name || "").toLowerCase() === "aborterror") {
+      networkErr.abortReason = normalizeAbortReason(err?.cause || runtime?.signal?.reason, "browser_fetch");
+      networkErr.name = "AbortError";
+    }
     throw networkErr;
   }
 
@@ -55,6 +72,9 @@ async function callRoute(role, payload, runtime = {}) {
     if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
       err.reasonCode = data.reasonCode.trim();
     }
+    if (data?.abortReason && typeof data.abortReason === "object") {
+      err.abortReason = normalizeAbortReason(data.abortReason, "unknown");
+    }
     throw err;
   }
 
@@ -68,6 +88,9 @@ async function callRoute(role, payload, runtime = {}) {
     if (data?.url != null) err.url = String(data.url || "");
     if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
       err.reasonCode = data.reasonCode.trim();
+    }
+    if (data?.abortReason && typeof data.abortReason === "object") {
+      err.abortReason = normalizeAbortReason(data.abortReason, "unknown");
     }
     throw err;
   }

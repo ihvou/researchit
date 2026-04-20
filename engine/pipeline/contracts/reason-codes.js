@@ -12,10 +12,13 @@ export const REASON_CODES = {
   RATE_LIMIT_BACKOFF_EXHAUSTED: "rate_limit_backoff_exhausted",
 
   RESPONSE_PARSE_FAILED: "response_parse_failed",
+  TRUNCATION_SUSPECTED: "truncation_suspected",
   RESPONSE_SCHEMA_INVALID: "response_schema_invalid",
   PARTIAL_PAYLOAD_REJECTED: "partial_payload_rejected",
   CONFIDENCE_SCALE_COERCED: "confidence_scale_coerced",
   DEFEND_NOTE_MISSING: "defend_note_missing",
+
+  CACHE_HIT: "cache_hit",
 
   COVERAGE_CATASTROPHIC: "coverage_catastrophic",
   DECISION_GATE_FAILED: "decision_gate_failed",

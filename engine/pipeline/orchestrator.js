@@ -12,21 +12,38 @@ import {
   appendIoRecord,
   appendProgressRecord,
   pushReasonCodes,
+  finalizeStageDiagnostics,
 } from "../lib/diagnostics/stage-logger.js";
 import { buildDebugBundle } from "../lib/diagnostics/debug-bundle.js";
 import { estimateStageCost } from "../lib/diagnostics/cost-estimator.js";
+import { hashCanonicalValue } from "../lib/cache/stage-hash.js";
 
 import { runStage as run01, STAGE_ID as STAGE_01_ID, STAGE_TITLE as STAGE_01_TITLE } from "./stages/01-intake.js";
 import { runStage as run01b, STAGE_ID as STAGE_01B_ID, STAGE_TITLE as STAGE_01B_TITLE } from "./stages/01b-subject-discovery.js";
 import { runStage as run02, STAGE_ID as STAGE_02_ID, STAGE_TITLE as STAGE_02_TITLE } from "./stages/02-plan.js";
-import { runStage as run03a, STAGE_ID as STAGE_03A_ID, STAGE_TITLE as STAGE_03A_TITLE } from "./stages/03a-evidence-memory.js";
-import { runStage as run03b, STAGE_ID as STAGE_03B_ID, STAGE_TITLE as STAGE_03B_TITLE } from "./stages/03b-evidence-web.js";
+import {
+  runStage as run03a,
+  STAGE_ID as STAGE_03A_ID,
+  STAGE_TITLE as STAGE_03A_TITLE,
+  PROMPT_VERSION as STAGE_03A_PROMPT_VERSION,
+} from "./stages/03a-evidence-memory.js";
+import {
+  runStage as run03b,
+  STAGE_ID as STAGE_03B_ID,
+  STAGE_TITLE as STAGE_03B_TITLE,
+  PROMPT_VERSION as STAGE_03B_PROMPT_VERSION,
+} from "./stages/03b-evidence-web.js";
 import { runStage as run03c, STAGE_ID as STAGE_03C_ID, STAGE_TITLE as STAGE_03C_TITLE } from "./stages/03c-evidence-deep-assist.js";
 import { runStage as run04, STAGE_ID as STAGE_04_ID, STAGE_TITLE as STAGE_04_TITLE } from "./stages/04-merge.js";
 import { runStage as run05, STAGE_ID as STAGE_05_ID, STAGE_TITLE as STAGE_05_TITLE } from "./stages/05-score-confidence.js";
 import { runStage as run06, STAGE_ID as STAGE_06_ID, STAGE_TITLE as STAGE_06_TITLE } from "./stages/06-source-verify.js";
 import { runStage as run07, STAGE_ID as STAGE_07_ID, STAGE_TITLE as STAGE_07_TITLE } from "./stages/07-source-assess.js";
-import { runStage as run08, STAGE_ID as STAGE_08_ID, STAGE_TITLE as STAGE_08_TITLE } from "./stages/08-recover.js";
+import {
+  runStage as run08,
+  STAGE_ID as STAGE_08_ID,
+  STAGE_TITLE as STAGE_08_TITLE,
+  PROMPT_VERSION as STAGE_08_PROMPT_VERSION,
+} from "./stages/08-recover.js";
 import { runStage as run09, STAGE_ID as STAGE_09_ID, STAGE_TITLE as STAGE_09_TITLE } from "./stages/09-rescore.js";
 import { runStage as run10, STAGE_ID as STAGE_10_ID, STAGE_TITLE as STAGE_10_TITLE } from "./stages/10-coherence.js";
 import { runStage as run11, STAGE_ID as STAGE_11_ID, STAGE_TITLE as STAGE_11_TITLE } from "./stages/11-challenge.js";
@@ -98,24 +115,24 @@ const STAGE_BUDGETS = {
 };
 
 const STAGES = [
-  { id: STAGE_01_ID, title: STAGE_01_TITLE, run: run01, optional: false },
-  { id: STAGE_01B_ID, title: STAGE_01B_TITLE, run: run01b, optional: true },
-  { id: STAGE_02_ID, title: STAGE_02_TITLE, run: run02, optional: false },
-  { id: STAGE_03A_ID, title: STAGE_03A_TITLE, run: run03a, optional: false, mode: "native" },
-  { id: STAGE_03B_ID, title: STAGE_03B_TITLE, run: run03b, optional: false, mode: "native" },
-  { id: STAGE_03C_ID, title: STAGE_03C_TITLE, run: run03c, optional: false, mode: "deep-research-x3" },
-  { id: STAGE_04_ID, title: STAGE_04_TITLE, run: run04, optional: false },
-  { id: STAGE_05_ID, title: STAGE_05_TITLE, run: run05, optional: false },
-  { id: STAGE_06_ID, title: STAGE_06_TITLE, run: run06, optional: false },
-  { id: STAGE_07_ID, title: STAGE_07_TITLE, run: run07, optional: false },
-  { id: STAGE_08_ID, title: STAGE_08_TITLE, run: run08, optional: false },
-  { id: STAGE_09_ID, title: STAGE_09_TITLE, run: run09, optional: false },
-  { id: STAGE_10_ID, title: STAGE_10_TITLE, run: run10, optional: false },
-  { id: STAGE_11_ID, title: STAGE_11_TITLE, run: run11, optional: false },
-  { id: STAGE_12_ID, title: STAGE_12_TITLE, run: run12, optional: false },
-  { id: STAGE_13_ID, title: STAGE_13_TITLE, run: run13, optional: false },
-  { id: STAGE_14_ID, title: STAGE_14_TITLE, run: run14, optional: false },
-  { id: STAGE_15_ID, title: STAGE_15_TITLE, run: run15, optional: false },
+  { id: STAGE_01_ID, title: STAGE_01_TITLE, run: run01, optional: false, promptVersion: "v1" },
+  { id: STAGE_01B_ID, title: STAGE_01B_TITLE, run: run01b, optional: true, promptVersion: "v1" },
+  { id: STAGE_02_ID, title: STAGE_02_TITLE, run: run02, optional: false, promptVersion: "v1" },
+  { id: STAGE_03A_ID, title: STAGE_03A_TITLE, run: run03a, optional: false, mode: "native", promptVersion: STAGE_03A_PROMPT_VERSION || "v1" },
+  { id: STAGE_03B_ID, title: STAGE_03B_TITLE, run: run03b, optional: false, mode: "native", promptVersion: STAGE_03B_PROMPT_VERSION || "v1" },
+  { id: STAGE_03C_ID, title: STAGE_03C_TITLE, run: run03c, optional: false, mode: "deep-research-x3", promptVersion: "v1" },
+  { id: STAGE_04_ID, title: STAGE_04_TITLE, run: run04, optional: false, promptVersion: "v1" },
+  { id: STAGE_05_ID, title: STAGE_05_TITLE, run: run05, optional: false, promptVersion: "v1" },
+  { id: STAGE_06_ID, title: STAGE_06_TITLE, run: run06, optional: false, promptVersion: "v1" },
+  { id: STAGE_07_ID, title: STAGE_07_TITLE, run: run07, optional: false, promptVersion: "v1" },
+  { id: STAGE_08_ID, title: STAGE_08_TITLE, run: run08, optional: false, promptVersion: STAGE_08_PROMPT_VERSION || "v1" },
+  { id: STAGE_09_ID, title: STAGE_09_TITLE, run: run09, optional: false, promptVersion: "v1" },
+  { id: STAGE_10_ID, title: STAGE_10_TITLE, run: run10, optional: false, promptVersion: "v1" },
+  { id: STAGE_11_ID, title: STAGE_11_TITLE, run: run11, optional: false, promptVersion: "v1" },
+  { id: STAGE_12_ID, title: STAGE_12_TITLE, run: run12, optional: false, promptVersion: "v1" },
+  { id: STAGE_13_ID, title: STAGE_13_TITLE, run: run13, optional: false, promptVersion: "v1" },
+  { id: STAGE_14_ID, title: STAGE_14_TITLE, run: run14, optional: false, promptVersion: "v1" },
+  { id: STAGE_15_ID, title: STAGE_15_TITLE, run: run15, optional: false, promptVersion: "v1" },
 ];
 
 function stageEnabled(stage = {}, state = {}) {
@@ -238,6 +255,87 @@ function enforceStrictReasonCodeInvariant(state = {}, reasonCodes = []) {
   return normalized.filter((code) => code !== REASON_CODES.RUN_COMPLETED_DEGRADED);
 }
 
+function toIdList(items = [], key = "id") {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => clean(item?.[key]))
+    .filter(Boolean);
+}
+
+function stageCacheDisabled(runtime = {}) {
+  if (runtime?.stageCacheDisabled === true) return true;
+  const envValue = String(
+    runtime?.config?.cache?.disabled
+    ?? globalThis?.RESEARCHIT_STAGE_CACHE_DISABLED
+    ?? (typeof process !== "undefined" ? process?.env?.RESEARCHIT_STAGE_CACHE_DISABLED : "")
+    ?? ""
+  ).trim().toLowerCase();
+  return envValue === "1" || envValue === "true" || envValue === "yes";
+}
+
+function buildStageHashInputs({ state = {}, stage = {}, upstreamHash = "" } = {}) {
+  const isMatrix = state?.outputType === "matrix";
+  const subjects = isMatrix ? toIdList(state?.request?.matrix?.subjects, "id") : [];
+  const attributes = isMatrix ? toIdList(state?.request?.matrix?.attributes, "id") : [];
+  const dimensions = !isMatrix ? toIdList(state?.request?.scorecard?.dimensions, "id") : [];
+  return {
+    stageId: clean(stage?.id),
+    configId: clean(state?.request?.researchConfigId || state?.config?.id),
+    promptVersion: clean(stage?.promptVersion || "v1"),
+    outputType: clean(state?.outputType),
+    mode: clean(state?.mode),
+    subjects,
+    attributes,
+    dimensions,
+    modelRouteConfig: state?.config?.models || {},
+    globalSeed: clean(state?.runId),
+    upstreamHash: clean(upstreamHash || "seed"),
+  };
+}
+
+function toSerializableStageResult(result = {}) {
+  return {
+    stageStatus: clean(result?.stageStatus || "ok"),
+    reasonCodes: normalizeReasonCodes(result?.reasonCodes || []),
+    statePatch: result?.statePatch && typeof result.statePatch === "object" ? result.statePatch : {},
+    diagnostics: result?.diagnostics && typeof result.diagnostics === "object" ? result.diagnostics : {},
+    modelRoute: result?.modelRoute || null,
+    tokens: result?.tokens || null,
+    retries: Number(result?.retries || 0),
+    io: result?.io && typeof result.io === "object" ? result.io : null,
+  };
+}
+
+function ensureCacheDiagnosticsContainer(state = {}) {
+  if (!state?.diagnostics || typeof state.diagnostics !== "object") return {};
+  const existing = state.diagnostics.cacheDiagnostics && typeof state.diagnostics.cacheDiagnostics === "object"
+    ? state.diagnostics.cacheDiagnostics
+    : null;
+  if (existing) return existing;
+  state.diagnostics.cacheDiagnostics = {
+    totalHits: 0,
+    totalMisses: 0,
+    totalBytes: 0,
+    stagesCached: [],
+    stagesMissed: [],
+  };
+  return state.diagnostics.cacheDiagnostics;
+}
+
+function appendCacheAggregate(state = {}, stageId = "", cacheDiagnostics = {}, bytes = 0) {
+  const aggregate = ensureCacheDiagnosticsContainer(state);
+  if (!aggregate || typeof aggregate !== "object") return;
+  const id = clean(stageId);
+  if (cacheDiagnostics?.cacheHit) {
+    aggregate.totalHits = Number(aggregate.totalHits || 0) + 1;
+    aggregate.stagesCached = [...new Set([...(aggregate.stagesCached || []), id])];
+  } else {
+    aggregate.totalMisses = Number(aggregate.totalMisses || 0) + 1;
+    aggregate.stagesMissed = [...new Set([...(aggregate.stagesMissed || []), id])];
+  }
+  aggregate.totalBytes = Number(aggregate.totalBytes || 0) + Math.max(0, Number(bytes) || 0);
+}
+
 export async function runCanonicalPipeline(input, config, callbacks = {}) {
   const transport = callbacks?.transport;
   if (!transport?.callAnalyst || !transport?.callCritic) {
@@ -255,6 +353,8 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
   const runtime = {
     transport,
     config,
+    stageCache: callbacks?.stageCache || null,
+    stageCacheDisabled: callbacks?.stageCacheDisabled === true,
     prompts: {
       analyst: config?.prompts?.analyst,
       critic: config?.prompts?.critic,
@@ -296,6 +396,10 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
   }
 
   let pipelineError = null;
+  let upstreamHash = hashCanonicalValue({
+    runId: state?.runId,
+    seed: "pipeline_start",
+  });
 
   for (const stage of STAGES) {
     if (!stageEnabled(stage, state)) continue;
@@ -316,8 +420,96 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
     });
 
     try {
-      const result = await stage.run({ state, runtime, callbacks });
-      const reasonCodes = enforceStrictReasonCodeInvariant(state, result?.reasonCodes || []);
+      const stageHashInputs = buildStageHashInputs({
+        state,
+        stage,
+        upstreamHash,
+      });
+      const cacheHash = hashCanonicalValue(stageHashInputs);
+      const cacheEnabled = !stageCacheDisabled(runtime) && runtime?.stageCache
+        && typeof runtime.stageCache.get === "function";
+      const skipSubjectDiscovery = stage.id === STAGE_01B_ID
+        && state?.outputType === "matrix"
+        && Array.isArray(state?.request?.matrix?.subjects)
+        && state.request.matrix.subjects.length > 0
+        && !state?.discovery?.autoDiscoverSubjects;
+
+      let cacheDiagnostics = {
+        cacheKey: clean(stage?.id),
+        hash: cacheHash,
+        cacheHit: false,
+        cacheAgeMs: 0,
+        hashInputs: stageHashInputs,
+        missReason: cacheEnabled ? "no_entry" : "cache_disabled",
+      };
+      let result;
+      let fromCache = false;
+      let cacheBytes = 0;
+
+      if (skipSubjectDiscovery) {
+        result = {
+          stageStatus: "ok",
+          reasonCodes: [],
+          statePatch: {
+            ui: { phase: stage.id },
+            discovery: {
+              ...(state?.discovery || {}),
+              autoDiscoverSubjects: false,
+              usedSubjectDiscovery: false,
+            },
+          },
+          diagnostics: {
+            skipped: true,
+            reason: "subjects_provided",
+            subjectCount: state?.request?.matrix?.subjects?.length || 0,
+          },
+          retries: 0,
+          tokens: null,
+          modelRoute: null,
+        };
+      } else if (cacheEnabled) {
+        try {
+          const entry = await runtime.stageCache.get({
+            runId: state?.runId,
+            stageId: stage.id,
+            hashInputs: stageHashInputs,
+          });
+          if (entry && typeof entry === "object") {
+            cacheDiagnostics = {
+              cacheKey: clean(entry?.cacheKey || stage.id),
+              hash: clean(entry?.hash || cacheHash),
+              cacheHit: entry?.cacheHit === true,
+              cacheAgeMs: Number(entry?.cacheAgeMs || 0),
+              hashInputs: stageHashInputs,
+              missReason: clean(entry?.missReason) || (entry?.cacheHit ? null : "no_entry"),
+            };
+            if (entry?.cacheHit && entry?.output && typeof entry.output === "object") {
+              result = entry.output;
+              fromCache = true;
+              cacheBytes = JSON.stringify(entry.output).length;
+            }
+          }
+        } catch (cacheErr) {
+          cacheDiagnostics = {
+            cacheKey: clean(stage.id),
+            hash: cacheHash,
+            cacheHit: false,
+            cacheAgeMs: 0,
+            hashInputs: stageHashInputs,
+            missReason: "cache_unavailable",
+            error: clean(cacheErr?.message),
+          };
+        }
+      }
+
+      if (!result) {
+        result = await stage.run({ state, runtime, callbacks });
+      }
+
+      const reasonCodes = enforceStrictReasonCodeInvariant(state, [
+        ...(result?.reasonCodes || []),
+        ...(fromCache ? [REASON_CODES.CACHE_HIT] : []),
+      ]);
       const statePatch = result?.statePatch && typeof result.statePatch === "object"
         ? result.statePatch
         : {};
@@ -331,13 +523,37 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
 
       if (result?.io) appendIoRecord(state, { stageId: stage.id, ...result.io });
 
+      if (!fromCache && cacheEnabled && typeof runtime.stageCache?.set === "function") {
+        try {
+          const serializable = toSerializableStageResult(result);
+          cacheBytes = JSON.stringify(serializable).length;
+          await runtime.stageCache.set({
+            runId: state?.runId,
+            stageId: stage.id,
+            hashInputs: stageHashInputs,
+            output: serializable,
+          });
+        } catch (cacheErr) {
+          cacheDiagnostics = {
+            ...cacheDiagnostics,
+            missReason: cacheDiagnostics?.missReason || "cache_write_failed",
+            error: clean(cacheErr?.message),
+          };
+        }
+      }
+
+      const stageDiagnostics = finalizeStageDiagnostics({
+        ...(result?.diagnostics && typeof result.diagnostics === "object" ? result.diagnostics : {}),
+        cacheDiagnostics,
+      });
+
       const completedRecord = completeStageRecord(stageRecord, {
-        status: result?.stageStatus || "ok",
+        status: fromCache ? "cached" : (result?.stageStatus || "ok"),
         reasonCodes,
         retries: Number(result?.retries || 0),
         modelRoute: result?.modelRoute || stageRecord.modelRoute,
         tokens: result?.tokens || null,
-        diagnostics: result?.diagnostics || {},
+        diagnostics: stageDiagnostics,
       });
       completedRecord.cost = estimateStageCost({
         tokens: completedRecord.tokens,
@@ -346,12 +562,19 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
       });
       updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);
+      appendCacheAggregate(state, stage.id, cacheDiagnostics, cacheBytes);
 
       appendProgressRecord(state, {
         stageId: stage.id,
         title: stage.title,
-        status: result?.stageStatus || "ok",
+        status: fromCache ? "cached" : (result?.stageStatus || "ok"),
         reasonCodes,
+      });
+      upstreamHash = hashCanonicalValue({
+        stage: stage.id,
+        reasonCodes,
+        statePatch,
+        tokens: result?.tokens || null,
       });
 
       emitProgress(state, callbacks);
@@ -369,9 +592,14 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         status: "failed",
         reasonCodes,
         retries: Number(err?.attempts || 0),
-        diagnostics: {
+        diagnostics: finalizeStageDiagnostics({
           error: clean(err?.message),
-        },
+          abortReason: err?.abortReason || null,
+          finishReason: clean(err?.finishReason) || undefined,
+          outputTokens: Number(err?.outputTokens || 0) || undefined,
+          outputTokensCap: Number(err?.outputTokensCap || 0) || undefined,
+          outputTruncated: err?.outputTruncated === true,
+        }),
       });
       updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);

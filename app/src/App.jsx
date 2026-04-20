@@ -24,9 +24,11 @@ import SiteFooter from "./components/SiteFooter";
 import { appTransport } from "./lib/api";
 import { listAccountResearches, upsertAccountResearches, deleteAccountResearch } from "./lib/accountApi";
 import { loadLocalDraftState, saveLocalDraftState } from "./lib/localDrafts";
+import { createStageCacheClient } from "./lib/stageCache";
 
 const INTERNAL_ANALYSIS_MODE = "hybrid";
 const CHEMICAL_NUMBER = 75;
+const stageCacheClient = createStageCacheClient();
 
 function resolveConfigId(configId) {
   const value = String(configId || "").trim();
@@ -158,6 +160,26 @@ function getMatrixCoverage(uc) {
     criticFlags: Number.isFinite(criticFlags) && criticFlags >= 0
       ? criticFlags
       : cells.filter((cell) => !!cell?.contested).length,
+  };
+}
+
+function getResumeInfo(uc = {}) {
+  const status = String(uc?.status || "").trim().toLowerCase();
+  if (status !== "error") return { resumable: false, stageId: "", stageTitle: "" };
+  const stages = Array.isArray(uc?.diagnostics?.stages) ? uc.diagnostics.stages : [];
+  if (!stages.length) return { resumable: false, stageId: "", stageTitle: "" };
+  const failed = stages.find((entry) => String(entry?.status || "").trim().toLowerCase() === "failed");
+  const cachedOrDone = stages.some((entry) => {
+    const value = String(entry?.status || "").trim().toLowerCase();
+    return value === "ok" || value === "cached" || value === "recovered";
+  });
+  if (!cachedOrDone) return { resumable: false, stageId: "", stageTitle: "" };
+  const stageId = String(failed?.stage || "").trim();
+  const stageTitle = String(failed?.title || stageId).trim();
+  return {
+    resumable: !!stageId,
+    stageId,
+    stageTitle,
   };
 }
 
@@ -712,6 +734,92 @@ export default function App({
       console.error("Analysis error:", err);
       const errorMessage = String(err?.message || "Analysis failed.");
       updateUC(id, u => ({ ...u, status: "error", phase: "error", errorMsg: errorMessage }));
+      setRunErrorModal({ open: true, message: errorMessage });
+    }
+    setGlobalAnalyzing(false);
+  }
+
+  async function resumeAnalysisRun(uc, { fromScratch = false } = {}) {
+    if (!uc || globalAnalyzing) return;
+    const desc = String(uc?.rawInput || "").trim();
+    if (!desc) return;
+
+    const selectedConfig = RESEARCH_CONFIGS.find((config) => config.id === uc?.researchConfigId)
+      || activeConfig
+      || DEFAULT_RESEARCH_CONFIG;
+    const selectedMode = String(selectedConfig?.outputMode || uc?.outputMode || "scorecard").trim().toLowerCase();
+    const strictQuality = typeof uc?.analysisMeta?.strictQuality === "boolean"
+      ? uc.analysisMeta.strictQuality
+      : !!selectedConfig?.quality?.strictFailFast;
+    const savedSetup = normalizeResearchSetup(uc?.researchSetup || setupByConfig[selectedConfig.id] || {});
+    const rawEvMode = String(uc?.analysisMeta?.evidenceMode || evidenceMode || "native").trim().toLowerCase();
+    const normalizedEvidenceMode = (rawEvMode === "deep-research-x3" || rawEvMode === "deep-assist")
+      ? "deep-research-x3"
+      : "native";
+    const deepAssistDefaults = selectedConfig?.deepAssist?.defaults || {};
+    const deepAssistRunOptions = {
+      providers: Array.isArray(deepAssistDefaults?.providers) && deepAssistDefaults.providers.length
+        ? deepAssistDefaults.providers
+        : ["chatgpt", "claude", "gemini"],
+      minProviders: Number(deepAssistDefaults?.minProviders) || 2,
+      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || 300000,
+      maxRetries: Number(deepAssistDefaults?.maxRetries) || 1,
+    };
+    const selectedDims = selectedMode === "scorecard"
+      ? (dimsByConfig[selectedConfig.id] || selectedConfig.dimensions)
+      : [];
+    const runtimeConfig = buildRuntimeConfig(selectedConfig, selectedDims);
+    const routeProblems = validatePinnedModelRoutes(runtimeConfig, normalizedEvidenceMode);
+    if (routeProblems.length) {
+      window.alert(`Model routing preflight failed:\n${routeProblems.join("\n")}`);
+      return;
+    }
+
+    const matrixSubjects = selectedMode === "matrix"
+      ? (
+        Array.isArray(uc?.matrix?.subjects) && uc.matrix.subjects.length
+          ? uc.matrix.subjects.map((subject) => String(subject?.label || "").trim()).filter(Boolean)
+          : parseSubjectsInput(String(savedSetup?.subjectsText || ""))
+      )
+      : [];
+
+    if (fromScratch) {
+      try {
+        await stageCacheClient.clearRun(uc.id);
+      } catch (err) {
+        console.warn("Failed to clear stage cache before rerun:", err);
+      }
+    }
+
+    updateUC(uc.id, (current) => ({
+      ...current,
+      status: "analyzing",
+      phase: "stage_01_intake",
+      errorMsg: null,
+      analysisMeta: {
+        ...(current?.analysisMeta || {}),
+        resumeRequested: !fromScratch,
+        rerunFromScratch: !!fromScratch,
+      },
+    }));
+    setExpandedId(uc.id);
+    setGlobalAnalyzing(true);
+
+    try {
+      await runAnalysis(desc, selectedDims, updateUC, uc.id, {
+        analysisMode: INTERNAL_ANALYSIS_MODE,
+        origin: uc?.origin || null,
+        config: runtimeConfig,
+        matrixSubjects,
+        researchSetup: savedSetup,
+        evidenceMode: normalizedEvidenceMode,
+        deepAssist: normalizedEvidenceMode === "deep-research-x3" ? deepAssistRunOptions : null,
+        strictQuality,
+        initialState: fromScratch ? null : uc,
+      });
+    } catch (err) {
+      const errorMessage = String(err?.message || "Resume failed.");
+      updateUC(uc.id, (current) => ({ ...current, status: "error", phase: "error", errorMsg: errorMessage }));
       setRunErrorModal({ open: true, message: errorMessage });
     }
     setGlobalAnalyzing(false);
@@ -2140,6 +2248,8 @@ export default function App({
               const inlineResearchExportItems = researchExportItems.filter((item) => item.key === "markdown" || item.key === "json");
               const menuResearchExportItems = researchExportItems.filter((item) => item.key !== "markdown" && item.key !== "json");
               const canDeleteResearch = uc.status !== "analyzing";
+              const resumeInfo = getResumeInfo(uc);
+              const canResumeResearch = resumeInfo.resumable && !globalAnalyzing;
 
               return (
                 <article
@@ -2181,6 +2291,7 @@ export default function App({
                         {(uc.analysisMeta?.evidenceMode === "deep-research-x3" || uc.analysisMeta?.evidenceMode === "deep-assist") ? <span>| Deep Research ×3</span> : null}
                         {uc.analysisMeta?.qualityGrade === "degraded" ? <span>| degraded quality</span> : null}
                         {uc.origin?.type === "discover" ? <span>| related</span> : null}
+                        {canResumeResearch ? <span>| resumable from {resumeInfo.stageTitle || resumeInfo.stageId}</span> : null}
                       </div>
                     </div>
                     <div style={{ textAlign: "right", display: "grid", gap: 3 }}>
@@ -2284,6 +2395,46 @@ export default function App({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          void resumeAnalysisRun(uc, { fromScratch: false });
+                        }}
+                        disabled={!canResumeResearch}
+                        style={{
+                          background: "var(--ck-surface)",
+                          border: "1px solid var(--ck-line)",
+                          color: "var(--ck-text)",
+                          borderRadius: 2,
+                          fontSize: 11,
+                          padding: "4px 8px",
+                          cursor: canResumeResearch ? "pointer" : "not-allowed",
+                          opacity: canResumeResearch ? 1 : 0.45,
+                          whiteSpace: "nowrap",
+                        }}>
+                        Resume
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void resumeAnalysisRun(uc, { fromScratch: true });
+                        }}
+                        disabled={!canResumeResearch}
+                        style={{
+                          background: "var(--ck-surface)",
+                          border: "1px solid var(--ck-line)",
+                          color: "var(--ck-text)",
+                          borderRadius: 2,
+                          fontSize: 11,
+                          padding: "4px 8px",
+                          cursor: canResumeResearch ? "pointer" : "not-allowed",
+                          opacity: canResumeResearch ? 1 : 0.45,
+                          whiteSpace: "nowrap",
+                        }}>
+                        Re-run Fresh
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
                           void deleteResearchPermanently(uc);
                         }}
                         disabled={!canDeleteResearch}
@@ -2355,6 +2506,44 @@ export default function App({
                             </button>
                           );
                         })}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            void resumeAnalysisRun(uc, { fromScratch: false });
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                          disabled={!canResumeResearch}
+                          style={{
+                            background: "var(--ck-surface-soft)",
+                            border: "1px solid var(--ck-line)",
+                            color: "var(--ck-text)",
+                            textAlign: "left",
+                            borderRadius: 2,
+                            fontSize: 12,
+                            padding: "6px 8px",
+                            opacity: canResumeResearch ? 1 : 0.45,
+                          }}>
+                          Resume
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            void resumeAnalysisRun(uc, { fromScratch: true });
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                          disabled={!canResumeResearch}
+                          style={{
+                            background: "var(--ck-surface-soft)",
+                            border: "1px solid var(--ck-line)",
+                            color: "var(--ck-text)",
+                            textAlign: "left",
+                            borderRadius: 2,
+                            fontSize: 12,
+                            padding: "6px 8px",
+                            opacity: canResumeResearch ? 1 : 0.45,
+                          }}>
+                          Re-run Fresh
+                        </button>
                         <button
                           type="button"
                           onClick={(e) => {

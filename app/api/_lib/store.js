@@ -136,6 +136,32 @@ function sha256(value = "") {
   return crypto.createHash("sha256").update(String(value || "").toLowerCase()).digest("hex");
 }
 
+function sha256Raw(value = "") {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function stableStringify(value) {
+  const seen = new WeakSet();
+  const walk = (input) => {
+    if (Array.isArray(input)) return input.map((item) => walk(item));
+    if (input && typeof input === "object") {
+      if (seen.has(input)) return null;
+      seen.add(input);
+      const out = {};
+      Object.keys(input).sort().forEach((key) => {
+        out[key] = walk(input[key]);
+      });
+      return out;
+    }
+    if (input == null) return null;
+    if (typeof input === "number") return Number.isFinite(input) ? input : null;
+    if (typeof input === "string") return String(input).trim();
+    if (typeof input === "boolean") return input;
+    return String(input);
+  };
+  return JSON.stringify(walk(value));
+}
+
 function emailIndexKey(email) {
   return `ri:user:email:${sha256(email)}`;
 }
@@ -150,6 +176,14 @@ function researchesKey(userId) {
 
 function userResearchesLockKey(userId) {
   return `${researchesKey(userId)}:lock`;
+}
+
+function stageCacheKey(userId, runId, stageId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:stage:${String(stageId || "").trim()}`;
+}
+
+function stageCacheIndexKey(userId, runId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:stage-index`;
 }
 
 function magicTokenKey(token) {
@@ -282,4 +316,118 @@ export async function deleteUserResearch(userId, researchId) {
     await setValue(researchesKey(userId), map);
     return true;
   });
+}
+
+export async function getStageCache(userId, runId, stageId, hashInputs = {}) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  const safeStageId = String(stageId || "").trim();
+  if (!safeUserId || !safeRunId || !safeStageId) {
+    return {
+      cacheHit: false,
+      missReason: "no_entry",
+      cacheKey: stageCacheKey(safeUserId, safeRunId, safeStageId),
+      hash: "",
+      hashInputs,
+      cacheAgeMs: 0,
+      output: null,
+    };
+  }
+
+  const cacheKey = stageCacheKey(safeUserId, safeRunId, safeStageId);
+  const hash = sha256Raw(stableStringify(hashInputs));
+  const stored = await getValue(cacheKey);
+  if (!stored || typeof stored !== "object") {
+    return {
+      cacheHit: false,
+      missReason: "no_entry",
+      cacheKey,
+      hash,
+      hashInputs,
+      cacheAgeMs: 0,
+      output: null,
+    };
+  }
+
+  const storedHash = String(stored?.hash || "").trim();
+  if (!storedHash || storedHash !== hash) {
+    const previousInputs = stored?.hashInputs && typeof stored.hashInputs === "object"
+      ? stored.hashInputs
+      : {};
+    let missReason = "hash_mismatch";
+    if (String(previousInputs?.promptVersion || "") !== String(hashInputs?.promptVersion || "")) {
+      missReason = "bypass_prompt_version_mismatch";
+    } else if (String(previousInputs?.upstreamHash || "") !== String(hashInputs?.upstreamHash || "")) {
+      missReason = "bypass_upstream_changed";
+    }
+    return {
+      cacheHit: false,
+      missReason,
+      cacheKey,
+      hash,
+      hashInputs,
+      cacheAgeMs: 0,
+      output: null,
+    };
+  }
+
+  const storedAt = Date.parse(String(stored?.storedAt || ""));
+  return {
+    cacheHit: true,
+    missReason: null,
+    cacheKey,
+    hash,
+    hashInputs,
+    cacheAgeMs: Number.isFinite(storedAt) ? Math.max(0, Date.now() - storedAt) : 0,
+    output: stored?.output && typeof stored.output === "object" ? stored.output : null,
+  };
+}
+
+export async function setStageCache(userId, runId, stageId, hashInputs = {}, output = null, ttlSeconds = 7 * 86400) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  const safeStageId = String(stageId || "").trim();
+  if (!safeUserId || !safeRunId || !safeStageId) return { ok: false, bytes: 0 };
+
+  const cacheKey = stageCacheKey(safeUserId, safeRunId, safeStageId);
+  const hash = sha256Raw(stableStringify(hashInputs));
+  const payload = {
+    hash,
+    output: output && typeof output === "object" ? output : null,
+    storedAt: nowIso(),
+    hashInputs: hashInputs && typeof hashInputs === "object" ? hashInputs : {},
+  };
+  const serialized = JSON.stringify(payload);
+  await setValue(cacheKey, payload, { ttlSeconds });
+
+  const indexKey = stageCacheIndexKey(safeUserId, safeRunId);
+  const existingIndex = await getValue(indexKey);
+  const list = Array.isArray(existingIndex) ? existingIndex : [];
+  const next = [...new Set([...list, safeStageId])];
+  await setValue(indexKey, next, { ttlSeconds });
+
+  return {
+    ok: true,
+    cacheKey,
+    hash,
+    bytes: Buffer.byteLength(serialized, "utf8"),
+  };
+}
+
+export async function deleteRunStageCache(userId, runId) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  if (!safeUserId || !safeRunId) return { deleted: 0 };
+
+  const indexKey = stageCacheIndexKey(safeUserId, safeRunId);
+  const existingIndex = await getValue(indexKey);
+  const stages = Array.isArray(existingIndex) ? existingIndex : [];
+  let deleted = 0;
+  for (const stageId of stages) {
+    const key = stageCacheKey(safeUserId, safeRunId, stageId);
+    await deleteValue(key);
+    deleted += 1;
+  }
+  await deleteValue(indexKey);
+  return { deleted };
 }

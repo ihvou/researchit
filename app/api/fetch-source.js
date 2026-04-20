@@ -65,7 +65,14 @@ export default async function handler(req, res) {
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const startedAt = Date.now();
+  const timeoutMs = 10000;
+  const timeout = setTimeout(() => controller.abort({
+    source: "provider_timeout",
+    layer: "fetch_source",
+    deadlineMs: timeoutMs,
+    elapsedMs: Date.now() - startedAt,
+  }), timeoutMs);
 
   try {
     const headers = {
@@ -150,11 +157,15 @@ export default async function handler(req, res) {
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {
+    const abortReason = err?.cause && typeof err.cause === "object"
+      ? err.cause
+      : (controller?.signal?.reason && typeof controller.signal.reason === "object" ? controller.signal.reason : null);
     return res.status(200).json({
       error: err?.message || "Failed to fetch source.",
       sourceFetchError: true,
       sourceFetchStatus: "fetch_exception",
       resolvedUrl: "",
+      ...(abortReason ? { abortReason } : {}),
       fetchedAt: new Date().toISOString(),
     });
   } finally {

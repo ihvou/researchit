@@ -13,6 +13,11 @@ import { REASON_CODES } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_08_recover";
 export const STAGE_TITLE = "Targeted Recovery";
+export const PROMPT_VERSION = "v2";
+
+function nowIso() {
+  return new Date().toISOString();
+}
 
 function computePressure(unit = {}, extra = {}) {
   let score = 0;
@@ -114,9 +119,15 @@ function groupMatrixSelections(items = []) {
   });
 
   const groups = [];
+  let index = 0;
   byAttr.forEach((items) => {
     for (let i = 0; i < items.length; i += 2) {
-      groups.push(items.slice(i, i + 2));
+      index += 1;
+      groups.push({
+        chunkId: `c${String(index).padStart(2, "0")}`,
+        depth: 0,
+        cells: items.slice(i, i + 2),
+      });
     }
   });
   return groups;
@@ -340,6 +351,8 @@ export async function runStage(context = {}) {
   const reasonCodes = [];
 
   if (state?.outputType === "matrix") {
+    const subjects = ensureArray(state?.request?.matrix?.subjects);
+    const attributes = ensureArray(state?.request?.matrix?.attributes);
     const budgetPlan = computeMatrixAdaptiveBudget(state, runtime);
     const selection = selectMatrixUnits(state, budgetPlan.requestedBudget);
     const { selected, groups } = selection;
@@ -356,14 +369,40 @@ export async function runStage(context = {}) {
       };
     }
 
+    const chunkTrace = [];
+    const subjectIndex = new Map(subjects.map((subject, idx) => [clean(subject?.id), idx]));
+    const attributeIndex = new Map(attributes.map((attribute, idx) => [clean(attribute?.id), idx]));
+    const chunkManifest = groups.map((group) => ({
+      chunkId: group.chunkId,
+      parentId: null,
+      depth: Number(group?.depth || 0),
+      cells: ensureArray(group?.cells).map((item) => ({
+        subjectId: clean(item?.unit?.subjectId),
+        attributeId: clean(item?.unit?.attributeId),
+        subjectIdx: Number.isFinite(subjectIndex.get(clean(item?.unit?.subjectId)))
+          ? Number(subjectIndex.get(clean(item?.unit?.subjectId)))
+          : null,
+        attributeIdx: Number.isFinite(attributeIndex.get(clean(item?.unit?.attributeId)))
+          ? Number(attributeIndex.get(clean(item?.unit?.attributeId)))
+          : null,
+      })),
+    }));
+
     const groupResults = await Promise.all(groups.map(async (group) => {
+      chunkTrace.push({
+        chunkId: group.chunkId,
+        event: "started",
+        timestamp: nowIso(),
+        depth: Number(group?.depth || 0),
+        cellCount: ensureArray(group?.cells).length,
+      });
       const prompt = `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
 Recover missing evidence for these matrix cells.
 Cells:
-${group.map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${item.subjectLabel} x ${item.attributeLabel})
+${ensureArray(group?.cells).map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${item.subjectLabel} x ${item.attributeLabel})
   attributeBrief: ${item.attributeBrief || "not provided"}
   existingEvidence: ${truncateText(item?.unit?.full || item?.unit?.value || "none", 800)}
   whySelected: pressure=${item.pressure}; confidence=${item.reasons.confidence}; sourceCount=${item.reasons.sourceCount}; contradictionFlag=${item.reasons.contradictionFlag}; staleSourceFlag=${item.reasons.staleSourceFlag}; gapHypothesis=${item.reasons.gapHypothesis || "not provided"}`).join("\n")}
@@ -381,43 +420,78 @@ Rules:
 
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 
-      const result = await callActorJson({
-        state,
-        runtime,
-        stageId: STAGE_ID,
-        actor: "analyst",
-        systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
-        userPrompt: prompt,
-        tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
-        timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-        // 1 retry enables parse-repair on transient JSON failures; groups are parallel so this does not compound.
-        maxRetries: 1,
-        liveSearch: true,
-        schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
-      });
-      const confidenceStats = { coerced: 0 };
-      const patches = normalizeMatrixPatch(result?.parsed, {
-        groundedSources: result?.meta?.groundedSources || [],
-        liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
-        confidenceStats,
-      });
-      const tokenDiagnostics = {
-        ...(result?.tokenDiagnostics || {}),
-        confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-      };
-      const reasonCodes = [
-        ...ensureArray(result?.reasonCodes),
-        ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
-      ];
-      return {
-        patches,
-        reasonCodes,
-        tokenDiagnostics,
-        citations: computeGroundingCoverage(patches),
-        route: result?.route || null,
-        retries: Number(result?.retries || 0),
-        groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
-      };
+      try {
+        const result = await callActorJson({
+          state,
+          runtime,
+          stageId: STAGE_ID,
+          actor: "analyst",
+          systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
+          userPrompt: prompt,
+          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
+          maxRetries: 1,
+          liveSearch: true,
+          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+        });
+        const confidenceStats = { coerced: 0 };
+        const patches = normalizeMatrixPatch(result?.parsed, {
+          groundedSources: result?.meta?.groundedSources || [],
+          liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+          confidenceStats,
+        });
+        const tokenDiagnostics = {
+          ...(result?.tokenDiagnostics || {}),
+          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+        };
+        const reasonCodes = [
+          ...ensureArray(result?.reasonCodes),
+          ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+        ];
+        const retryCount = Number(result?.retries || 0);
+        for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+          chunkTrace.push({
+            chunkId: group.chunkId,
+            event: "retried",
+            timestamp: nowIso(),
+            retryIndex,
+            reason: "call_retry",
+            depth: Number(group?.depth || 0),
+          });
+        }
+        chunkTrace.push({
+          chunkId: group.chunkId,
+          event: "completed",
+          timestamp: nowIso(),
+          depth: Number(group?.depth || 0),
+          outputSize: patches.length,
+          outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
+          finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
+        });
+        return {
+          chunkId: group.chunkId,
+          depth: Number(group?.depth || 0),
+          cellCount: ensureArray(group?.cells).length,
+          patches,
+          reasonCodes,
+          tokenDiagnostics,
+          citations: computeGroundingCoverage(patches),
+          route: result?.route || null,
+          retries: retryCount,
+          groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+        };
+      } catch (err) {
+        chunkTrace.push({
+          chunkId: group.chunkId,
+          event: "failed",
+          timestamp: nowIso(),
+          depth: Number(group?.depth || 0),
+          error: clean(err?.message || "chunk_failure"),
+          abortReason: err?.abortReason || null,
+          finishReason: clean(err?.finishReason) || "unknown",
+        });
+        throw err;
+      }
     }));
 
     const patches = groupResults.flatMap((r) => r.patches);
@@ -447,6 +521,10 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       reasonCodes: [...reasonCodes, ...matrixReasonCodes],
       statePatch: {
         ui: { phase: STAGE_ID },
+        chunkManifest: {
+          ...(state?.chunkManifest || {}),
+          [STAGE_ID]: chunkManifest,
+        },
         recoveredPatch: {
           matrix: {
             cells: patches,
@@ -457,6 +535,8 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         selectedUnits: selected.length,
         groupedCalls: groups.length,
         patchedCells: patches.length,
+        chunkTrace,
+        chunkManifest,
         requestedBudget: selection.requestedBudget,
         effectiveBudget: selection.effectiveBudget,
         attributeCoverageFloorReserved: selection.floorReserved,
@@ -464,6 +544,15 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         citations,
         groundedSourcesResolved,
         retries: totalRetries,
+        chunkRetriesTotal: chunkTrace.filter((entry) => entry?.event === "retried").length,
+        chunkSplitDepthMax: chunkTrace.reduce((maxDepth, entry) => {
+          const depth = Number(entry?.depth || 0);
+          return depth > maxDepth ? depth : maxDepth;
+        }, 0),
+        chunksStarted: chunkTrace.filter((entry) => entry?.event === "started").length,
+        chunksCompleted: chunkTrace.filter((entry) => entry?.event === "completed").length,
+        chunksFailed: chunkTrace.filter((entry) => entry?.event === "failed").length,
+        chunkTruncationRate: Number(aggregatedTokens?.outputTruncatedRate || 0),
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
       },
