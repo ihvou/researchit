@@ -255,6 +255,139 @@ function enforceStrictReasonCodeInvariant(state = {}, reasonCodes = []) {
   return normalized.filter((code) => code !== REASON_CODES.RUN_COMPLETED_DEGRADED);
 }
 
+function normalizeFailureCause(cause = {}) {
+  const type = clean(cause?.type);
+  const detail = clean(cause?.detail);
+  if (!type) return null;
+  return { type, detail };
+}
+
+function ensureFailureCausesContainer(state = {}) {
+  if (!state?.quality || typeof state.quality !== "object") state.quality = {};
+  if (!Array.isArray(state.quality.failureCauses)) state.quality.failureCauses = [];
+  if (!state?.diagnostics || typeof state.diagnostics !== "object") return;
+  if (!state.diagnostics.quality || typeof state.diagnostics.quality !== "object") {
+    state.diagnostics.quality = {};
+  }
+  if (!Array.isArray(state.diagnostics.quality.failureCauses)) {
+    state.diagnostics.quality.failureCauses = [];
+  }
+}
+
+function appendFailureCause(state = {}, cause = {}) {
+  const normalized = normalizeFailureCause(cause);
+  if (!normalized) return;
+  ensureFailureCausesContainer(state);
+  const exists = state.quality.failureCauses.some((item) => (
+    clean(item?.type) === normalized.type && clean(item?.detail) === normalized.detail
+  ));
+  if (!exists) state.quality.failureCauses.push(normalized);
+  if (state?.diagnostics?.quality && Array.isArray(state.diagnostics.quality.failureCauses)) {
+    const already = state.diagnostics.quality.failureCauses.some((item) => (
+      clean(item?.type) === normalized.type && clean(item?.detail) === normalized.detail
+    ));
+    if (!already) state.diagnostics.quality.failureCauses.push(normalized);
+  }
+}
+
+function ensureSafetyGuardrailsContainer(state = {}) {
+  if (!state?.quality || typeof state.quality !== "object") state.quality = {};
+  if (!Array.isArray(state.quality.safetyGuardrails)) state.quality.safetyGuardrails = [];
+  if (!state?.diagnostics || typeof state.diagnostics !== "object") return;
+  if (!state.diagnostics.quality || typeof state.diagnostics.quality !== "object") {
+    state.diagnostics.quality = {};
+  }
+  if (!Array.isArray(state.diagnostics.quality.safetyGuardrails)) {
+    state.diagnostics.quality.safetyGuardrails = [];
+  }
+}
+
+function appendSafetyGuardrail(state = {}, event = {}) {
+  const type = clean(event?.type);
+  const stageId = clean(event?.stageId);
+  if (!type || !stageId) return;
+  ensureSafetyGuardrailsContainer(state);
+  const normalized = {
+    type,
+    stageId,
+    severity: clean(event?.severity) || "warning",
+    status: clean(event?.status) || "observed",
+    attempts: Number(event?.attempts || 0),
+    scopeReduced: event?.scopeReduced === true,
+    truncationSuspected: event?.truncationSuspected === true,
+    reasonCode: clean(event?.reasonCode) || "",
+    detail: clean(event?.detail),
+    timestamp: new Date().toISOString(),
+  };
+  const signature = `${normalized.type}|${normalized.stageId}|${normalized.status}|${normalized.reasonCode}|${normalized.attempts}|${normalized.scopeReduced}|${normalized.truncationSuspected}`;
+  const exists = state.quality.safetyGuardrails.some((item) => (
+    `${clean(item?.type)}|${clean(item?.stageId)}|${clean(item?.status)}|${clean(item?.reasonCode)}|${Number(item?.attempts || 0)}|${item?.scopeReduced === true}|${item?.truncationSuspected === true}` === signature
+  ));
+  if (!exists) state.quality.safetyGuardrails.push(normalized);
+  if (state?.diagnostics?.quality && Array.isArray(state.diagnostics.quality.safetyGuardrails)) {
+    const already = state.diagnostics.quality.safetyGuardrails.some((item) => (
+      `${clean(item?.type)}|${clean(item?.stageId)}|${clean(item?.status)}|${clean(item?.reasonCode)}|${Number(item?.attempts || 0)}|${item?.scopeReduced === true}|${item?.truncationSuspected === true}` === signature
+    ));
+    if (!already) state.diagnostics.quality.safetyGuardrails.push(normalized);
+  }
+}
+
+export function classifyStageFailureCause({ err = {}, reasonCodes = [], diagnostics = {}, stageId = "" } = {}) {
+  const codes = normalizeReasonCodes(reasonCodes || []);
+  const message = clean(err?.message || diagnostics?.error).toLowerCase();
+  const status = Number(err?.status || err?.statusCode || 0);
+  const abortSource = clean(err?.abortReason?.source || diagnostics?.abortReason?.source).toLowerCase();
+  const splitDepth = Math.max(
+    Number(err?.chunkSplitDepthMax || 0),
+    Number(err?.chunkDepth || 0),
+    Number(diagnostics?.chunkSplitDepthMax || 0)
+  );
+  const parseFailed = codes.includes(REASON_CODES.RESPONSE_PARSE_FAILED);
+  const truncationSuspected = codes.includes(REASON_CODES.TRUNCATION_SUSPECTED)
+    || err?.outputTruncated === true
+    || diagnostics?.outputTruncated === true;
+
+  if (["browser_fetch", "vercel_edge"].includes(abortSource)) {
+    return {
+      type: "browser_edge_abort",
+      detail: `${clean(stageId)} abort source=${abortSource || "unknown"}`.trim(),
+    };
+  }
+
+  if (parseFailed && truncationSuspected) {
+    return {
+      type: "truncation_parse_loop",
+      detail: `${clean(stageId)} parse failures with truncation signal`.trim(),
+    };
+  }
+
+  if (status >= 500 || /\b5\d\d\b/.test(message) || message.includes("internal server error")) {
+    return {
+      type: "provider_error",
+      detail: `${clean(stageId)} provider status=${status || "unknown"}`.trim(),
+    };
+  }
+
+  if (splitDepth > 0 || err?.chunkSplitExhausted === true) {
+    return {
+      type: "chunk_split_exhausted",
+      detail: `${clean(stageId)} split depth=${Math.max(1, splitDepth)}`.trim(),
+    };
+  }
+
+  if (codes.includes(REASON_CODES.STAGE_TIMEOUT) || ["provider_timeout", "stage_timeout", "chunk_deadline"].includes(abortSource)) {
+    return {
+      type: "network_timeout",
+      detail: `${clean(stageId)} timeout source=${abortSource || "stage_timeout"}`.trim(),
+    };
+  }
+
+  return {
+    type: "unclassified",
+    detail: clean(err?.message || diagnostics?.error || `${clean(stageId)} stage failure`),
+  };
+}
+
 function toIdList(items = [], key = "id") {
   if (!Array.isArray(items)) return [];
   return items
@@ -563,6 +696,19 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
       updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);
       appendCacheAggregate(state, stage.id, cacheDiagnostics, cacheBytes);
+      if (completedRecord?.tokens?.parseRepairApplied) {
+        appendSafetyGuardrail(state, {
+          type: "parse_failure_recovered",
+          stageId: stage.id,
+          severity: "warning",
+          status: "recovered",
+          attempts: Number(completedRecord?.tokens?.parseRepairAttempts || 0),
+          scopeReduced: completedRecord?.tokens?.parseScopeReduced === true,
+          truncationSuspected: completedRecord?.tokens?.parseFailureTruncationSuspected === true,
+          reasonCode: REASON_CODES.RESPONSE_PARSE_FAILED,
+          detail: `${stage.id} recovered after parse repair`,
+        });
+      }
 
       appendProgressRecord(state, {
         stageId: stage.id,
@@ -601,10 +747,33 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
           outputTruncated: err?.outputTruncated === true,
         }),
       });
+      const stageFailureCause = classifyStageFailureCause({
+        err,
+        reasonCodes,
+        diagnostics: completedRecord?.diagnostics || {},
+        stageId: stage.id,
+      });
+      completedRecord.diagnostics = {
+        ...(completedRecord?.diagnostics || {}),
+        stageFailureCause,
+      };
       updateStageRecord(state, completedRecord);
       appendCostDiagnostics(state, completedRecord);
       appendQualityReasonCodes(state, reasonCodes);
       pushReasonCodes(state, reasonCodes);
+      if (reasonCodes.includes(REASON_CODES.RESPONSE_PARSE_FAILED) || err?.parseGuardrail?.exhausted) {
+        appendSafetyGuardrail(state, {
+          type: "parse_failure_aborted",
+          stageId: stage.id,
+          severity: "fatal",
+          status: "aborted",
+          attempts: Number(err?.parseFailureAttempts || err?.parseGuardrail?.attempts || 0),
+          scopeReduced: err?.parseScopeReduced === true || err?.parseGuardrail?.scopeReduced === true,
+          truncationSuspected: err?.parseFailureTruncationSuspected === true || err?.parseGuardrail?.truncationSuspected === true,
+          reasonCode: REASON_CODES.RESPONSE_PARSE_FAILED,
+          detail: `${stage.id} parse guardrail exhausted`,
+        });
+      }
       appendProgressRecord(state, {
         stageId: stage.id,
         title: stage.title,
@@ -620,6 +789,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
 
         appendQualityReasonCodes(state, failureCodes);
         pushReasonCodes(state, failureCodes);
+        appendFailureCause(state, stageFailureCause);
 
         state = applyStatePatch(state, {
           ui: {
@@ -670,6 +840,7 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
   if (state?.ui?.status === "error") {
     const error = pipelineError || new Error(state?.ui?.errorMsg || "Pipeline failed.");
     error.reasonCodes = normalizeReasonCodes(state?.quality?.reasonCodes || []);
+    error.failureCauses = Array.isArray(state?.quality?.failureCauses) ? state.quality.failureCauses : [];
     throw error;
   }
 

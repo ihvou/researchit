@@ -154,6 +154,8 @@ export function createRunState({ input = {}, config = {}, runId = "" } = {}) {
       strictQuality,
       qualityGrade: "decision-grade",
       reasonCodes: [],
+      failureCauses: [],
+      safetyGuardrails: [],
       coverage: {
         totalUnits: 0,
         coveredUnits: 0,
@@ -509,6 +511,9 @@ export function toUseCaseState(state = {}) {
   const failureCauses = Array.isArray(state?.quality?.failureCauses)
     ? state.quality.failureCauses
     : (Array.isArray(state?.decisionGateResult?.failureCauses) ? state.decisionGateResult.failureCauses : []);
+  const safetyGuardrails = Array.isArray(state?.quality?.safetyGuardrails)
+    ? state.quality.safetyGuardrails
+    : (Array.isArray(state?.diagnostics?.quality?.safetyGuardrails) ? state.diagnostics.quality.safetyGuardrails : []);
   const webSearchCounts = collectWebSearchCounters(state);
   const cacheDiagnostics = state?.diagnostics?.cacheDiagnostics && typeof state.diagnostics.cacheDiagnostics === "object"
     ? state.diagnostics.cacheDiagnostics
@@ -574,6 +579,19 @@ export function toUseCaseState(state = {}) {
       type: clean(cause?.type),
       detail: clean(cause?.detail),
     })).filter((cause) => cause.type),
+    safetyGuardrails: safetyGuardrails
+      .map((entry) => ({
+        type: clean(entry?.type),
+        stageId: clean(entry?.stageId),
+        severity: clean(entry?.severity),
+        status: clean(entry?.status),
+        attempts: Number(entry?.attempts || 0),
+        scopeReduced: entry?.scopeReduced === true,
+        truncationSuspected: entry?.truncationSuspected === true,
+        reasonCode: clean(entry?.reasonCode),
+        detail: clean(entry?.detail),
+      }))
+      .filter((entry) => entry.type && entry.stageId),
     llmCostCurrency: clean(state?.diagnostics?.cost?.currency) || "USD",
     llmCostEstimatedUsd: Number(state?.diagnostics?.cost?.totalEstimated || 0),
     cacheHits: Number(cacheDiagnostics?.totalHits || 0),

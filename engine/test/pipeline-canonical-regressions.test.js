@@ -13,6 +13,8 @@ import { runStage as run11 } from "../pipeline/stages/11-challenge.js";
 import { runStage as run13 } from "../pipeline/stages/13-defend.js";
 import { runStage as run14 } from "../pipeline/stages/14-synthesize.js";
 import { runStage as run15 } from "../pipeline/stages/15-finalize.js";
+import { classifyStageFailureCause } from "../pipeline/orchestrator.js";
+import { toUseCaseState } from "../pipeline/contracts/run-state.js";
 
 function baseModels() {
   return {
@@ -66,6 +68,60 @@ test("callActorJson parse retry applies repair prompt and reduces scope", async 
   assert.equal(prompts.length, 2);
   assert.match(prompts[1], /Previous response failed JSON parsing/i);
   assert.equal(prompts[1].includes("L4_DROP"), true);
+  assert.equal(out?.tokenDiagnostics?.parseRepairApplied, true);
+  assert.equal(out?.tokenDiagnostics?.parseRepairAttempts, 1);
+  assert.equal(out?.tokenDiagnostics?.parseScopeReduced, false);
+});
+
+test("classifyStageFailureCause maps parse-truncation loops and timeout aborts", () => {
+  const truncationCause = classifyStageFailureCause({
+    stageId: "stage_03a_evidence_memory",
+    reasonCodes: ["response_parse_failed", "truncation_suspected"],
+    err: { message: "JSON parse failed", outputTruncated: true },
+  });
+  assert.equal(truncationCause?.type, "truncation_parse_loop");
+
+  const timeoutCause = classifyStageFailureCause({
+    stageId: "stage_03b_evidence_web",
+    reasonCodes: ["stage_timeout"],
+    err: { abortReason: { source: "provider_timeout" }, message: "timed out" },
+  });
+  assert.equal(timeoutCause?.type, "network_timeout");
+});
+
+test("toUseCaseState exposes safetyGuardrails in analysisMeta", () => {
+  const uc = toUseCaseState({
+    runId: "run-guardrail",
+    outputType: "scorecard",
+    mode: "native",
+    ui: { rawInput: "Test objective", status: "error", phase: "stage_03a_evidence_memory" },
+    request: {
+      titleHint: "Test",
+      researchConfigId: "default",
+      scorecard: { dimensions: [] },
+    },
+    config: { name: "Default" },
+    quality: {
+      qualityGrade: "failed",
+      reasonCodes: ["response_parse_failed"],
+      safetyGuardrails: [{
+        type: "parse_failure_aborted",
+        stageId: "stage_03a_evidence_memory",
+        severity: "fatal",
+        status: "aborted",
+        attempts: 2,
+        scopeReduced: true,
+        truncationSuspected: true,
+        reasonCode: "response_parse_failed",
+        detail: "stage_03a_evidence_memory parse guardrail exhausted",
+      }],
+    },
+    diagnostics: { stages: [] },
+  });
+
+  assert.equal(Array.isArray(uc?.analysisMeta?.safetyGuardrails), true);
+  assert.equal(uc.analysisMeta.safetyGuardrails.length, 1);
+  assert.equal(uc.analysisMeta.safetyGuardrails[0].type, "parse_failure_aborted");
 });
 
 test("stage 03b matrix web pass adaptively splits chunks and preserves full cell coverage", async () => {

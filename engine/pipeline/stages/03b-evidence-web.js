@@ -370,7 +370,13 @@ async function gatherMatrixWeb({
         abortReason: err?.abortReason || null,
         finishReason: clean(err?.finishReason) || "unknown",
       });
-      if (ensureArray(current?.cells).length <= 1) throw err;
+      if (ensureArray(current?.cells).length <= 1) {
+        err.chunkId = clean(current?.chunkId) || null;
+        err.chunkDepth = Number(current?.depth || 0);
+        err.chunkSplitDepthMax = Math.max(Number(err?.chunkSplitDepthMax || 0), Number(current?.depth || 0));
+        err.chunkSplitExhausted = Number(current?.depth || 0) > 0;
+        throw err;
+      }
       const children = splitMatrixCellChunk(current);
       if (!children.length) throw err;
       children.forEach((child) => {

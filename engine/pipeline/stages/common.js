@@ -100,6 +100,10 @@ export function combineTokenDiagnostics(items = []) {
   let groundedSourceCount = 0;
   let confidenceScaleCoerced = 0;
   let outputTruncatedCount = 0;
+  let parseRepairAttempts = 0;
+  let parseRepairApplied = false;
+  let parseScopeReduced = false;
+  let parseFailureTruncationSuspected = false;
   let sawProviderUsage = false;
   let sawEstimated = false;
 
@@ -117,6 +121,10 @@ export function combineTokenDiagnostics(items = []) {
     groundedSourceCount += toFiniteNumber(item?.groundedSourceCount, 0);
     confidenceScaleCoerced += toFiniteNumber(item?.confidenceScaleCoerced, 0);
     outputTruncatedCount += item?.outputTruncated ? 1 : 0;
+    parseRepairAttempts += toFiniteNumber(item?.parseRepairAttempts, 0);
+    parseRepairApplied = parseRepairApplied || item?.parseRepairApplied === true;
+    parseScopeReduced = parseScopeReduced || item?.parseScopeReduced === true;
+    parseFailureTruncationSuspected = parseFailureTruncationSuspected || item?.parseFailureTruncationSuspected === true;
     const source = clean(item?.tokenSource).toLowerCase();
     if (source === "provider_usage") sawProviderUsage = true;
     if (source === "estimated_text") sawEstimated = true;
@@ -146,6 +154,10 @@ export function combineTokenDiagnostics(items = []) {
     confidenceScaleCoerced,
     outputTruncatedCount,
     outputTruncatedRate: list.length > 0 ? outputTruncatedCount / list.length : 0,
+    parseRepairApplied,
+    parseRepairAttempts,
+    parseScopeReduced,
+    parseFailureTruncationSuspected,
     tokenSource,
     calls: list.length,
   };
@@ -227,6 +239,7 @@ export async function callActorJson({
   };
   let parseFailureCount = 0;
   let parseFailureTruncationSuspected = false;
+  let parseScopeReduced = false;
 
   const execution = await executeWithRetry(
     async () => {
@@ -295,7 +308,9 @@ export async function callActorJson({
           : "Previous response failed JSON parsing. Return strict JSON only. No prose, no markdown, no code fences.";
         parseFailureCount += 1;
         if (parseFailureCount >= 2) {
+          const before = workingPromptBody;
           workingPromptBody = promptSplitHalf(workingPromptBody);
+          parseScopeReduced = parseScopeReduced || workingPromptBody.length < before.length;
         }
         promptPrep = preparePromptWithinBudget({
           promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
@@ -328,6 +343,22 @@ export async function callActorJson({
       ...executionCodes,
       err.reasonCode,
     ]);
+    const parseExhausted = err.reasonCodes.includes(REASON_CODES.RESPONSE_PARSE_FAILED)
+      || clean(err?.reasonCode) === REASON_CODES.RESPONSE_PARSE_FAILED;
+    if (parseExhausted) {
+      err.parseFailureAttempts = Math.max(1, parseFailureCount + 1);
+      err.parseScopeReduced = parseScopeReduced;
+      err.parseFailureTruncationSuspected = parseFailureTruncationSuspected;
+      err.parseGuardrail = {
+        stageId: clean(stageId),
+        type: "parse_failure_aborted",
+        status: "aborted",
+        exhausted: true,
+        attempts: err.parseFailureAttempts,
+        scopeReduced: parseScopeReduced,
+        truncationSuspected: parseFailureTruncationSuspected,
+      };
+    }
     throw err;
   }
 
@@ -382,6 +413,10 @@ export async function callActorJson({
       finishReason,
       outputTokensCap: toFiniteNumber(outputTokensCap, 0),
       outputTruncated,
+      parseRepairApplied: parseFailureCount > 0,
+      parseRepairAttempts: parseFailureCount,
+      parseScopeReduced,
+      parseFailureTruncationSuspected,
     },
   };
 }
