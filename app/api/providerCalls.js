@@ -504,12 +504,6 @@ async function callGemini({
       ...(withSearch
         ? {
           tools: [{ google_search: {} }],
-          toolConfig: {
-            functionCallingConfig: {
-              mode: "ANY",
-              allowedFunctionNames: ["google_search"],
-            },
-          },
         }
         : {}),
     };

@@ -346,6 +346,7 @@ function flowByEvidenceMode(flow = [], evidenceMode = "native") {
 
 function getStepState(step, idx, currentIdx, uc, stageRecord = null) {
   const stageStatus = String(stageRecord?.status || "").trim().toLowerCase();
+  if (["ok", "done", "complete", "completed", "success", "succeeded"].includes(stageStatus)) return "done";
   if (stageStatus === "cached") return "done";
   if (stageRecord?.diagnostics?.skipped) return "done";
   if (stageStatus === "failed") return "failed";
