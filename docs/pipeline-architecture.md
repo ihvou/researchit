@@ -32,7 +32,7 @@ Quality policy is defined in [quality-bar.md](./quality-bar.md). If any tradeoff
 ## Evidence Modes
 
 ### Research Team (`native`)
-The Analyst uses a two-pass hybrid approach: Stage 03a generates memory-grounded evidence (OpenAI gpt-5.4, no web) and Stage 03b extends it with live web evidence (Gemini 2.5 Pro + Google Search grounding). Recovery, critic debate, and synthesis follow.
+The Analyst uses a two-pass hybrid approach: Stage 03a generates memory-grounded evidence (OpenAI gpt-5.4, no web) and Stages 03b.1 + 03b.2 extend it with live web evidence. 03b.1 (Gemini 2.5 Pro + Google Search grounding) retrieves a corpus only; 03b.2 (OpenAI gpt-5.4) reads the corpus and emits cells that may cite only entries from it — retrieval and reasoning are explicitly separated so the model cannot cite URLs outside the grounded corpus. Recovery (08.1 + 08.2, same split), critic debate, and synthesis follow.
 
 ### Deep Research ×3 (`deep-research-x3`)
 Stage 03c invokes the **Deep Research product feature** from all three major providers simultaneously — this is exactly what a user gets when they click the "+" Deep Research/Research button in ChatGPT, Claude, or Gemini:

@@ -1,4 +1,4 @@
-import { runCanonicalPipeline } from "./orchestrator.js";
+import { runCanonicalPipeline, reprocessStage } from "./orchestrator.js";
 import { runMatrixAnalysis } from "./matrix.js";
 
 function clean(value) {
@@ -21,3 +21,5 @@ export async function runAnalysis(input, config, callbacks = {}) {
     outputMode: "scorecard",
   }, callbacks);
 }
+
+export { reprocessStage };

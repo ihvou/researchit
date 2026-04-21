@@ -199,6 +199,7 @@ export async function callActorJson({
   routeOverride = {},
   schemaHint = "",
   allowCompaction = true,
+  searchMaxUses = 0,
   callContext = {},
 } = {}) {
   const transport = runtime?.transport;
@@ -239,6 +240,9 @@ export async function callActorJson({
     model: route.model,
     webSearchModel: route.webSearchModel,
     liveSearch: !!liveSearch,
+    searchMaxUses: Number.isFinite(Number(searchMaxUses)) && Number(searchMaxUses) > 0
+      ? Math.max(1, Math.floor(Number(searchMaxUses)))
+      : undefined,
     deepResearch: !!deepResearch,
     includeMeta: true,
     retry: { maxRetries: 0 },
@@ -460,6 +464,8 @@ export function normalizeConfidence(value, stats = null) {
 
 export function normalizeConfidenceSource(value) {
   const lower = clean(value).toLowerCase();
+  if (lower === "derived") return "derived";
+  if (lower === "model_fallback") return "model_fallback";
   if (lower === "verification_penalty") return "verification_penalty";
   return "model";
 }
@@ -488,6 +494,8 @@ export function normalizeSource(raw = {}) {
     citationStatus: normalizeCitationStatus(raw?.citationStatus),
     groundedByProvider: raw?.groundedByProvider === true,
     groundedSetAvailable: raw?.groundedSetAvailable === true,
+    groundingConfidence: clean(raw?.groundingConfidence || "") || undefined,
+    corpusId: clean(raw?.corpusId || "") || undefined,
     displayStatus: clean(raw?.displayStatus || "") || undefined,
     publishedYear: Number.isFinite(Number(raw?.publishedYear)) ? Number(raw.publishedYear) : null,
   };

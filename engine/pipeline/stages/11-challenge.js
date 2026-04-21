@@ -25,22 +25,52 @@ function normalizeFlagType(value, category = "other") {
   return "factual";
 }
 
+function normalizeEvidence(payload = {}) {
+  const evidence = payload && typeof payload === "object" ? payload : {};
+  const correctingSource = evidence?.correctingSource && typeof evidence.correctingSource === "object"
+    ? normalizeSources([evidence.correctingSource])[0]
+    : null;
+  const explicitSources = normalizeSources(evidence?.sources || []);
+  const sources = [...(correctingSource ? [correctingSource] : []), ...explicitSources];
+  return {
+    citedClaim: clean(evidence?.citedClaim),
+    correctingSource,
+    searchQueriesUsed: ensureArray(evidence?.searchQueriesUsed).map((item) => clean(item)).filter(Boolean).slice(0, 8),
+    sources,
+  };
+}
+
+function mergeSources(a = [], b = []) {
+  const map = new Map();
+  [...ensureArray(a), ...ensureArray(b)].forEach((source) => {
+    const key = `${clean(source?.name)}|${clean(source?.url)}|${clean(source?.quote)}`;
+    if (!key.replace(/\|/g, "")) return;
+    if (!map.has(key)) map.set(key, source);
+  });
+  return [...map.values()];
+}
+
 function normalizeFlags(parsed = {}, state = {}) {
   const raw = ensureArray(parsed?.flags);
   const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
-  const flags = raw.map((flag, idx) => ({
-    id: clean(flag?.id) || `flag-${idx + 1}`,
-    unitKey: clean(flag?.unitKey),
-    flagged: flag?.flagged !== false,
-    severity: normalizeSeverity(flag?.severity),
-    category: normalizeCategory(flag?.category),
-    flagType: normalizeFlagType(flag?.flagType, normalizeCategory(flag?.category)),
-    note: clean(flag?.note),
-    suggestedScore: !isMatrix && Number.isFinite(Number(flag?.suggestedScore)) ? Number(flag.suggestedScore) : undefined,
-    suggestedValue: clean(flag?.suggestedValue) || undefined,
-    suggestedConfidence: clean(flag?.suggestedConfidence) ? clean(flag.suggestedConfidence).toLowerCase() : undefined,
-    sources: normalizeSources(flag?.sources || []),
-  })).filter((flag) => flag.unitKey && flag.note);
+  const flags = raw.map((flag, idx) => {
+    const category = normalizeCategory(flag?.category);
+    const evidence = normalizeEvidence(flag?.evidence);
+    return {
+      id: clean(flag?.id) || `flag-${idx + 1}`,
+      unitKey: clean(flag?.unitKey),
+      flagged: flag?.flagged !== false,
+      severity: normalizeSeverity(flag?.severity),
+      category,
+      flagType: normalizeFlagType(flag?.flagType, category),
+      note: clean(flag?.note),
+      suggestedScore: !isMatrix && Number.isFinite(Number(flag?.suggestedScore)) ? Number(flag.suggestedScore) : undefined,
+      suggestedValue: clean(flag?.suggestedValue) || undefined,
+      suggestedConfidence: clean(flag?.suggestedConfidence) ? clean(flag?.suggestedConfidence).toLowerCase() : undefined,
+      evidence,
+      sources: mergeSources(normalizeSources(flag?.sources || []), evidence.sources),
+    };
+  }).filter((flag) => flag.unitKey && flag.note);
 
   const byUnit = {};
   flags.forEach((flag) => {
@@ -121,7 +151,13 @@ export async function runStage(context = {}) {
     "note":"",
     "suggestedValue": "",
     "suggestedConfidence": "high|medium|low",
-    "sources": []
+    "sources": [],
+    "evidence": {
+      "citedClaim":"",
+      "correctingSource":{"name":"","url":"","quote":"","sourceType":""},
+      "searchQueriesUsed":[""],
+      "sources":[]
+    }
   }]
 }`
     : `{
@@ -135,7 +171,13 @@ export async function runStage(context = {}) {
     "note":"",
     "suggestedScore": 1,
     "suggestedConfidence": "high|medium|low",
-    "sources": []
+    "sources": [],
+    "evidence": {
+      "citedClaim":"",
+      "correctingSource":{"name":"","url":"","quote":"","sourceType":""},
+      "searchQueriesUsed":[""],
+      "sources":[]
+    }
   }]
 }`;
 
@@ -143,7 +185,8 @@ export async function runStage(context = {}) {
 
 Include a factual accuracy pass:
 - Flag claims that appear imprecise, overstated, or inconsistent with known public information.
-- For factual challenges, state what appears more accurate and reference supporting sources when possible.
+- Use web search for factual uncertainty and stale-claim checks.
+- For factual challenges, state what appears more accurate and reference supporting sources.
 
 Severity definitions:
 - high: materially changes the decision, invalidates a central claim, or leaves a high-impact risk unaddressed.
@@ -188,10 +231,11 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
-    liveSearch: false,
+    liveSearch: true,
+    searchMaxUses: 5,
     schemaHint: isMatrix
-      ? '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[]}]}'
-      : '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[]}]}',
+      ? '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}'
+      : '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}',
   });
 
   const normalized = normalizeFlags(result?.parsed, state);
@@ -200,6 +244,10 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     acc[key] = Number(acc[key] || 0) + 1;
     return acc;
   }, {});
+  const factualFlagsWithEvidence = normalized.flags.filter((flag) => (
+    clean(flag?.flagType).toLowerCase() === "factual"
+      && (flag?.evidence?.correctingSource?.url || ensureArray(flag?.evidence?.searchQueriesUsed).length > 0)
+  )).length;
 
   return {
     stageStatus: "ok",
@@ -215,6 +263,7 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     diagnostics: {
       flags: normalized.flags.length,
       flagTypeCounts,
+      factualFlagsWithEvidence,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

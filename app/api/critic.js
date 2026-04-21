@@ -22,6 +22,7 @@ export default async function handler(req, res) {
     systemPrompt,
     maxTokens = 5000,
     liveSearch = false,
+    searchMaxUses,
     provider,
     model,
     webSearchModel,
@@ -74,6 +75,7 @@ export default async function handler(req, res) {
       systemPrompt,
       maxTokens,
       liveSearch,
+      searchMaxUses,
       baseUrl: resolved.baseUrl,
       stageId,
     });

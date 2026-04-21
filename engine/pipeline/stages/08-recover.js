@@ -8,7 +8,7 @@ import {
   normalizeArguments,
   normalizeConfidence,
 } from "./common.js";
-import { REASON_CODES } from "../contracts/reason-codes.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 import {
   aggregateVerificationCounters,
   verifySourcesForUnit,
@@ -297,6 +297,7 @@ function normalizeScorecardPatch(parsed = {}, options = {}) {
     });
     const sourcesWithSignal = grounded.sources.map((source) => ({
       ...source,
+      groundingConfidence: source?.groundedByProvider === true ? "provider" : "model-emitted",
       fabricationSignal: fabricationAssessment.signal,
       fabricationSignalReason: fabricationAssessment.reason || undefined,
     }));
@@ -316,41 +317,6 @@ function normalizeScorecardPatch(parsed = {}, options = {}) {
   }).filter((unit) => unit.id);
 }
 
-function normalizeMatrixPatch(parsed = {}, options = {}) {
-  const groundedSources = ensureArray(options?.groundedSources || []);
-  const confidenceStats = options?.confidenceStats || { coerced: 0 };
-  const providerGroundedCount = groundedSources.length;
-  const liveSearchUsed = options?.liveSearchUsed === true;
-  const callFailedGrounding = options?.callFailedGrounding === true;
-  return ensureArray(parsed?.cells).map((cell) => {
-    const grounded = annotateSourcesWithGrounding(cell?.sources || [], groundedSources);
-    const fabricationAssessment = fabricationAssessmentFromSources(grounded.sources, {
-      liveSearchUsed,
-      groundedSourceCount: providerGroundedCount,
-      callFailedGrounding,
-    });
-    const sourcesWithSignal = grounded.sources.map((source) => ({
-      ...source,
-      fabricationSignal: fabricationAssessment.signal,
-      fabricationSignalReason: fabricationAssessment.reason || undefined,
-    }));
-    return {
-    subjectId: clean(cell?.subjectId),
-    attributeId: clean(cell?.attributeId),
-    value: clean(cell?.value),
-    full: clean(cell?.full),
-    confidence: normalizeConfidence(cell?.confidence, confidenceStats),
-    confidenceReason: clean(cell?.confidenceReason),
-    sources: sourcesWithSignal,
-    fabricationSignal: fabricationAssessment.signal,
-    fabricationSignalReason: fabricationAssessment.reason,
-    arguments: normalizeArguments(cell?.arguments || {}, `recover-${clean(cell?.subjectId)}-${clean(cell?.attributeId)}`),
-    risks: clean(cell?.risks),
-    missingEvidence: clean(cell?.missingEvidence),
-  };
-  }).filter((cell) => cell.subjectId && cell.attributeId);
-}
-
 function computeGroundingCoverage(units = []) {
   let totalUrls = 0;
   let groundedUrls = 0;
@@ -365,6 +331,254 @@ function computeGroundingCoverage(units = []) {
     totalUrls,
     groundedUrls,
     groundedRatio: totalUrls > 0 ? groundedUrls / totalUrls : 1,
+  };
+}
+
+function computeGroundingPropagation(units = []) {
+  const distribution = {};
+  let totalSources = 0;
+  let groundedByProviderTrue = 0;
+  let groundedByProviderFalse = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      totalSources += 1;
+      if (source?.groundedByProvider === true) groundedByProviderTrue += 1;
+      else groundedByProviderFalse += 1;
+      const confidence = clean(source?.groundingConfidence || "unspecified").toLowerCase();
+      distribution[confidence] = Number(distribution[confidence] || 0) + 1;
+    });
+  });
+  return {
+    stage: STAGE_ID,
+    totalSources,
+    groundedByProviderTrue,
+    groundedByProviderFalse,
+    groundingConfidenceDistribution: distribution,
+  };
+}
+
+function normalizeUrlKey(value = "") {
+  const raw = clean(value);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const path = clean(parsed.pathname).replace(/\/+$/, "") || "/";
+    return `${clean(parsed.hostname).toLowerCase()}${path}${clean(parsed.search)}`;
+  } catch {
+    return raw.toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function buildRetrievedCorpus(groundedSources = [], chunkId = "") {
+  const dedup = new Map();
+  ensureArray(groundedSources).forEach((source, idx) => {
+    const url = clean(source?.url);
+    if (!url) return;
+    const key = normalizeUrlKey(url);
+    if (!key || dedup.has(key)) return;
+    const corpusId = `${clean(chunkId) || "chunk"}-src-${String(dedup.size + 1).padStart(2, "0")}`;
+    dedup.set(key, {
+      corpusId,
+      url,
+      canonicalUrl: url,
+      title: clean(source?.title || source?.name || `Retrieved source ${idx + 1}`) || `Retrieved source ${idx + 1}`,
+      query: clean(source?.query),
+      rank: dedup.size + 1,
+      retrievedAt: new Date().toISOString(),
+    });
+  });
+  const entries = [...dedup.values()];
+  const byId = new Map(entries.map((entry) => [entry.corpusId, entry]));
+  return {
+    entries,
+    byId,
+  };
+}
+
+function buildMatrixGroupContext(group = {}) {
+  const cells = ensureArray(group?.cells);
+  const uniqueSubjectLines = [...new Set(
+    cells.map((item) => clean(item?.unit?.subjectId))
+      .filter(Boolean)
+      .map((subjectId) => `- ${subjectId}: ${clean(itemLabelForSubject(cells, subjectId)) || subjectId}`)
+  )].join("\n");
+  const uniqueAttributeLines = [...new Set(
+    cells.map((item) => clean(item?.unit?.attributeId))
+      .filter(Boolean)
+      .map((attributeId) => `- ${attributeId}: ${clean(itemLabelForAttribute(cells, attributeId)) || attributeId}${clean(itemBriefForAttribute(cells, attributeId)) ? ` - ${clean(itemBriefForAttribute(cells, attributeId))}` : ""}`)
+  )].join("\n");
+  const cellLines = cells.map((item) => `- cellKey=${item.unit.subjectId}::${item.unit.attributeId}; subjectId=${item.unit.subjectId}; attributeId=${item.unit.attributeId} (${item.subjectLabel} x ${item.attributeLabel})
+  attributeBrief: ${item.attributeBrief || "not provided"}
+  existingEvidence: ${truncateText(item?.unit?.full || item?.unit?.value || "none", 800)}
+  whySelected: pressure=${item.pressure}; confidence=${item.reasons.confidence}; sourceCount=${item.reasons.sourceCount}; contradictionFlag=${item.reasons.contradictionFlag}; staleSourceFlag=${item.reasons.staleSourceFlag}; gapHypothesis=${item.reasons.gapHypothesis || "not provided"}`).join("\n");
+  return {
+    uniqueSubjectLines,
+    uniqueAttributeLines,
+    cellLines,
+  };
+}
+
+function itemLabelForSubject(cells = [], subjectId = "") {
+  const match = ensureArray(cells).find((item) => clean(item?.unit?.subjectId) === clean(subjectId));
+  return clean(match?.subjectLabel);
+}
+
+function itemLabelForAttribute(cells = [], attributeId = "") {
+  const match = ensureArray(cells).find((item) => clean(item?.unit?.attributeId) === clean(attributeId));
+  return clean(match?.attributeLabel);
+}
+
+function itemBriefForAttribute(cells = [], attributeId = "") {
+  const match = ensureArray(cells).find((item) => clean(item?.unit?.attributeId) === clean(attributeId));
+  return clean(match?.attributeBrief);
+}
+
+function buildMatrixRecoveryRetrievePrompt(state = {}, group = {}) {
+  const context = buildMatrixGroupContext(group);
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Stage 08 retrieve pass. Propose targeted web-search queries for these weak matrix cells.
+Subjects in this group:
+${context.uniqueSubjectLines || "- none"}
+Attributes in this group:
+${context.uniqueAttributeLines || "- none"}
+Cells to recover:
+${context.cellLines || "- none"}
+
+Rules:
+- Return queries only; do not return evidence, confidence, or sources.
+- You must call google_search while generating this output.
+- Provide 1-2 precise queries per cellKey focused on the identified weakness.
+
+Return JSON {"queries":[{"cellKey":"","query":"","rationale":""}]}`;
+}
+
+function buildMatrixRecoveryReadPrompt(state = {}, group = {}, corpus = []) {
+  const context = buildMatrixGroupContext(group);
+  const corpusLines = ensureArray(corpus).map((entry) => (
+    `- corpusId=${entry.corpusId}; url=${entry.url}; title=${entry.title}${clean(entry?.query) ? `; query=${clean(entry.query)}` : ""}`
+  )).join("\n");
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Stage 08 read pass. Recover weak matrix cells using ONLY the retrieved corpus.
+Subjects in this group:
+${context.uniqueSubjectLines || "- none"}
+Attributes in this group:
+${context.uniqueAttributeLines || "- none"}
+Cells to recover:
+${context.cellLines || "- none"}
+Retrieved corpus:
+${corpusLines || "- none"}
+
+Rules:
+- Cover every listed cell exactly once.
+- Use only retrieved corpus entries for citations.
+- Every source item MUST include corpusId that exists in Retrieved corpus.
+- If no corpus entry supports a claim, keep sources empty and explain in missingEvidence.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
+
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"corpusId":"","name":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+}
+
+function normalizeMatrixRecoveryReadPatch(parsed = {}, group = {}, corpusById = new Map(), confidenceStats = { coerced: 0 }, diagnostics = {}) {
+  const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
+  const corpusByUrlKey = new Map(
+    [...(corpusById?.values ? corpusById.values() : [])]
+      .map((entry) => [normalizeUrlKey(entry?.url), entry])
+      .filter(([key]) => !!key)
+  );
+  return ensureArray(group?.cells).map((item) => {
+    const subjectId = clean(item?.unit?.subjectId);
+    const attributeId = clean(item?.unit?.attributeId);
+    const patch = byKey.get(`${subjectId}::${attributeId}`) || {};
+    const rawSources = ensureArray(patch?.sources);
+    const sources = [];
+    rawSources.forEach((source) => {
+      const corpusId = clean(source?.corpusId);
+      let corpus = corpusById.get(corpusId);
+      if (!corpus) {
+        corpus = corpusByUrlKey.get(normalizeUrlKey(source?.url));
+      }
+      if (!corpus) {
+        diagnostics.sourceAbsentFromCorpus = Number(diagnostics.sourceAbsentFromCorpus || 0) + 1;
+        return;
+      }
+      sources.push({
+        name: clean(source?.name || corpus?.title) || "Retrieved source",
+        url: clean(corpus?.url),
+        quote: clean(source?.quote),
+        sourceType: clean(source?.sourceType).toLowerCase() || "independent",
+        corpusId: clean(corpus?.corpusId || corpusId),
+        groundedByProvider: true,
+        groundedSetAvailable: true,
+        groundingConfidence: "provider",
+      });
+    });
+    const fabricationAssessment = fabricationAssessmentFromSources(sources, {
+      liveSearchUsed: true,
+      groundedSourceCount: Math.max(1, sources.length),
+      callFailedGrounding: false,
+    });
+    const sourcesWithSignal = sources.map((source) => ({
+      ...source,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason || undefined,
+    }));
+
+    return {
+      subjectId,
+      attributeId,
+      value: clean(patch?.value),
+      full: clean(patch?.full),
+      confidence: normalizeConfidence(patch?.confidence, confidenceStats),
+      confidenceReason: clean(patch?.confidenceReason),
+      sources: sourcesWithSignal,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason,
+      arguments: normalizeArguments(patch?.arguments || {}, `recover-${subjectId}-${attributeId}`),
+      risks: clean(patch?.risks),
+      missingEvidence: clean(patch?.missingEvidence),
+    };
+  });
+}
+
+function computeStage08RecoveryMetrics(units = []) {
+  const verificationTierCounts = {
+    verified: 0,
+    fabricated: 0,
+    unreachable_infrastructure: 0,
+    unreachable_stale: 0,
+    unverifiable: 0,
+    unknown: 0,
+  };
+  let sourcesAdded = 0;
+  let groundedByProviderTrue = 0;
+  let groundedByProviderFalse = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      sourcesAdded += 1;
+      if (source?.groundedByProvider === true) groundedByProviderTrue += 1;
+      else groundedByProviderFalse += 1;
+      const tier = clean(source?.verificationTier).toLowerCase();
+      if (!tier) verificationTierCounts.unknown += 1;
+      else if (Object.prototype.hasOwnProperty.call(verificationTierCounts, tier)) verificationTierCounts[tier] += 1;
+      else verificationTierCounts.unknown += 1;
+    });
+  });
+  const fabricatedRatio = sourcesAdded > 0
+    ? Number(verificationTierCounts.fabricated || 0) / sourcesAdded
+    : 0;
+  return {
+    sourcesAdded,
+    groundedByProviderTrue,
+    groundedByProviderFalse,
+    verificationTierCounts,
+    fabricatedRatio,
   };
 }
 
@@ -431,64 +645,88 @@ export async function runStage(context = {}) {
           depth: Number(group?.depth || 0),
           cellCount: ensureArray(group?.cells).length,
         });
-        const prompt = `Objective: ${clean(state?.request?.objective)}
-Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
-Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
-Role context: ${clean(state?.request?.roleContext) || "not provided"}
-Recover missing evidence for these matrix cells.
-Cells:
-${ensureArray(group?.cells).map((item) => `- ${item.unit.subjectId}::${item.unit.attributeId} (${item.subjectLabel} x ${item.attributeLabel})
-  attributeBrief: ${item.attributeBrief || "not provided"}
-  existingEvidence: ${truncateText(item?.unit?.full || item?.unit?.value || "none", 800)}
-  whySelected: pressure=${item.pressure}; confidence=${item.reasons.confidence}; sourceCount=${item.reasons.sourceCount}; contradictionFlag=${item.reasons.contradictionFlag}; staleSourceFlag=${item.reasons.staleSourceFlag}; gapHypothesis=${item.reasons.gapHypothesis || "not provided"}`).join("\n")}
-
-Rules:
-- Focus on what is weak for each listed cell.
-- Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, or reputable news) over vendor claims.
-- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
-- Example: {"confidence":"high"}
-- For each non-empty source, include a valid canonical public https URL, a concise quote/snippet, and "sourceType".
-- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
-- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
-- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
-- If reliable evidence is still unavailable, keep "sources" empty and describe the missing data in "missingEvidence".
-
-Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
-
         try {
-          const result = await callActorJson({
+          const retrievePrompt = buildMatrixRecoveryRetrievePrompt(state, group);
+          const retrieveResult = await callActorJson({
             state,
             runtime,
             stageId: STAGE_ID,
             actor: "analyst",
-            systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
-            userPrompt: prompt,
-            tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
+            systemPrompt: runtime?.prompts?.analyst || "You produce retrieval query plans for targeted recovery.",
+            userPrompt: retrievePrompt,
+            tokenBudget: Math.max(3000, Math.floor((runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000) * 0.35)),
             timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
             maxRetries: 1,
             liveSearch: true,
+            searchMaxUses: 4,
             callContext: {
-              chunkId: group.chunkId,
+              chunkId: `${group.chunkId}-retrieve`,
               promptVersion: PROMPT_VERSION,
             },
-            schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+            schemaHint: '{"queries":[{"cellKey":"","query":"","rationale":""}]}',
+          });
+
+          if (retrieveResult?.meta?.noSearchPerformed === true && group?.searchRetryAttempted !== true) {
+            reasonCodes.push(REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED);
+            chunkTrace.push({
+              chunkId: group.chunkId,
+              event: "retried",
+              timestamp: nowIso(),
+              retryIndex: 1,
+              reason: "no_search_performed",
+              depth: Number(group?.depth || 0),
+            });
+            return {
+              children: [{ ...group, searchRetryAttempted: true }],
+              enqueueFront: true,
+            };
+          }
+          if (retrieveResult?.meta?.noSearchPerformed === true && group?.searchRetryAttempted === true) {
+            const err = new Error("No google_search calls were performed for this recovery chunk.");
+            err.reasonCode = REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED;
+            throw err;
+          }
+
+          const retrievedCorpus = buildRetrievedCorpus(retrieveResult?.meta?.groundedSources || [], group.chunkId);
+          const readPrompt = buildMatrixRecoveryReadPrompt(state, group, retrievedCorpus.entries);
+          const readResult = await callActorJson({
+            state,
+            runtime,
+            stageId: STAGE_ID,
+            actor: "analyst",
+            systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence from a fixed corpus.",
+            userPrompt: readPrompt,
+            tokenBudget: Math.max(6000, Math.floor((runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000) * 0.75)),
+            timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
+            maxRetries: 1,
+            liveSearch: false,
+            callContext: {
+              chunkId: `${group.chunkId}-read`,
+              promptVersion: PROMPT_VERSION,
+            },
+            schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"corpusId":"","name":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
           });
           const confidenceStats = { coerced: 0 };
-          const patches = normalizeMatrixPatch(result?.parsed, {
-            groundedSources: result?.meta?.groundedSources || [],
-            liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
-            callFailedGrounding: result?.meta?.callFailedGrounding === true,
+          const corpusDiagnostics = { sourceAbsentFromCorpus: 0 };
+          const patches = normalizeMatrixRecoveryReadPatch(
+            readResult?.parsed,
+            group,
+            retrievedCorpus.byId,
             confidenceStats,
-          });
-          const tokenDiagnostics = {
-            ...(result?.tokenDiagnostics || {}),
-            confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-          };
-          const reasonCodes = [
-            ...ensureArray(result?.reasonCodes),
+            corpusDiagnostics
+          );
+          const tokenDiagnostics = combineTokenDiagnostics([
+            retrieveResult?.tokenDiagnostics,
+            readResult?.tokenDiagnostics,
+          ]) || {};
+          tokenDiagnostics.confidenceScaleCoerced = Number(confidenceStats.coerced || 0);
+          const chunkReasonCodes = [
+            ...ensureArray(retrieveResult?.reasonCodes),
+            ...ensureArray(readResult?.reasonCodes),
             ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+            ...(Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0) > 0 ? [REASON_CODES.SOURCE_ABSENT_FROM_CORPUS] : []),
           ];
-          const retryCount = Number(result?.retries || 0);
+          const retryCount = Number(retrieveResult?.retries || 0) + Number(readResult?.retries || 0);
           for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
             chunkTrace.push({
               chunkId: group.chunkId,
@@ -514,12 +752,18 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
               depth: Number(group?.depth || 0),
               cellCount: ensureArray(group?.cells).length,
               patches,
-              reasonCodes,
+              reasonCodes: chunkReasonCodes,
               tokenDiagnostics,
+              retrieveTokenDiagnostics: retrieveResult?.tokenDiagnostics || null,
+              readTokenDiagnostics: readResult?.tokenDiagnostics || null,
               citations: computeGroundingCoverage(patches),
-              route: result?.route || null,
+              retrieveRoute: retrieveResult?.route || null,
+              readRoute: readResult?.route || null,
+              route: readResult?.route || retrieveResult?.route || null,
               retries: retryCount,
-              groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+              groundedSourcesResolved: retrieveResult?.meta?.groundedSourcesResolved || null,
+              retrievedCorpusCount: retrievedCorpus.entries.length,
+              sourceAbsentFromCorpus: Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0),
             },
           };
         } catch (err) {
@@ -579,6 +823,12 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
     const matrixReasonCodes = groupResults.flatMap((r) => r.reasonCodes);
     const tokenDiagnosticsList = groupResults.map((r) => r.tokenDiagnostics);
     const modelRoutes = groupResults.map((r) => r.route).filter(Boolean);
+    const retrieveWebSearchCalls = groupResults.reduce((sum, row) => (
+      sum + Number(row?.retrieveTokenDiagnostics?.webSearchCalls || 0)
+    ), 0);
+    const readWebSearchCalls = groupResults.reduce((sum, row) => (
+      sum + Number(row?.readTokenDiagnostics?.webSearchCalls || 0)
+    ), 0);
     const totalRetries = groupResults.reduce((sum, r) => sum + r.retries, 0);
     const aggregatedTokens = combineTokenDiagnostics(tokenDiagnosticsList);
     const citations = groupResults.reduce((acc, row) => {
@@ -595,6 +845,11 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       acc.unresolved += Number(stats?.unresolved || 0);
       return acc;
     }, { total: 0, resolved: 0, unresolved: 0 });
+    const retrievedCorpusCount = groupResults.reduce((sum, row) => sum + Number(row?.retrievedCorpusCount || 0), 0);
+    const sourceAbsentFromCorpus = groupResults.reduce((sum, row) => sum + Number(row?.sourceAbsentFromCorpus || 0), 0);
+    if (sourceAbsentFromCorpus > 0) {
+      reasonCodes.push(REASON_CODES.SOURCE_ABSENT_FROM_CORPUS);
+    }
     groupResults.sort((a, b) => String(a?.chunkId || "").localeCompare(String(b?.chunkId || "")));
     chunkTrace.sort((a, b) => {
       const chunkCmp = String(a?.chunkId || "").localeCompare(String(b?.chunkId || ""));
@@ -602,10 +857,12 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       return String(a?.event || "").localeCompare(String(b?.event || ""));
     });
     const modelRoute = modelRoutes[0] || null;
+    const groundingPropagation = computeGroundingPropagation(patches);
+    const stage08Recovery = computeStage08RecoveryMetrics(patches);
 
     return {
       stageStatus: "ok",
-      reasonCodes: [...reasonCodes, ...matrixReasonCodes],
+      reasonCodes: normalizeReasonCodes([...reasonCodes, ...matrixReasonCodes]),
       statePatch: {
         ui: { phase: STAGE_ID },
         chunkManifest: {
@@ -630,6 +887,13 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         adaptiveBudget: budgetPlan.diagnostics,
         citations,
         groundedSourcesResolved,
+        groundingPropagation,
+        retrievedCorpusCount,
+        sourceAbsentFromCorpus,
+        retrieveCalls: groupResults.length,
+        readCalls: groupResults.length,
+        retrieveWebSearchCalls,
+        readWebSearchCalls,
         retries: totalRetries,
         chunkRetriesTotal: chunkTrace.filter((entry) => entry?.event === "retried").length,
         chunkSplitDepthMax: chunkTrace.reduce((maxDepth, entry) => {
@@ -645,6 +909,7 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         chunkConcurrency,
         peakWorkerCount: Number(pool?.peakWorkerCount || 1),
         recoveryVerification,
+        stage08Recovery,
         missingTierSourceCount,
         missingTierSampleCellIds,
       },
@@ -784,6 +1049,7 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       effectiveBudget: selection.effectiveBudget,
       coverageFloorReserved: selection.floorReserved,
       citations: computeGroundingCoverage(patch),
+      groundingPropagation: computeGroundingPropagation(patch),
       groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
       retries: result.retries,
       modelRoute: result.route,

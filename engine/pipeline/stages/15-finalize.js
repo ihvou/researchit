@@ -99,6 +99,21 @@ function summarizeFailureCauses(state = {}, decision = {}, coverage = {}) {
   return causes;
 }
 
+function hasDecisionGateEmission(decision = {}) {
+  const coverage = decision?.citationCoverage && typeof decision.citationCoverage === "object"
+    ? decision.citationCoverage
+    : {};
+  const requiredKeys = [
+    "fabricationSignal",
+    "fabricationSignalReason",
+    "fabricationRatio",
+    "unknownRatio",
+    "unverifiableRatio",
+    "verifiedRatio",
+  ];
+  return requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(coverage, key));
+}
+
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const strictQuality = !!state?.strictQuality;
@@ -120,6 +135,13 @@ export async function runStage(context = {}) {
     ...(decision.reasonCodes || []),
     ...(coverage.reasonCodes || []),
   ]);
+  const decisionGateEmissionCheck = hasDecisionGateEmission(decision);
+  if (!decisionGateEmissionCheck) {
+    runReasonCodes = normalizeReasonCodes([
+      ...runReasonCodes,
+      REASON_CODES.DEBUG_BUNDLE_CONTRACT_VIOLATION,
+    ]);
+  }
 
   if (shouldAbort && strictQuality) {
     runReasonCodes = normalizeReasonCodes([
@@ -172,6 +194,7 @@ export async function runStage(context = {}) {
       decisionGateResult: {
         ...decision,
         failureCauses,
+        decisionGateEmissionCheck,
       },
       decisionGradePassed: !!decision.passed,
       decisionGradeFailureReason: !decision.passed
@@ -179,9 +202,11 @@ export async function runStage(context = {}) {
         : "",
     },
     diagnostics: {
+      decisionGateEmissionCheck,
       decisionGate: {
         ...decision,
         failureCauses,
+        decisionGateEmissionCheck,
       },
       coverageGate: coverage,
       strictQuality,

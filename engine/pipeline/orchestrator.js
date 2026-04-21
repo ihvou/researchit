@@ -17,6 +17,7 @@ import {
 import { buildDebugBundle } from "../lib/diagnostics/debug-bundle.js";
 import { estimateStageCost } from "../lib/diagnostics/cost-estimator.js";
 import { hashCanonicalValue } from "../lib/cache/stage-hash.js";
+import { normalizeRawCallForReplay } from "../lib/raw-call-replay.js";
 
 import { runStage as run01, STAGE_ID as STAGE_01_ID, STAGE_TITLE as STAGE_01_TITLE } from "./stages/01-intake.js";
 import { runStage as run01b, STAGE_ID as STAGE_01B_ID, STAGE_TITLE as STAGE_01B_TITLE } from "./stages/01b-subject-discovery.js";
@@ -54,6 +55,10 @@ import { runStage as run15, STAGE_ID as STAGE_15_ID, STAGE_TITLE as STAGE_15_TIT
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 function isPlainObject(value) {
@@ -879,4 +884,151 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
   }
 
   return output;
+}
+
+function normalizeRawCallEntries(rawCalls = []) {
+  return (Array.isArray(rawCalls) ? rawCalls : [])
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      ...entry,
+      stageId: clean(entry?.stageId),
+      chunkId: clean(entry?.chunkId) || "default",
+      callIndex: Number.isFinite(Number(entry?.callIndex)) ? Number(entry.callIndex) : 0,
+      key: clean(entry?.key),
+    }))
+    .sort((a, b) => {
+      const chunkCmp = String(a.chunkId).localeCompare(String(b.chunkId));
+      if (chunkCmp !== 0) return chunkCmp;
+      return Number(a.callIndex || 0) - Number(b.callIndex || 0);
+    });
+}
+
+function createReplayTransport(baseTransport = {}, stageId = "", rawCalls = []) {
+  const byChunk = new Map();
+  normalizeRawCallEntries(rawCalls).forEach((entry) => {
+    if (clean(entry?.stageId) && clean(entry.stageId) !== clean(stageId)) return;
+    const chunk = clean(entry?.chunkId) || "default";
+    const list = byChunk.get(chunk) || [];
+    list.push(entry);
+    byChunk.set(chunk, list);
+  });
+  const cursorByChunk = new Map();
+
+  const nextReplayResponse = (options = {}) => {
+    const chunk = clean(options?.chunkId) || "default";
+    const queue = byChunk.get(chunk) || [];
+    const cursor = Number(cursorByChunk.get(chunk) || 0);
+    if (!queue.length || cursor >= queue.length) {
+      const err = new Error(`No cached raw call available for chunk "${chunk}" at stage ${clean(stageId)}.`);
+      err.reasonCode = REASON_CODES.PIPELINE_STRUCTURAL_FAILURE;
+      throw err;
+    }
+    const entry = queue[cursor];
+    cursorByChunk.set(chunk, cursor + 1);
+    const normalized = normalizeRawCallForReplay(entry);
+    const response = {
+      text: clean(normalized?.text),
+      sources: ensureArray(normalized?.sources),
+      meta: {
+        ...(normalized?.meta && typeof normalized.meta === "object" ? normalized.meta : {}),
+        rawResponseKey: clean(entry?.key) || undefined,
+      },
+    };
+    if (!response.text) {
+      const err = new Error(`Cached raw call has empty text payload for chunk "${chunk}".`);
+      err.reasonCode = REASON_CODES.PARTIAL_PAYLOAD_REJECTED;
+      throw err;
+    }
+    return response;
+  };
+
+  const wrap = (delegate) => async (messages, systemPrompt, maxTokens, options = {}) => {
+    if (clean(options?.stageId) === clean(stageId)) {
+      const replay = nextReplayResponse(options);
+      return options?.includeMeta ? replay : replay.text;
+    }
+    if (typeof delegate !== "function") {
+      const err = new Error("Replay transport delegate is unavailable.");
+      err.reasonCode = REASON_CODES.PIPELINE_STRUCTURAL_FAILURE;
+      throw err;
+    }
+    return delegate(messages, systemPrompt, maxTokens, options);
+  };
+
+  return {
+    ...baseTransport,
+    callAnalyst: wrap(baseTransport?.callAnalyst),
+    callCritic: wrap(baseTransport?.callCritic),
+    callSynthesizer: wrap(baseTransport?.callSynthesizer || baseTransport?.callAnalyst),
+    fetchSource: typeof baseTransport?.fetchSource === "function"
+      ? baseTransport.fetchSource.bind(baseTransport)
+      : undefined,
+  };
+}
+
+export async function reprocessStage({
+  state,
+  stageId,
+  runtime = {},
+  callbacks = {},
+  rawCalls = [],
+} = {}) {
+  if (!state || typeof state !== "object") {
+    throw new Error("reprocessStage requires a valid state object.");
+  }
+  const targetStageId = clean(stageId);
+  if (!targetStageId) throw new Error("reprocessStage requires stageId.");
+  const stageIdx = STAGES.findIndex((entry) => clean(entry?.id) === targetStageId);
+  if (stageIdx < 0) throw new Error(`Unknown stageId: ${targetStageId}`);
+
+  const loader = typeof runtime?.loadRawCalls === "function"
+    ? runtime.loadRawCalls
+    : (typeof callbacks?.loadRawCalls === "function" ? callbacks.loadRawCalls : null);
+  const loadedRawCalls = rawCalls.length
+    ? rawCalls
+    : (loader ? await loader({ runId: clean(state?.runId), stageId: targetStageId }) : []);
+  if (!Array.isArray(loadedRawCalls) || loadedRawCalls.length === 0) {
+    throw new Error(`reprocessStage: no raw calls available for ${targetStageId}.`);
+  }
+
+  const baseRuntime = {
+    ...(runtime || {}),
+    transport: runtime?.transport,
+    budgets: runtime?.budgets || STAGE_BUDGETS,
+  };
+  if (!baseRuntime?.transport?.callAnalyst || !baseRuntime?.transport?.callCritic) {
+    throw new Error("reprocessStage requires runtime.transport with callAnalyst/callCritic.");
+  }
+  const replayRuntime = {
+    ...baseRuntime,
+    transport: createReplayTransport(baseRuntime.transport, targetStageId, loadedRawCalls),
+  };
+
+  let workingState = state;
+  const executed = [];
+  for (let i = stageIdx; i < STAGES.length; i += 1) {
+    const stage = STAGES[i];
+    if (!stageEnabled(stage, workingState)) continue;
+    const stageRuntime = clean(stage.id) === targetStageId ? replayRuntime : baseRuntime;
+    const result = await stage.run({ state: workingState, runtime: stageRuntime, callbacks });
+    const reasonCodes = normalizeReasonCodes(result?.reasonCodes || []);
+    workingState = applyStatePatch(workingState, result?.statePatch || {});
+    appendQualityReasonCodes(workingState, reasonCodes);
+    pushReasonCodes(workingState, reasonCodes);
+    executed.push({
+      stageId: stage.id,
+      stageStatus: clean(result?.stageStatus || "ok"),
+      reasonCodes,
+      retries: Number(result?.retries || 0),
+      fromRawReplay: clean(stage.id) === targetStageId,
+    });
+  }
+
+  return {
+    state: workingState,
+    runId: clean(workingState?.runId),
+    stageId: targetStageId,
+    replayedRawCalls: loadedRawCalls.length,
+    executedStages: executed,
+  };
 }

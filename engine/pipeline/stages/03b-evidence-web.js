@@ -72,6 +72,29 @@ function computeGroundingCoverage(units = []) {
   };
 }
 
+function computeGroundingPropagation(units = []) {
+  const distribution = {};
+  let totalSources = 0;
+  let groundedByProviderTrue = 0;
+  let groundedByProviderFalse = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      totalSources += 1;
+      if (source?.groundedByProvider === true) groundedByProviderTrue += 1;
+      else groundedByProviderFalse += 1;
+      const confidence = clean(source?.groundingConfidence || "unspecified").toLowerCase();
+      distribution[confidence] = Number(distribution[confidence] || 0) + 1;
+    });
+  });
+  return {
+    stage: STAGE_ID,
+    totalSources,
+    groundedByProviderTrue,
+    groundedByProviderFalse,
+    groundingConfidenceDistribution: distribution,
+  };
+}
+
 function computeFabricationSignalForMergedSources(sources = []) {
   const list = normalizeSources(sources);
   const groundedSetAvailable = list.some((source) => source?.groundedSetAvailable === true);
@@ -155,6 +178,7 @@ function normalizeScorecard(parsed = {}, dimensions = [], options = {}) {
     });
     const sourcesWithSignal = grounded.sources.map((source) => ({
       ...source,
+      groundingConfidence: source?.groundedByProvider === true ? "provider" : "model-emitted",
       fabricationSignal: fabricationAssessment.signal,
       fabricationSignalReason: fabricationAssessment.reason || undefined,
     }));
@@ -192,6 +216,7 @@ function normalizeMatrixChunk(parsed = {}, chunk = {}, options = {}) {
     });
     const sourcesWithSignal = grounded.sources.map((source) => ({
       ...source,
+      groundingConfidence: source?.groundedByProvider === true ? "provider" : "model-emitted",
       fabricationSignal: fabricationAssessment.signal,
       fabricationSignalReason: fabricationAssessment.reason || undefined,
     }));
@@ -212,7 +237,19 @@ function normalizeMatrixChunk(parsed = {}, chunk = {}, options = {}) {
   });
 }
 
-function buildMatrixPrompt(state = {}, chunk = {}, subjectsById = new Map(), attributesById = new Map()) {
+function normalizeUrlKey(value = "") {
+  const raw = clean(value);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const path = clean(parsed.pathname).replace(/\/+$/, "") || "/";
+    return `${clean(parsed.hostname).toLowerCase()}${path}${clean(parsed.search)}`;
+  } catch {
+    return raw.toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function buildMatrixContextBlock(chunk = {}, subjectsById = new Map(), attributesById = new Map()) {
   const cells = ensureArray(chunk?.cells);
   const uniqueSubjectLines = [...new Set(
     cells
@@ -238,15 +275,30 @@ function buildMatrixPrompt(state = {}, chunk = {}, subjectsById = new Map(), att
       const subject = subjectsById.get(cell.subjectId) || {};
       const attribute = attributesById.get(cell.attributeId) || {};
       const brief = clean(attribute?.brief);
-      return `- subjectId=${cell.subjectId}; attributeId=${cell.attributeId} (${clean(subject?.label) || cell.subjectId} x ${clean(attribute?.label) || cell.attributeId})${brief ? ` | brief: ${brief}` : ""}`;
+      const cellKey = `${cell.subjectId}::${cell.attributeId}`;
+      return `- cellKey=${cellKey}; subjectId=${cell.subjectId}; attributeId=${cell.attributeId} (${clean(subject?.label) || cell.subjectId} x ${clean(attribute?.label) || cell.attributeId})${brief ? ` | brief: ${brief}` : ""}`;
     })
     .join("\n");
+
+  return {
+    uniqueSubjectLines,
+    uniqueAttributeLines,
+    cellLines,
+  };
+}
+
+function buildMatrixRetrievePrompt(state = {}, chunk = {}, subjectsById = new Map(), attributesById = new Map()) {
+  const {
+    uniqueSubjectLines,
+    uniqueAttributeLines,
+    cellLines,
+  } = buildMatrixContextBlock(chunk, subjectsById, attributesById);
 
   return `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
-Collect WEB evidence for each matrix cell below and return structured JSON.
+Stage 03b retrieve pass. Propose targeted web-search queries per listed cell.
 Subjects in this chunk:
 ${uniqueSubjectLines || "- none"}
 Attributes in this chunk:
@@ -255,19 +307,129 @@ Cells to cover:
 ${cellLines || "- none"}
 
 Rules:
-- Cover every listed cell exactly once.
-- You must call google_search for each listed cell before proposing sources.
-- Lead with specific known facts. Confidence should reflect evidence depth, not citation quantity.
-- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
-- If uncertain, lower confidence and state what is missing.
-- Use high-quality, specific sources. Prefer independent evidence (government, research, analyst, reputable news) over vendor claims.
-- For each non-empty source, include a valid public https URL, a concise quote/snippet, and "sourceType".
-- Never return temporary grounding redirect links (for example vertexaisearch.cloud.google.com/grounding-api-redirect/...).
-- If you are not certain the canonical public URL is correct, omit the URL instead of guessing.
-- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
-- If evidence is unavailable, keep "sources" empty, use low confidence, and explain what is missing in "missingEvidence".
+- Return queries only; do not return evidence, scores, or sources.
+- You must call google_search while generating this output.
+- Provide 1-2 precise queries per cellKey.
 
-Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+Return JSON {"queries":[{"cellKey":"","query":"","rationale":""}]}`;
+}
+
+function buildMatrixReadPrompt(state = {}, chunk = {}, subjectsById = new Map(), attributesById = new Map(), corpus = []) {
+  const {
+    uniqueSubjectLines,
+    uniqueAttributeLines,
+    cellLines,
+  } = buildMatrixContextBlock(chunk, subjectsById, attributesById);
+  const corpusLines = ensureArray(corpus).map((entry) => (
+    `- corpusId=${entry.corpusId}; url=${entry.url}; title=${entry.title}${clean(entry?.query) ? `; query=${clean(entry.query)}` : ""}`
+  )).join("\n");
+
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Stage 03b read pass. Build matrix evidence using ONLY the retrieved corpus.
+Subjects in this chunk:
+${uniqueSubjectLines || "- none"}
+Attributes in this chunk:
+${uniqueAttributeLines || "- none"}
+Cells to cover:
+${cellLines || "- none"}
+Retrieved corpus:
+${corpusLines || "- none"}
+
+Rules:
+- Cover every listed cell exactly once.
+- Use only retrieved corpus entries for citations.
+- Every source item MUST include corpusId that exists in Retrieved corpus.
+- If no corpus entry supports the claim, keep sources empty and explain in missingEvidence.
+- Return confidence as one of these strings only: high, medium, low. Do not return numbers.
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
+
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"corpusId":"","name":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+}
+
+function buildRetrievedCorpus(groundedSources = [], chunkId = "") {
+  const dedup = new Map();
+  ensureArray(groundedSources).forEach((source, idx) => {
+    const url = clean(source?.url);
+    if (!url) return;
+    const key = normalizeUrlKey(url);
+    if (!key) return;
+    if (dedup.has(key)) return;
+    const corpusId = `${clean(chunkId) || "chunk"}-src-${String(dedup.size + 1).padStart(2, "0")}`;
+    dedup.set(key, {
+      corpusId,
+      url,
+      canonicalUrl: url,
+      title: clean(source?.title || source?.name || `Retrieved source ${idx + 1}`) || `Retrieved source ${idx + 1}`,
+      query: clean(source?.query),
+      rank: dedup.size + 1,
+      retrievedAt: new Date().toISOString(),
+    });
+  });
+  const entries = [...dedup.values()];
+  const byId = new Map(entries.map((entry) => [entry.corpusId, entry]));
+  return {
+    entries,
+    byId,
+  };
+}
+
+function normalizeMatrixReadChunk(parsed = {}, chunk = {}, corpusById = new Map(), confidenceStats = { coerced: 0 }, diagnostics = {}) {
+  const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
+  const corpusByUrlKey = new Map(
+    [...(corpusById?.values ? corpusById.values() : [])]
+      .map((entry) => [normalizeUrlKey(entry?.url), entry])
+      .filter(([key]) => !!key)
+  );
+  return ensureArray(chunk?.cells).map((cell) => {
+    const patch = byKey.get(`${cell.subjectId}::${cell.attributeId}`) || {};
+    const rawSources = ensureArray(patch?.sources);
+    const sources = [];
+    rawSources.forEach((source) => {
+      const corpusId = clean(source?.corpusId);
+      let corpus = corpusById.get(corpusId);
+      if (!corpus) {
+        corpus = corpusByUrlKey.get(normalizeUrlKey(source?.url));
+      }
+      if (!corpus) {
+        diagnostics.sourceAbsentFromCorpus = Number(diagnostics.sourceAbsentFromCorpus || 0) + 1;
+        return;
+      }
+      sources.push({
+        name: clean(source?.name || corpus?.title) || "Retrieved source",
+        url: clean(corpus?.url),
+        quote: clean(source?.quote),
+        sourceType: clean(source?.sourceType).toLowerCase() || "independent",
+        corpusId: clean(corpus?.corpusId || corpusId),
+        groundedByProvider: true,
+        groundedSetAvailable: true,
+        groundingConfidence: "provider",
+      });
+    });
+    const fabricationAssessment = computeFabricationSignalForMergedSources(sources);
+    const sourcesWithSignal = sources.map((source) => ({
+      ...source,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason || undefined,
+    }));
+
+    return {
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      value: clean(patch?.value),
+      full: clean(patch?.full),
+      confidence: normalizeConfidence(patch?.confidence, confidenceStats),
+      confidenceReason: clean(patch?.confidenceReason),
+      sources: sourcesWithSignal,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason,
+      arguments: normalizeArguments(patch?.arguments || {}, `${cell.subjectId}-${cell.attributeId}-web`),
+      risks: clean(patch?.risks),
+      missingEvidence: clean(patch?.missingEvidence),
+    };
+  });
 }
 
 function summarizeChunkEvents(trace = []) {
@@ -320,7 +482,7 @@ async function gatherMatrixWeb({
     initialChunks: queue,
     concurrency: chunkConcurrency,
     processChunk: async (current) => {
-      const prompt = buildMatrixPrompt(state, current, subjectsById, attributesById);
+      const retrievePrompt = buildMatrixRetrievePrompt(state, current, subjectsById, attributesById);
       chunkTrace.push({
         chunkId: current.chunkId,
         event: "started",
@@ -329,32 +491,25 @@ async function gatherMatrixWeb({
         cellCount: ensureArray(current?.cells).length,
       });
       try {
-        const result = await callActorJson({
+        const retrieveResult = await callActorJson({
           state,
           runtime,
           stageId: STAGE_ID,
           actor: "analyst",
-          systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence.",
-          userPrompt: prompt,
-          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
+          systemPrompt: runtime?.prompts?.analyst || "You produce retrieval query plans.",
+          userPrompt: retrievePrompt,
+          tokenBudget: Math.max(3000, Math.floor((runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000) * 0.35)),
           timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
           maxRetries: 1,
           liveSearch: true,
           callContext: {
-            chunkId: current.chunkId,
+            chunkId: `${current.chunkId}-retrieve`,
             promptVersion: PROMPT_VERSION,
           },
-          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
-        });
-        const confidenceStats = { coerced: 0 };
-        const normalizedChunk = normalizeMatrixChunk(result?.parsed, current, {
-          groundedSources: result?.meta?.groundedSources || [],
-          liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
-          callFailedGrounding: result?.meta?.callFailedGrounding === true,
-          confidenceStats,
+          schemaHint: '{"queries":[{"cellKey":"","query":"","rationale":""}]}',
         });
 
-        if (result?.meta?.noSearchPerformed === true && current?.searchRetryAttempted !== true) {
+        if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted !== true) {
           reasonCodes.push(REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED);
           chunkTrace.push({
             chunkId: current.chunkId,
@@ -369,14 +524,15 @@ async function gatherMatrixWeb({
             parentId: current.parentId || null,
             depth: Number(current?.depth || 0),
             cellCount: ensureArray(current?.cells).length,
-            retries: Number(result?.retries || 0),
+            retries: Number(retrieveResult?.retries || 0),
             tokenDiagnostics: {
-              ...(result?.tokenDiagnostics || {}),
+              ...(retrieveResult?.tokenDiagnostics || {}),
               noSearchPerformed: true,
             },
-            modelRoute: result.route,
-            citations: computeGroundingCoverage(normalizedChunk),
-            groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+            retrieveModelRoute: retrieveResult.route,
+            modelRoute: retrieveResult.route,
+            citations: computeGroundingCoverage([]),
+            groundedSourcesResolved: retrieveResult?.meta?.groundedSourcesResolved || null,
             noSearchPerformed: true,
           });
           return {
@@ -384,26 +540,59 @@ async function gatherMatrixWeb({
             enqueueFront: true,
           };
         }
-        if (result?.meta?.noSearchPerformed === true && current?.searchRetryAttempted === true) {
+        if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted === true) {
           const noSearchErr = new Error("No google_search calls were performed for this chunk.");
           noSearchErr.reasonCode = REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED;
           throw noSearchErr;
         }
+
+        const retrievedCorpus = buildRetrievedCorpus(retrieveResult?.meta?.groundedSources || [], current.chunkId);
+        const readPrompt = buildMatrixReadPrompt(state, current, subjectsById, attributesById, retrievedCorpus.entries);
+        const readResult = await callActorJson({
+          state,
+          runtime,
+          stageId: STAGE_ID,
+          actor: "analyst",
+          systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence from a fixed corpus.",
+          userPrompt: readPrompt,
+          tokenBudget: Math.max(6000, Math.floor((runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000) * 0.75)),
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
+          maxRetries: 1,
+          liveSearch: false,
+          callContext: {
+            chunkId: `${current.chunkId}-read`,
+            promptVersion: PROMPT_VERSION,
+          },
+          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"corpusId":"","name":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+        });
+
+        const confidenceStats = { coerced: 0 };
+        const corpusDiagnostics = { sourceAbsentFromCorpus: 0 };
+        const normalizedChunk = normalizeMatrixReadChunk(
+          readResult?.parsed,
+          current,
+          retrievedCorpus.byId,
+          confidenceStats,
+          corpusDiagnostics
+        );
         normalizedChunk.forEach((cell) => {
           cellsByKey.set(`${cell.subjectId}::${cell.attributeId}`, cell);
         });
 
-        const tokenDiagnostics = {
-          ...(result?.tokenDiagnostics || {}),
-          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-        };
+        const tokenDiagnostics = combineTokenDiagnostics([
+          retrieveResult?.tokenDiagnostics,
+          readResult?.tokenDiagnostics,
+        ]) || {};
+        tokenDiagnostics.confidenceScaleCoerced = Number(confidenceStats.coerced || 0);
         const chunkReasonCodes = [
-          ...ensureArray(result?.reasonCodes),
+          ...ensureArray(retrieveResult?.reasonCodes),
+          ...ensureArray(readResult?.reasonCodes),
           ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+          ...(Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0) > 0 ? [REASON_CODES.SOURCE_ABSENT_FROM_CORPUS] : []),
         ];
         reasonCodes.push(...chunkReasonCodes);
 
-        const retryCount = Number(result?.retries || 0);
+        const retryCount = Number(retrieveResult?.retries || 0) + Number(readResult?.retries || 0);
         for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
           chunkTrace.push({
             chunkId: current.chunkId,
@@ -420,7 +609,7 @@ async function gatherMatrixWeb({
           timestamp: nowIso(),
           depth: Number(current?.depth || 0),
           outputSize: normalizedChunk.length,
-          outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
+          outputTokens: Number(tokenDiagnostics?.outputTokens || readResult?.tokenDiagnostics?.outputTokens || 0),
           finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
         });
         diagnostics.push({
@@ -430,9 +619,15 @@ async function gatherMatrixWeb({
           cellCount: ensureArray(current?.cells).length,
           retries: retryCount,
           tokenDiagnostics,
-          modelRoute: result.route,
+          retrieveTokenDiagnostics: retrieveResult?.tokenDiagnostics || null,
+          readTokenDiagnostics: readResult?.tokenDiagnostics || null,
+          retrieveModelRoute: retrieveResult.route,
+          readModelRoute: readResult.route,
+          modelRoute: readResult.route || retrieveResult.route,
           citations: computeGroundingCoverage(normalizedChunk),
-          groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+          groundedSourcesResolved: retrieveResult?.meta?.groundedSourcesResolved || null,
+          retrievedCorpusCount: retrievedCorpus.entries.length,
+          sourceAbsentFromCorpus: Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0),
         });
         return {};
       } catch (err) {
@@ -513,6 +708,14 @@ async function gatherMatrixWeb({
     acc.unresolved += Number(stats?.unresolved || 0);
     return acc;
   }, { total: 0, resolved: 0, unresolved: 0 });
+  const retrievedCorpusCount = allDiagnostics.reduce((sum, item) => sum + Number(item?.retrievedCorpusCount || 0), 0);
+  const sourceAbsentFromCorpus = allDiagnostics.reduce((sum, item) => sum + Number(item?.sourceAbsentFromCorpus || 0), 0);
+  const retrieveWebSearchCalls = allDiagnostics.reduce((sum, item) => (
+    sum + Number(item?.retrieveTokenDiagnostics?.webSearchCalls || 0)
+  ), 0);
+  const readWebSearchCalls = allDiagnostics.reduce((sum, item) => (
+    sum + Number(item?.readTokenDiagnostics?.webSearchCalls || 0)
+  ), 0);
   const tokenDiagnostics = combineTokenDiagnostics(
     allDiagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
   );
@@ -535,6 +738,11 @@ async function gatherMatrixWeb({
       groundedRatio: citationAggregate.totalUrls > 0 ? citationAggregate.groundedUrls / citationAggregate.totalUrls : 1,
     },
     groundedSourcesResolved,
+    retrievedCorpusCount,
+    sourceAbsentFromCorpus,
+    retrieveWebSearchCalls,
+    readWebSearchCalls,
+    groundingPropagation: computeGroundingPropagation(completedCells),
     tokenDiagnostics,
     modelRoute,
     chunkConcurrency,
@@ -588,6 +796,13 @@ export async function runStage(context = {}) {
         chunkTruncationRate: Number(matrixWeb?.tokenDiagnostics?.outputTruncatedRate || 0),
         citations: matrixWeb.citations,
         groundedSourcesResolved: matrixWeb.groundedSourcesResolved,
+        retrievedCorpusCount: Number(matrixWeb?.retrievedCorpusCount || 0),
+        sourceAbsentFromCorpus: Number(matrixWeb?.sourceAbsentFromCorpus || 0),
+        retrieveCalls: Number(matrixWeb?.diagnostics?.length || 0),
+        readCalls: Number(matrixWeb?.diagnostics?.length || 0),
+        retrieveWebSearchCalls: Number(matrixWeb?.retrieveWebSearchCalls || 0),
+        readWebSearchCalls: Number(matrixWeb?.readWebSearchCalls || 0),
+        groundingPropagation: matrixWeb.groundingPropagation,
         chunkConcurrency: Number(matrixWeb?.chunkConcurrency || 1),
         peakWorkerCount: Number(matrixWeb?.peakWorkerCount || 1),
         retries: Number(matrixWeb?.tokenDiagnostics?.retries || 0),
@@ -700,6 +915,7 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       mode: "scorecard",
       dimensions: merged.length,
       citations: computeGroundingCoverage(normalizedWeb),
+      groundingPropagation: computeGroundingPropagation(normalizedWeb),
       groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
       retries: combinedRetries,
       modelRoute: result.route,

@@ -1,4 +1,5 @@
 import { hostFromUrl, inferSourceType } from "./source-type.js";
+import { classifyFabricationTier } from "./fabrication-tier.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -321,46 +322,44 @@ function applyTierCounter(counters = {}, verificationTier = "") {
 function deriveVerificationTier(source = {}, verdict = {}) {
   const sourceType = inferSourceType(source);
   const host = hostFromUrl(source?.url);
+  const subjectDomain = hostFromUrl(source?.subjectDomain || source?.subjectHost || "");
   const status = Number(verdict?.responseStatus || 0);
   const fetchStatus = clean(verdict?.sourceFetchStatus).toLowerCase();
   const verificationStatus = clean(verdict?.verificationStatus).toLowerCase();
-  const groundedSetAvailable = source?.groundedSetAvailable === true;
   const groundedByProvider = source?.groundedByProvider === true;
-  const absentFromGroundedSet = groundedSetAvailable && !!clean(source?.url) && !groundedByProvider;
-
-  if (absentFromGroundedSet) return "fabricated";
-
-  if (verificationStatus === "verified_in_page" || verificationStatus === "name_only_in_page" || verificationStatus === "exists_url") {
-    return "verified";
-  }
+  const contentContradicts = clean(source?.contentContradicts || source?.claimContradiction || "unchecked").toLowerCase();
 
   if (verificationStatus === "invalid_url") return "fabricated";
   if (verificationStatus === "paywalled") return "unreachable_infrastructure";
 
-  if (verificationStatus === "not_found_url") {
-    if (status === 410) return "unreachable_stale";
-    if (status === 404) {
-      if (groundedByProvider) return "unreachable_stale";
-      if (sourceType === "vendor" || sourceType === "press_release" || sourceType === "marketing") {
-        return "fabricated";
-      }
-      return "fabricated";
-    }
-    return "unreachable_stale";
+  if (verificationStatus === "verified_in_page" || verificationStatus === "name_only_in_page" || verificationStatus === "exists_url") {
+    return classifyFabricationTier({
+      groundedByProvider,
+      httpStatus: status || 200,
+      sourceFetchStatus: fetchStatus,
+      contentContradicts,
+      sourceType,
+      domain: host,
+      subjectDomain,
+    });
   }
 
-  if (verificationStatus === "fetch_failed" || verificationStatus === "unverifiable") {
-    if (isInfrastructureStatus(status) || looksInfrastructureFetchStatus(fetchStatus) || looksLikePaywallHost(host)) {
-      return "unreachable_infrastructure";
-    }
-    if (looksDnsFailure(fetchStatus)) return "fabricated";
-    return "unverifiable";
+  if (verificationStatus === "not_found_url" || verificationStatus === "fetch_failed" || verificationStatus === "unverifiable" || verificationStatus === "not_found_in_page") {
+    return classifyFabricationTier({
+      groundedByProvider,
+      httpStatus: status,
+      sourceFetchStatus: fetchStatus,
+      contentContradicts,
+      sourceType,
+      domain: host,
+      subjectDomain,
+    });
   }
 
-  if (verificationStatus === "not_found_in_page") {
-    return "unverifiable";
+  if (isInfrastructureStatus(status) || looksInfrastructureFetchStatus(fetchStatus) || looksLikePaywallHost(host)) {
+    return "unreachable_infrastructure";
   }
-
+  if (looksDnsFailure(fetchStatus)) return "fabricated";
   return "unverifiable";
 }
 
@@ -489,4 +488,3 @@ export function aggregateVerificationCounters(counters = []) {
     ...createVerificationCounters(),
   });
 }
-

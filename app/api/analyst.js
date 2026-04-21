@@ -35,6 +35,7 @@ export default async function handler(req, res) {
     systemPrompt,
     maxTokens = 5000,
     liveSearch = false,
+    searchMaxUses,
     deepResearch = false,
     provider,
     model,
@@ -94,6 +95,7 @@ export default async function handler(req, res) {
       maxTokens,
       liveSearch,
       deepResearch,
+      searchMaxUses,
       baseUrl: resolved.baseUrl,
       stageId,
     });
@@ -119,6 +121,7 @@ export default async function handler(req, res) {
             messages: Array.isArray(messages) ? messages : [],
             maxTokens: Number(maxTokens) || 0,
             liveSearch: !!liveSearch,
+            searchMaxUses: Number.isFinite(Number(searchMaxUses)) ? Math.max(1, Math.floor(Number(searchMaxUses))) : 0,
             deepResearch: !!deepResearch,
             callIndex: Number.isFinite(Number(callIndex)) ? Number(callIndex) : -1,
           }),

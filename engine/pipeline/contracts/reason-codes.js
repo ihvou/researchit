@@ -25,6 +25,8 @@ export const REASON_CODES = {
   STAGE_03B_NO_SEARCH_PERFORMED: "stage_03b_no_search_performed",
   SOURCE_MISSING_VERIFICATION_TIER: "source_missing_verification_tier",
   SOURCE_GROUNDING_UNAVAILABLE: "source_grounding_unavailable",
+  SOURCE_ABSENT_FROM_CORPUS: "source_absent_from_corpus",
+  DEBUG_BUNDLE_CONTRACT_VIOLATION: "debug_bundle_contract_violation",
   RECONCILE_SCORED_RETAINED_EVIDENCE_MERGED: "reconcile_scored_retained_evidence_merged",
   PIPELINE_STRUCTURAL_FAILURE: "pipeline_structural_failure",
 

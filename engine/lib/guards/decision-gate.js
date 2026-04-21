@@ -86,6 +86,11 @@ function citationCoverageMetrics(units = []) {
     notFound: 0,
     unknown: 0,
     missingVerificationTier: 0,
+    signalHigh: 0,
+    signalMedium: 0,
+    signalLow: 0,
+    signalUnknown: 0,
+    signalReasonGroundedUnavailable: 0,
   };
 
   relevantSources.forEach((source) => {
@@ -112,6 +117,12 @@ function citationCoverageMetrics(units = []) {
     }
 
     const signal = clean(source?.fabricationSignal).toLowerCase();
+    const signalReason = clean(source?.fabricationSignalReason).toLowerCase();
+    if (signal === "high") totals.signalHigh += 1;
+    else if (signal === "medium") totals.signalMedium += 1;
+    else if (signal === "low") totals.signalLow += 1;
+    else if (signal === "unknown") totals.signalUnknown += 1;
+    if (signalReason === "grounded_set_unavailable") totals.signalReasonGroundedUnavailable += 1;
     if (signal === "unknown") {
       totals.unknown += 1;
       return;
@@ -123,14 +134,24 @@ function citationCoverageMetrics(units = []) {
 
   const denom = Math.max(1, totals.totalRelevant);
   const fabricationDenominator = Math.max(1, totals.totalRelevant - totals.unknown);
-  const unresolvedNumerator = totals.fabricated + totals.unreachableStale + totals.unverifiable + totals.notFound;
+  // Keep unverifiable transport noise diagnostic-only; gate hard on stronger failure signals.
+  const unresolvedNumerator = totals.fabricated + totals.unreachableStale + totals.notFound;
+  const fabricationSignal = totals.signalUnknown > 0 && totals.signalUnknown >= Math.max(totals.signalHigh, totals.signalMedium, totals.signalLow)
+    ? "unknown"
+    : (totals.signalHigh > 0 ? "high" : (totals.signalMedium > 0 ? "medium" : "low"));
+  const fabricationSignalReason = fabricationSignal === "unknown" && totals.signalReasonGroundedUnavailable > 0
+    ? "grounded_set_unavailable"
+    : "";
   return {
     ...totals,
     unresolvedNumerator,
     verifiedRatio: totals.totalRelevant ? (totals.verified / denom) : 1,
+    unverifiableRatio: totals.totalRelevant ? (totals.unverifiable / denom) : 0,
     unresolvedRatio: totals.totalRelevant ? (unresolvedNumerator / denom) : 0,
     fabricationRatio: totals.totalRelevant ? (totals.fabricated / fabricationDenominator) : 0,
     unknownRatio: totals.totalRelevant ? (totals.unknown / denom) : 0,
+    fabricationSignal,
+    fabricationSignalReason,
   };
 }
 
@@ -206,6 +227,14 @@ export function evaluateDecisionGate(state = {}, options = {}) {
     gate,
     coverage,
     critic,
+    citationCoverage: {
+      fabricationSignal: clean(citationCoverage?.fabricationSignal) || "low",
+      fabricationSignalReason: clean(citationCoverage?.fabricationSignalReason) || "",
+      fabricationRatio: toNumber(citationCoverage?.fabricationRatio, 0),
+      unknownRatio: toNumber(citationCoverage?.unknownRatio, 0),
+      unverifiableRatio: toNumber(citationCoverage?.unverifiableRatio, 0),
+      verifiedRatio: toNumber(citationCoverage?.verifiedRatio, 0),
+    },
     reasonCodes,
     summary: {
       coverageRatio,

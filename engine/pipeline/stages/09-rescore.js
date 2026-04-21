@@ -1,4 +1,5 @@
 import { clean, ensureArray, normalizeConfidence } from "./common.js";
+import { deriveDeterministicConfidence } from "../../lib/confidence-derived.js";
 
 export const STAGE_ID = "stage_09_rescore";
 export const STAGE_TITLE = "Re-Score";
@@ -25,7 +26,20 @@ function rescoreScorecard(state = {}) {
     const patch = byPatch.get(id);
     if (!patch) return;
     const mergedSources = mergeSources(current?.sources, patch?.sources);
-    const confidence = normalizeConfidence(patch?.confidence || current?.confidence);
+    const selfReported = normalizeConfidence(patch?.confidence || current?.confidence);
+    const derivedConfidence = deriveDeterministicConfidence({
+      confidence: selfReported,
+      confidenceReason: clean(patch?.confidenceReason || current?.confidenceReason),
+      sources: mergedSources,
+      arguments: {
+        supporting: [...ensureArray(current?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
+        limiting: [...ensureArray(current?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
+      },
+    }, {
+      allowModelFallback: true,
+      minSourceCountForDerived: 2,
+    });
+    const confidence = normalizeConfidence(derivedConfidence.confidence);
     const score = Number.isFinite(Number(current?.score)) ? Number(current.score) : 3;
     const adjustedScore = confidence === "high"
       ? Math.min(5, score + (mergedSources.length >= 3 ? 1 : 0))
@@ -36,7 +50,9 @@ function rescoreScorecard(state = {}) {
       brief: clean(patch?.brief || current?.brief),
       full: clean(patch?.full || current?.full),
       confidence,
-      confidenceReason: clean(patch?.confidenceReason || current?.confidenceReason),
+      confidenceSelfReported: derivedConfidence.confidenceSelfReported,
+      confidenceSource: clean(derivedConfidence.confidenceSource || current?.confidenceSource || "model"),
+      confidenceReason: clean(derivedConfidence.confidenceReason) || clean(patch?.confidenceReason || current?.confidenceReason),
       sources: mergedSources,
       arguments: {
         supporting: [...ensureArray(current?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
@@ -61,13 +77,29 @@ function rescoreMatrix(state = {}) {
   const merged = cells.map((cell) => {
     const patch = byPatch.get(`${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`);
     if (!patch) return cell;
+    const mergedSources = mergeSources(cell?.sources, patch?.sources);
+    const selfReported = normalizeConfidence(patch?.confidence || cell?.confidence);
+    const derivedConfidence = deriveDeterministicConfidence({
+      confidence: selfReported,
+      confidenceReason: clean(patch?.confidenceReason || cell?.confidenceReason),
+      sources: mergedSources,
+      arguments: {
+        supporting: [...ensureArray(cell?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
+        limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],
+      },
+    }, {
+      allowModelFallback: true,
+      minSourceCountForDerived: 2,
+    });
     return {
       ...cell,
       value: clean(patch?.value || cell?.value),
       full: clean(patch?.full || cell?.full),
-      confidence: normalizeConfidence(patch?.confidence || cell?.confidence),
-      confidenceReason: clean(patch?.confidenceReason || cell?.confidenceReason),
-      sources: mergeSources(cell?.sources, patch?.sources),
+      confidence: normalizeConfidence(derivedConfidence.confidence),
+      confidenceSelfReported: derivedConfidence.confidenceSelfReported,
+      confidenceSource: clean(derivedConfidence.confidenceSource || cell?.confidenceSource || "model"),
+      confidenceReason: clean(derivedConfidence.confidenceReason) || clean(patch?.confidenceReason || cell?.confidenceReason),
+      sources: mergedSources,
       arguments: {
         supporting: [...ensureArray(cell?.arguments?.supporting), ...ensureArray(patch?.arguments?.supporting)],
         limiting: [...ensureArray(cell?.arguments?.limiting), ...ensureArray(patch?.arguments?.limiting)],

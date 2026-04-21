@@ -125,6 +125,7 @@ export async function runStage(context = {}) {
   const claims = buildClaimContext(state, flags);
 
   const prompt = `For each critic flag, find disconfirming evidence and hidden risks.
+Use web search to find strongest disconfirming evidence when factual uncertainty exists.
 Return JSON:
 {
   "counterEvidence": [{
@@ -152,6 +153,7 @@ ${JSON.stringify(claims).slice(0, 18000)}`;
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
     liveSearch: true,
+    searchMaxUses: 3,
     schemaHint: '{"counterEvidence":[{"flagId":"","unitKey":"","note":"","severityIfWrong":"medium","sources":[]}],"summary":""}',
   });
 

@@ -121,6 +121,7 @@ async function callAnthropic({
   systemPrompt,
   maxTokens,
   liveSearch = false,
+  searchMaxUses = 0,
   deepResearch = false,
   baseUrl = "",
 }) {
@@ -137,7 +138,9 @@ async function callAnthropic({
   }
 
   // Deep Research uses more search iterations to match Claude's Research mode.
-  const searchMaxUses = deepResearch ? 20 : 6;
+  const resolvedSearchMaxUses = Number.isFinite(Number(searchMaxUses)) && Number(searchMaxUses) > 0
+    ? Math.max(1, Math.min(20, Math.floor(Number(searchMaxUses))))
+    : (deepResearch ? 20 : 6);
 
   const makeRequest = async (withSearch) => {
     const body = {
@@ -150,7 +153,7 @@ async function callAnthropic({
           tools: [{
             type: "web_search_20250305",
             name: "web_search",
-            max_uses: searchMaxUses,
+            max_uses: resolvedSearchMaxUses,
           }],
         }
         : {}),
@@ -577,6 +580,7 @@ export async function callProviderModel({
   systemPrompt,
   maxTokens = 5000,
   liveSearch = false,
+  searchMaxUses = 0,
   deepResearch = false,
   baseUrl = "",
   stageId = "",
@@ -590,6 +594,7 @@ export async function callProviderModel({
       systemPrompt,
       maxTokens,
       liveSearch,
+      searchMaxUses,
       deepResearch,
       baseUrl,
     });
@@ -602,6 +607,7 @@ export async function callProviderModel({
       systemPrompt,
       maxTokens,
       liveSearch,
+      searchMaxUses,
       deepResearch,
       baseUrl,
       stageId,

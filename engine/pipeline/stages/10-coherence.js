@@ -1,7 +1,53 @@
-import { callActorJson, clean, ensureArray } from "./common.js";
+import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js";
 
 export const STAGE_ID = "stage_10_coherence";
 export const STAGE_TITLE = "Coherence";
+
+function normalizeSeverity(value = "") {
+  const level = clean(value).toLowerCase();
+  if (level === "high" || level === "medium" || level === "low") return level;
+  return "medium";
+}
+
+function normalizeFlagType(value = "") {
+  const kind = clean(value).toLowerCase();
+  const allowed = new Set(["factual", "coherence", "coverage", "structural"]);
+  return allowed.has(kind) ? kind : "coherence";
+}
+
+function normalizeQueries(value = []) {
+  return ensureArray(value).map((item) => clean(item)).filter(Boolean).slice(0, 8);
+}
+
+function normalizeCoherenceFindings(parsed = {}) {
+  const findings = ensureArray(parsed?.findings).map((finding, idx) => {
+    const evidence = finding?.evidence && typeof finding.evidence === "object" ? finding.evidence : {};
+    const correctingSource = evidence?.correctingSource && typeof evidence.correctingSource === "object"
+      ? evidence.correctingSource
+      : null;
+    const explicitSources = normalizeSources(finding?.sources || []);
+    const evidenceSources = correctingSource ? normalizeSources([correctingSource]) : [];
+    const mergedSources = [...explicitSources, ...evidenceSources];
+    return {
+      id: clean(finding?.id) || `coherence-${idx + 1}`,
+      unitKey: clean(finding?.unitKey),
+      note: clean(finding?.note),
+      severity: normalizeSeverity(finding?.severity),
+      flagType: normalizeFlagType(finding?.flagType),
+      sources: mergedSources,
+      evidence: {
+        citedClaim: clean(evidence?.citedClaim),
+        correctingSource: evidenceSources[0] || null,
+        searchQueriesUsed: normalizeQueries(evidence?.searchQueriesUsed),
+      },
+    };
+  }).filter((finding) => finding.unitKey && finding.note);
+
+  return {
+    findings,
+    overallFeedback: clean(parsed?.overallFeedback),
+  };
+}
 
 function buildSummaryInput(state = {}) {
   const compactSources = (sources = []) => ensureArray(sources).slice(0, 8).map((source) => ({
@@ -56,10 +102,23 @@ function buildSummaryInput(state = {}) {
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const summary = buildSummaryInput(state);
-  const prompt = `Review cross-unit coherence for this assessment and flag contradictions or internal logic breaks.
+  const prompt = `Review cross-unit coherence and factual consistency for this assessment.
+Use web search only when needed to validate factual uncertainty or likely stale claims.
 Return JSON:
 {
-  "findings": [{"unitKey":"", "note":"", "severity":"high|medium|low"}],
+  "findings": [{
+    "id":"",
+    "unitKey":"",
+    "note":"",
+    "severity":"high|medium|low",
+    "flagType":"factual|coherence|coverage|structural",
+    "sources": [],
+    "evidence": {
+      "citedClaim":"",
+      "correctingSource":{"name":"","url":"","quote":"","sourceType":""},
+      "searchQueriesUsed":[""]
+    }
+  }],
   "overallFeedback": ""
 }
 Assessment snapshot:
@@ -75,9 +134,12 @@ ${JSON.stringify(summary).slice(0, 26000)}`;
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
-    liveSearch: false,
-    schemaHint: '{"findings":[{"unitKey":"","note":"","severity":"medium"}],"overallFeedback":""}',
+    liveSearch: true,
+    searchMaxUses: 3,
+    schemaHint: '{"findings":[{"id":"","unitKey":"","note":"","severity":"medium","flagType":"coherence","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[]}}],"overallFeedback":""}',
   });
+  const normalized = normalizeCoherenceFindings(result?.parsed || {});
+  const factualFindings = normalized.findings.filter((finding) => finding.flagType === "factual").length;
 
   return {
     stageStatus: "ok",
@@ -86,12 +148,13 @@ ${JSON.stringify(summary).slice(0, 26000)}`;
       ui: { phase: STAGE_ID },
       critique: {
         ...(state?.critique || {}),
-        coherenceFindings: ensureArray(result?.parsed?.findings),
-        overallFeedback: clean(result?.parsed?.overallFeedback),
+        coherenceFindings: normalized.findings,
+        overallFeedback: normalized.overallFeedback,
       },
     },
     diagnostics: {
-      findings: ensureArray(result?.parsed?.findings).length,
+      findings: normalized.findings.length,
+      factualFindings,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

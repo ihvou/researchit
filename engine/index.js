@@ -1,4 +1,5 @@
 export { runAnalysis } from "./pipeline/analysis.js";
+export { reprocessStage } from "./pipeline/analysis.js";
 export { handleFollowUp } from "./pipeline/followUp.js";
 export { runMatrixAnalysis, resolveMatrixResearchInput } from "./pipeline/matrix.js";
 

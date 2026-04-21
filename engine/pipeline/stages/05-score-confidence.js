@@ -9,6 +9,7 @@ import {
   normalizeSources,
   summarizeSourceUniverse,
 } from "./common.js";
+import { deriveDeterministicConfidence } from "../../lib/confidence-derived.js";
 
 export const STAGE_ID = "stage_05_score_confidence";
 export const STAGE_TITLE = "Score Confidence";
@@ -106,15 +107,25 @@ function normalizeScorecardAssessment(evidence = {}, dimensions = [], parsed = {
   dimensions.forEach((dim) => {
     const unit = evidenceMap.get(dim.id) || {};
     const scored = scoredMap.get(dim.id) || {};
-    const confidence = normalizeConfidence(scored?.confidence || unit?.confidence || confidenceFromEvidence(unit));
     const sources = normalizeSources(unit?.sources || []);
+    const selfReportedConfidence = normalizeConfidence(scored?.confidence || unit?.confidence || confidenceFromEvidence(unit));
+    const derivedConfidence = deriveDeterministicConfidence({
+      confidence: selfReportedConfidence,
+      confidenceReason: clean(scored?.confidenceReason || unit?.confidenceReason),
+      sources,
+      arguments: unit?.arguments || {},
+    }, {
+      allowModelFallback: true,
+      minSourceCountForDerived: 2,
+    });
     const score = clampScore(scored?.score || unit?.score || scoreFromEvidence(unit));
     byId[dim.id] = {
       id: dim.id,
       score,
-      confidence,
-      confidenceSource: normalizeConfidenceSource(unit?.confidenceSource || "model"),
-      confidenceReason: clean(scored?.confidenceReason || unit?.confidenceReason) || `Based on ${ensureArray(unit?.sources).length} cited sources.`,
+      confidence: derivedConfidence.confidence,
+      confidenceSelfReported: derivedConfidence.confidenceSelfReported,
+      confidenceSource: normalizeConfidenceSource(derivedConfidence.confidenceSource || unit?.confidenceSource || "model"),
+      confidenceReason: clean(derivedConfidence.confidenceReason) || clean(scored?.confidenceReason || unit?.confidenceReason) || `Based on ${ensureArray(unit?.sources).length} cited sources.`,
       brief: clean(scored?.brief || unit?.brief),
       full: clean(scored?.full || unit?.full),
       sources,
@@ -124,7 +135,7 @@ function normalizeScorecardAssessment(evidence = {}, dimensions = [], parsed = {
         limiting: ensureArray(unit?.arguments?.limiting),
       },
       risks: clean(scored?.risks || unit?.risks),
-      missingEvidence: clean(scored?.missingEvidence) || missingEvidenceFallback(unit, confidence),
+      missingEvidence: clean(scored?.missingEvidence) || missingEvidenceFallback(unit, derivedConfidence.confidence),
       providerAgreement: clean(unit?.providerAgreement),
     };
   });
@@ -134,13 +145,28 @@ function normalizeScorecardAssessment(evidence = {}, dimensions = [], parsed = {
 
 function normalizeMatrixAssessment(evidence = {}, request = {}) {
   const cells = ensureArray(evidence?.matrix?.cells).map((cell) => ({
+    ...(function buildConfidencePatch() {
+      const selfReportedConfidence = normalizeConfidence(cell?.confidence || confidenceFromEvidence(cell));
+      const derivedConfidence = deriveDeterministicConfidence({
+        confidence: selfReportedConfidence,
+        confidenceReason: clean(cell?.confidenceReason),
+        sources: normalizeSources(cell?.sources || []),
+        arguments: cell?.arguments || {},
+      }, {
+        allowModelFallback: true,
+        minSourceCountForDerived: 2,
+      });
+      return {
+        confidence: derivedConfidence.confidence,
+        confidenceSelfReported: derivedConfidence.confidenceSelfReported,
+        confidenceSource: normalizeConfidenceSource(derivedConfidence.confidenceSource || cell?.confidenceSource || "model"),
+        confidenceReason: clean(derivedConfidence.confidenceReason) || clean(cell?.confidenceReason) || `Based on ${ensureArray(cell?.sources).length} cited sources.`,
+      };
+    }()),
     subjectId: clean(cell?.subjectId),
     attributeId: clean(cell?.attributeId),
     value: clean(cell?.value),
     full: clean(cell?.full),
-    confidence: normalizeConfidence(cell?.confidence || confidenceFromEvidence(cell)),
-    confidenceSource: normalizeConfidenceSource(cell?.confidenceSource || "model"),
-    confidenceReason: clean(cell?.confidenceReason) || `Based on ${ensureArray(cell?.sources).length} cited sources.`,
     sources: normalizeSources(cell?.sources || []),
     citationStatus: citationStatusFromSources(cell?.sources || []),
     arguments: {
@@ -167,6 +193,7 @@ function normalizeMatrixAssessment(evidence = {}, request = {}) {
       value: "insufficient evidence",
       full: "No reliable evidence collected yet.",
       confidence: "low",
+      confidenceSelfReported: "low",
       confidenceSource: "model",
       confidenceReason: "No sources available.",
       sources: [],

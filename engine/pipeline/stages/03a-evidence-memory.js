@@ -24,6 +24,38 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeMemorySources(items = []) {
+  return normalizeSources(items).map((source) => ({
+    ...source,
+    groundedByProvider: false,
+    groundedSetAvailable: false,
+    groundingConfidence: "memory",
+  }));
+}
+
+function computeGroundingPropagation(units = []) {
+  const distribution = {};
+  let totalSources = 0;
+  let groundedByProviderTrue = 0;
+  let groundedByProviderFalse = 0;
+  ensureArray(units).forEach((unit) => {
+    ensureArray(unit?.sources).forEach((source) => {
+      totalSources += 1;
+      if (source?.groundedByProvider === true) groundedByProviderTrue += 1;
+      else groundedByProviderFalse += 1;
+      const confidence = clean(source?.groundingConfidence || "unspecified").toLowerCase();
+      distribution[confidence] = Number(distribution[confidence] || 0) + 1;
+    });
+  });
+  return {
+    stage: STAGE_ID,
+    totalSources,
+    groundedByProviderTrue,
+    groundedByProviderFalse,
+    groundingConfidenceDistribution: distribution,
+  };
+}
+
 function normalizeScorecardEvidence(parsed = {}, dimensions = [], confidenceStats = { coerced: 0 }) {
   const byId = new Map((ensureArray(parsed?.dimensions)).map((item) => [clean(item?.id || item?.unitId), item]));
   return dimensions.map((dim) => {
@@ -35,7 +67,7 @@ function normalizeScorecardEvidence(parsed = {}, dimensions = [], confidenceStat
       value: clean(unit?.value),
       confidence: normalizeConfidence(unit?.confidence, confidenceStats),
       confidenceReason: clean(unit?.confidenceReason),
-      sources: normalizeSources(unit?.sources || []),
+      sources: normalizeMemorySources(unit?.sources || []),
       arguments: normalizeArguments(unit?.arguments || {}, `${dim.id}-mem`),
       risks: clean(unit?.risks),
       missingEvidence: clean(unit?.missingEvidence),
@@ -60,7 +92,7 @@ function normalizeMatrixCellsForChunk(parsed = {}, chunk = {}, confidenceStats =
       full: clean(source?.full || source?.analysis),
       confidence: normalizeConfidence(source?.confidence, confidenceStats),
       confidenceReason: clean(source?.confidenceReason),
-      sources: normalizeSources(source?.sources || []),
+      sources: normalizeMemorySources(source?.sources || []),
       arguments: normalizeArguments(source?.arguments || {}, `${target.subjectId}-${target.attributeId}-mem`),
       risks: clean(source?.risks),
       missingEvidence: clean(source?.missingEvidence),
@@ -387,6 +419,7 @@ export async function runStage(context = {}) {
         chunkTruncationRate: Number(matrix?.tokenDiagnostics?.outputTruncatedRate || 0),
         chunkConcurrency: Number(matrix?.chunkConcurrency || 1),
         peakWorkerCount: Number(matrix?.peakWorkerCount || 1),
+        groundingPropagation: computeGroundingPropagation(matrix.cells),
         ...chunkSummary,
         retries: Number(matrix?.tokenDiagnostics?.retries || 0),
         tokenDiagnostics: matrix.tokenDiagnostics,
@@ -475,6 +508,7 @@ Return JSON:
     diagnostics: {
       mode: "scorecard",
       dimensions: normalized.length,
+      groundingPropagation: computeGroundingPropagation(normalized),
       retries: result.retries,
       tokenDiagnostics,
       modelRoute: result.route,
