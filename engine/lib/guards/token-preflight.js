@@ -46,8 +46,31 @@ export function preparePromptWithinBudget({
   promptText,
   tokenBudget,
   splitStrategy,
+  allowCompaction = true,
 } = {}) {
   const budget = Math.max(400, Number(tokenBudget) || 8000);
+  const applyCompaction = allowCompaction !== false;
+
+  if (!applyCompaction) {
+    const estimated = estimateTokens(promptText);
+    if (estimated <= budget) {
+      return {
+        ok: true,
+        text: String(promptText || ""),
+        estimatedTokens: estimated,
+        reasonCodes: [],
+        splitApplied: false,
+      };
+    }
+    return {
+      ok: false,
+      text: String(promptText || ""),
+      estimatedTokens: estimated,
+      reasonCodes: [REASON_CODES.PROMPT_TOKEN_OVER_BUDGET, REASON_CODES.PROMPT_COMPACTION_EXHAUSTED],
+      splitApplied: false,
+    };
+  }
+
   const firstPass = compactPromptText(promptText, budget);
   if (firstPass.tokens <= budget) {
     return {

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "cd app && npm run build",
-    "test:engine": "cd engine && npm run test"
+    "test:engine": "cd engine && npm run test",
+    "fetch-raw": "node scripts/fetch-raw.mjs"
   }
 }

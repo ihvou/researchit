@@ -194,6 +194,7 @@ async function callAnthropic({
   return {
     text,
     sources,
+    rawResponse: data,
     meta: {
       providerId: "anthropic",
       model: resolvedModel,
@@ -254,19 +255,79 @@ function countGeminiSearchCalls(data = {}) {
   return calls;
 }
 
-function extractGeminiGroundingSources(data = {}) {
-  const urls = [];
+function extractUrlsFromRenderedContent(value = "") {
+  const text = cleanText(value);
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  return matches.map((item) => cleanText(item)).filter(Boolean);
+}
+
+function collectGroundingMetadataKeys(data = {}) {
+  const keys = new Set();
   const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
   candidates.forEach((candidate) => {
-    const chunks = Array.isArray(candidate?.groundingMetadata?.groundingChunks)
-      ? candidate.groundingMetadata.groundingChunks
-      : [];
-    chunks.forEach((chunk) => {
-      const url = cleanText(chunk?.web?.uri || chunk?.web?.url);
-      if (url) urls.push(url);
+    const grounding = candidate?.groundingMetadata;
+    if (!grounding || typeof grounding !== "object") return;
+    Object.keys(grounding).forEach((key) => {
+      if (!key) return;
+      keys.add(String(key));
     });
   });
-  return urls;
+  return [...keys];
+}
+
+function extractGeminiGroundingSources(data = {}) {
+  const entries = [];
+  const seen = new Set();
+  const push = (url, title = "Grounded source", anchor = "") => {
+    const normalizedUrl = cleanText(url);
+    if (!normalizedUrl || !isHttpUrl(normalizedUrl)) return;
+    const key = normalizedUrl.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({
+      url: normalizedUrl,
+      title: cleanText(title) || "Grounded source",
+      anchor: cleanText(anchor),
+    });
+  };
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  candidates.forEach((candidate) => {
+    const groundingMetadata = candidate?.groundingMetadata || {};
+    const chunks = Array.isArray(groundingMetadata?.groundingChunks)
+      ? groundingMetadata.groundingChunks
+      : [];
+    chunks.forEach((chunk, idx) => {
+      const url = cleanText(chunk?.web?.uri || chunk?.web?.url);
+      const title = cleanText(chunk?.web?.title || chunk?.web?.snippet || `Grounded source ${idx + 1}`);
+      push(url, title);
+    });
+
+    const supports = Array.isArray(groundingMetadata?.groundingSupports)
+      ? groundingMetadata.groundingSupports
+      : [];
+    supports.forEach((support) => {
+      const indices = Array.isArray(support?.groundingChunkIndices)
+        ? support.groundingChunkIndices
+        : (Number.isFinite(Number(support?.groundingChunkIndex))
+          ? [Number(support.groundingChunkIndex)]
+          : []);
+      const anchor = cleanText(support?.segment?.text || support?.supportText);
+      indices.forEach((idx) => {
+        const chunk = chunks[idx];
+        if (!chunk) return;
+        const url = cleanText(chunk?.web?.uri || chunk?.web?.url);
+        const title = cleanText(chunk?.web?.title || chunk?.web?.snippet || "Grounded source");
+        push(url, title, anchor);
+      });
+    });
+
+    const renderedContentUrls = extractUrlsFromRenderedContent(groundingMetadata?.searchEntryPoint?.renderedContent);
+    renderedContentUrls.forEach((url, idx) => {
+      push(url, `Grounded source ${idx + 1}`);
+    });
+  });
+  return entries;
 }
 
 function isGeminiGroundingRedirect(url = "") {
@@ -349,8 +410,12 @@ async function resolveCanonicalUrl(url = "", timeoutMs = 1800) {
   }
 }
 
-async function resolveCanonicalGeminiSources(urls = [], { concurrency = 8, timeoutMs = 1800 } = {}) {
-  const inputs = Array.isArray(urls) ? urls.filter((url) => isHttpUrl(url)) : [];
+async function resolveCanonicalGeminiSources(items = [], { concurrency = 8, timeoutMs = 1800 } = {}) {
+  const inputs = Array.isArray(items)
+    ? items
+      .map((item) => (typeof item === "string" ? { url: item, title: "Grounded source" } : item))
+      .filter((item) => isHttpUrl(item?.url))
+    : [];
   if (!inputs.length) {
     return {
       sources: [],
@@ -358,7 +423,13 @@ async function resolveCanonicalGeminiSources(urls = [], { concurrency = 8, timeo
     };
   }
 
-  const uniqueInputs = [...new Set(inputs.map((url) => cleanText(url)).filter(Boolean))];
+  const byUrl = new Map();
+  inputs.forEach((item) => {
+    const url = cleanText(item?.url);
+    if (!url) return;
+    if (!byUrl.has(url)) byUrl.set(url, item);
+  });
+  const uniqueInputs = [...byUrl.values()];
   const out = [];
   let cursor = 0;
 
@@ -367,13 +438,14 @@ async function resolveCanonicalGeminiSources(urls = [], { concurrency = 8, timeo
       const idx = cursor;
       cursor += 1;
       const raw = uniqueInputs[idx];
-      const entry = await resolveCanonicalUrl(raw, timeoutMs);
+      const rawUrl = cleanText(raw?.url);
+      const entry = await resolveCanonicalUrl(rawUrl, timeoutMs);
       out.push({
-        name: "Grounded source",
+        name: cleanText(raw?.title) || "Grounded source",
         quote: "",
         sourceType: "independent",
-        originalRedirectUri: cleanText(entry?.originalRedirectUri || raw),
-        url: cleanText(entry?.url || raw),
+        originalRedirectUri: cleanText(entry?.originalRedirectUri || rawUrl),
+        url: cleanText(entry?.url || rawUrl),
         resolutionStatus: cleanText(entry?.resolutionStatus || "unresolved"),
       });
     }
@@ -429,7 +501,17 @@ async function callGemini({
         // the behaviour of Gemini Deep Research in the UI.
         ...(deepResearch ? { thinkingConfig: { thinkingBudget: -1 } } : {}),
       },
-      ...(withSearch ? { tools: [{ google_search: {} }] } : {}),
+      ...(withSearch
+        ? {
+          tools: [{ google_search: {} }],
+          toolConfig: {
+            functionCallingConfig: {
+              mode: "ANY",
+              allowedFunctionNames: ["google_search"],
+            },
+          },
+        }
+        : {}),
     };
     const response = await fetch(endpoint, {
       method: "POST",
@@ -452,11 +534,17 @@ async function callGemini({
   }
 
   const webSearchCalls = countGeminiSearchCalls(data);
-  const groundingUrls = extractGeminiGroundingSources(data);
-  const grounded = await resolveCanonicalGeminiSources(groundingUrls, {
+  const groundingSources = extractGeminiGroundingSources(data);
+  const grounded = await resolveCanonicalGeminiSources(groundingSources, {
     concurrency: 8,
     timeoutMs: 1800,
   });
+  const noSearchPerformed = liveSearch === true && webSearchCalls === 0;
+  const callFailedGrounding = liveSearch === true && webSearchCalls > 0 && grounded.sources.length === 0;
+  const reasonCodes = [
+    ...(noSearchPerformed ? ["stage_03b_no_search_performed"] : []),
+    ...(callFailedGrounding ? ["grounding_extraction_failed"] : []),
+  ];
   const firstCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
   const usage = normalizeUsage({
     inputTokens: data?.usageMetadata?.promptTokenCount,
@@ -467,6 +555,7 @@ async function callGemini({
   return {
     text,
     sources: grounded.sources,
+    rawResponse: data,
     meta: {
       providerId: "gemini",
       model: cleanText(model),
@@ -476,6 +565,10 @@ async function callGemini({
       outputTokens: Number(usage?.outputTokens || 0),
       outputTokensCap,
       groundedSourcesResolved: grounded.diagnostics,
+      noSearchPerformed,
+      callFailedGrounding,
+      reasonCodes,
+      groundingMetadataKeys: collectGroundingMetadataKeys(data),
       usage,
     },
   };
@@ -492,6 +585,7 @@ export async function callProviderModel({
   liveSearch = false,
   deepResearch = false,
   baseUrl = "",
+  stageId = "",
 }) {
   const provider = cleanText(providerId).toLowerCase();
   if (provider === "anthropic") {
@@ -516,6 +610,7 @@ export async function callProviderModel({
       liveSearch,
       deepResearch,
       baseUrl,
+      stageId,
     });
   }
   return callOpenAI({

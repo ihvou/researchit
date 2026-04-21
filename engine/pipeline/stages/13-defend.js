@@ -1,4 +1,4 @@
-import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js";
+import { callActorJson, clean, ensureArray, normalizeSources, combineTokenDiagnostics } from "./common.js";
 import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_13_defend";
@@ -7,15 +7,21 @@ export const STAGE_TITLE = "Concede Defend";
 function normalizeOutcome(raw = {}, fallback = {}) {
   const flag = fallback?.flag || {};
   const generatedFallback = fallback?.generatedFallback === true;
+  const dispositionOverride = clean(fallback?.dispositionOverride).toLowerCase();
   const rawDisposition = clean(raw?.disposition).toLowerCase();
-  const validDisposition = rawDisposition === "accepted" || rawDisposition === "rejected_with_evidence"
+  const validDisposition = rawDisposition === "accepted"
+    || rawDisposition === "rejected_with_evidence"
+    || rawDisposition === "no_response"
+    || rawDisposition === "unresolved_missing_response"
     ? rawDisposition
     : "";
   const analystNote = clean(raw?.analystNote);
   const resolved = raw?.resolved === true;
   const noteMissing = resolved && !analystNote;
   const disposition = validDisposition
+    || dispositionOverride
     || (generatedFallback ? "no_response" : (resolved ? "accepted" : "rejected_with_evidence"));
+  const unresolvedMissing = disposition === "unresolved_missing_response";
   const outcome = {
     flagId: clean(raw?.flagId || fallback?.flagId || flag?.id),
     flag: {
@@ -23,15 +29,17 @@ function normalizeOutcome(raw = {}, fallback = {}) {
       severity: clean(flag?.severity || "medium"),
       category: clean(flag?.category || "other"),
     },
-    resolved,
+    resolved: unresolvedMissing ? false : resolved,
     disposition,
     analystNote: analystNote
       || (generatedFallback
-        ? "No analyst response returned for this flag."
+        ? (unresolvedMissing
+          ? "Retry exhausted - no response returned."
+          : "No analyst response returned for this flag.")
         : (noteMissing ? "Model returned resolution without note." : "")),
     mitigationNote: clean(raw?.mitigationNote || "") || undefined,
     sources: normalizeSources(raw?.sources || []),
-    responseMissing: generatedFallback,
+    responseMissing: generatedFallback || unresolvedMissing,
     noteMissing,
   };
   return outcome;
@@ -179,7 +187,7 @@ export async function runStage(context = {}) {
   }
   const flagContexts = buildFlagContexts(state, flags, counterEntries);
 
-  const prompt = `Resolve every critic flag using counter-case evidence.
+  const basePrompt = `Resolve every critic flag using counter-case evidence.
 You must respond to every listed flagId exactly once.
 
 Rules:
@@ -203,13 +211,13 @@ Return JSON:
 Flag contexts:
 ${JSON.stringify(flagContexts).slice(0, 28000)}`;
 
-  const result = await callActorJson({
+  const callDefend = async (userPrompt) => callActorJson({
     state,
     runtime,
     stageId: STAGE_ID,
     actor: "analyst",
     systemPrompt: runtime?.prompts?.analystResponse || runtime?.prompts?.analyst || "You defend or concede each critic flag.",
-    userPrompt: prompt,
+    userPrompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
@@ -217,55 +225,119 @@ ${JSON.stringify(flagContexts).slice(0, 28000)}`;
     schemaHint: '{"outcomes":[{"flagId":"","resolved":true,"disposition":"accepted","analystNote":"","mitigationNote":"","sources":[]}],"analystSummary":""}',
   });
 
-  const outcomesRaw = ensureArray(result?.parsed?.outcomes);
   const byFlagId = new Map(flags.map((flag) => [clean(flag?.id), { flagId: clean(flag?.id), flag }]));
-  const normalizedOutcomes = outcomesRaw.map((raw) => normalizeOutcome(raw, byFlagId.get(clean(raw?.flagId)) || {}));
-  flags.forEach((flag) => {
-    const key = clean(flag?.id);
-    if (normalizedOutcomes.some((outcome) => clean(outcome?.flagId) === key)) return;
-    normalizedOutcomes.push(normalizeOutcome({}, { flagId: key, flag, generatedFallback: true }));
-  });
+  const expectedFlagIds = flags.map((flag) => clean(flag?.id)).filter(Boolean);
+  const normalizeByResult = (result) => ensureArray(result?.parsed?.outcomes)
+    .map((raw) => normalizeOutcome(raw, byFlagId.get(clean(raw?.flagId)) || {}))
+    .filter((item) => clean(item?.flagId));
+  const missingForOutcomes = (outcomes = []) => {
+    const covered = new Set(ensureArray(outcomes).map((item) => clean(item?.flagId)).filter(Boolean));
+    return expectedFlagIds.filter((id) => !covered.has(id));
+  };
+
+  const tokenDiagnostics = [];
+  const stageReasonCodes = [];
+  let modelRoute = null;
+  let retries = 0;
+  let stageAttempts = 0;
+  let responseText = "";
+  let finalSummary = "";
+  const outcomeByFlagId = new Map();
+  let missingFlagIds = [];
+
+  const applyResult = (result) => {
+    stageAttempts += 1;
+    retries += Number(result?.retries || 0);
+    modelRoute = result?.route || modelRoute;
+    if (clean(result?.text)) responseText = clean(result.text);
+    if (clean(result?.parsed?.analystSummary)) finalSummary = clean(result.parsed.analystSummary);
+    stageReasonCodes.push(...ensureArray(result?.reasonCodes));
+    tokenDiagnostics.push(result?.tokenDiagnostics);
+    normalizeByResult(result).forEach((item) => {
+      outcomeByFlagId.set(clean(item?.flagId), item);
+    });
+    missingFlagIds = missingForOutcomes([...outcomeByFlagId.values()]);
+  };
+
+  const firstResult = await callDefend(basePrompt);
+  applyResult(firstResult);
+
+  if (missingFlagIds.length) {
+    const retryPrompt = `${basePrompt}
+
+Retry requirement (strict):
+- Return exactly one outcome per input flag.
+- Missing flagIds in previous response: ${missingFlagIds.join(", ")}.
+- Include analystNote for every returned outcome.`;
+    const secondResult = await callDefend(retryPrompt);
+    applyResult(secondResult);
+  }
+
+  if (missingFlagIds.length) {
+    missingFlagIds.forEach((id) => {
+      const fallback = byFlagId.get(id) || { flagId: id, flag: {} };
+      outcomeByFlagId.set(id, normalizeOutcome({}, {
+        ...fallback,
+        generatedFallback: true,
+        dispositionOverride: "unresolved_missing_response",
+      }));
+    });
+    stageReasonCodes.push(REASON_CODES.DEFEND_MISSING_RESPONSE);
+  }
+
+  const normalizedOutcomes = expectedFlagIds.map((id) => (
+    outcomeByFlagId.get(id)
+    || normalizeOutcome({}, {
+      ...(byFlagId.get(id) || { flagId: id, flag: {} }),
+      generatedFallback: true,
+      dispositionOverride: "unresolved_missing_response",
+    })
+  ));
 
   const unresolvedHighSeverityCount = normalizedOutcomes.filter((outcome) => (
-    !outcome.resolved
+    !outcome?.resolved
     && clean(outcome?.flag?.severity).toLowerCase() === "high"
   )).length;
   const noteMissingCount = normalizedOutcomes.filter((outcome) => outcome?.noteMissing).length;
+  const missingResponses = normalizedOutcomes.filter((outcome) => outcome?.responseMissing).length;
 
   const adjustedAssessment = applyAcceptedAdjustments(state, normalizedOutcomes);
-  const stageReasonCodes = normalizeReasonCodes([
-    ...ensureArray(result?.reasonCodes),
+  const normalizedReasonCodes = normalizeReasonCodes([
+    ...stageReasonCodes,
     ...(noteMissingCount > 0 ? [REASON_CODES.DEFEND_NOTE_MISSING] : []),
   ]);
+  const combinedTokenDiagnostics = combineTokenDiagnostics(tokenDiagnostics);
 
   return {
     stageStatus: "ok",
-    reasonCodes: stageReasonCodes,
+    reasonCodes: normalizedReasonCodes,
     statePatch: {
       ui: { phase: STAGE_ID },
       resolved: {
         assessment: adjustedAssessment,
         flagOutcomes: normalizedOutcomes,
         unresolvedHighSeverityCount,
-        analystSummary: clean(result?.parsed?.analystSummary),
+        analystSummary: finalSummary || "Flag outcomes resolved.",
         responseSources: normalizeSources(normalizedOutcomes.flatMap((outcome) => ensureArray(outcome?.sources))),
       },
     },
     diagnostics: {
       outcomes: normalizedOutcomes.length,
       unresolvedHighSeverityCount,
-      missingResponses: normalizedOutcomes.filter((outcome) => outcome?.responseMissing).length,
+      missingResponses,
       noteMissingCount,
-      retries: result.retries,
-      modelRoute: result.route,
-      tokenDiagnostics: result.tokenDiagnostics,
+      missingFlagIds,
+      stageAttempts,
+      retries,
+      modelRoute,
+      tokenDiagnostics: combinedTokenDiagnostics,
     },
     io: {
-      prompt,
-      response: result.text,
+      prompt: basePrompt,
+      response: responseText,
     },
-    modelRoute: result.route,
-    tokens: result.tokenDiagnostics,
-    retries: result.retries,
+    modelRoute,
+    tokens: combinedTokenDiagnostics,
+    retries,
   };
 }

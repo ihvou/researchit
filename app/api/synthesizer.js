@@ -77,11 +77,12 @@ export default async function handler(req, res) {
       liveSearch,
       baseUrl: resolved.baseUrl,
     });
+    const { rawResponse, ...safeResult } = result || {};
     return res.status(200).json({
-      ...result,
+      ...safeResult,
       meta: {
-        ...(result?.meta || {}),
-        providerId: result?.meta?.providerId || resolved.providerId,
+        ...(safeResult?.meta || {}),
+        providerId: safeResult?.meta?.providerId || resolved.providerId,
         providerFallbackUsed: false,
         providerAttemptCount: 1,
         providerRoutePinned: true,

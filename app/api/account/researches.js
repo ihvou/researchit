@@ -3,6 +3,7 @@ import { requireSessionUser } from "../_lib/auth.js";
 import {
   assertPersistentStoreAvailable,
   deleteRunStageCache,
+  deleteRunRawProviderCalls,
   deleteUserResearch,
   getUserResearches,
   upsertUserResearches,
@@ -78,6 +79,7 @@ export default async function handler(req, res) {
       const deleted = await deleteUserResearch(auth.user.id, id);
       if (deleted) {
         await deleteRunStageCache(auth.user.id, id).catch(() => null);
+        await deleteRunRawProviderCalls(auth.user.id, id).catch(() => null);
       }
       return res.status(200).json({ ok: true, deleted });
     } catch (err) {

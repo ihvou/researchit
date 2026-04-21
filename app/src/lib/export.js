@@ -153,6 +153,7 @@ function normalizeSourceDisplayStatus(value) {
   const status = String(value || "").trim().toLowerCase();
   if (status === "cited") return "cited";
   if (status === "corroborating") return "corroborating";
+  if (status === "grounding_unavailable") return "grounding_unavailable";
   if (status === "excluded_marketing") return "excluded_marketing";
   if (status === "excluded_stale") return "excluded_stale";
   return "unverified";
@@ -161,6 +162,7 @@ function normalizeSourceDisplayStatus(value) {
 function sourceStatusLabel(status) {
   if (status === "cited") return "Cited";
   if (status === "corroborating") return "Corroborating";
+  if (status === "grounding_unavailable") return "Grounding unavailable";
   if (status === "excluded_marketing") return "Excluded: marketing";
   if (status === "excluded_stale") return "Excluded: stale";
   return "Unverified";

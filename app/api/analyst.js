@@ -1,15 +1,28 @@
+import crypto from "node:crypto";
 import {
   resolveRoleProviderCandidates,
   resolveStrictRoute,
   missingApiKeyError,
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
+import { getSessionUser } from "./_lib/auth.js";
+import {
+  appendRawProviderCall,
+  isRawCallCacheEnabledForStage,
+} from "./_lib/store.js";
 
 const ANALYST_DEFAULT_MODEL = "gpt-5.4";
 const ROUTE_MISMATCH_REASON_CODE = "route_mismatch_preflight";
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function hashRequestPayload(payload = {}) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload || {}))
+    .digest("hex");
 }
 
 export default async function handler(req, res) {
@@ -28,6 +41,10 @@ export default async function handler(req, res) {
     webSearchModel,
     baseUrl, // per-request model routing only (not API key BYOK)
     stageId,
+    runId,
+    chunkId,
+    callIndex,
+    promptVersion,
   } = req.body || {};
 
   if (!messages || !systemPrompt) {
@@ -78,15 +95,50 @@ export default async function handler(req, res) {
       liveSearch,
       deepResearch,
       baseUrl: resolved.baseUrl,
+      stageId,
     });
+    const { rawResponse, ...safeResult } = result || {};
+    const authUser = await getSessionUser(req).catch(() => null);
+    let rawResponseKey = "";
+    if (
+      authUser?.id
+      && isRawCallCacheEnabledForStage(stageId)
+      && clean(runId)
+      && rawResponse
+      && typeof rawResponse === "object"
+    ) {
+      try {
+        const rawStore = await appendRawProviderCall(authUser.id, clean(runId), clean(stageId), {
+          chunkId: clean(chunkId) || "default",
+          provider: clean(result?.meta?.providerId || resolved.providerId),
+          model: clean(result?.meta?.model || resolved.model),
+          requestHash: hashRequestPayload({
+            provider: clean(resolved.providerId),
+            model: clean(resolved.model),
+            systemPrompt: clean(systemPrompt),
+            messages: Array.isArray(messages) ? messages : [],
+            maxTokens: Number(maxTokens) || 0,
+            liveSearch: !!liveSearch,
+            deepResearch: !!deepResearch,
+            callIndex: Number.isFinite(Number(callIndex)) ? Number(callIndex) : -1,
+          }),
+          promptVersion: clean(promptVersion),
+          rawResponse,
+        });
+        rawResponseKey = clean(rawStore?.rawResponseKey);
+      } catch (_) {
+        rawResponseKey = "";
+      }
+    }
     return res.status(200).json({
-      ...result,
+      ...safeResult,
       meta: {
-        ...(result?.meta || {}),
-        providerId: result?.meta?.providerId || resolved.providerId,
+        ...(safeResult?.meta || {}),
+        providerId: safeResult?.meta?.providerId || resolved.providerId,
         providerFallbackUsed: false,
         providerAttemptCount: 1,
         providerRoutePinned: true,
+        ...(rawResponseKey ? { rawResponseKey } : {}),
       },
     });
   } catch (err) {

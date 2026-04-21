@@ -12,16 +12,16 @@ function baseState() {
             id: "a",
             confidence: "high",
             sources: [
-              { sourceType: "independent", verificationStatus: "verified_in_page" },
-              { sourceType: "research", verificationStatus: "verified_in_page" },
+              { sourceType: "independent", verificationStatus: "verified_in_page", verificationTier: "verified", citationStatus: "verified" },
+              { sourceType: "research", verificationStatus: "verified_in_page", verificationTier: "verified", citationStatus: "verified" },
             ],
           },
           b: {
             id: "b",
             confidence: "medium",
             sources: [
-              { sourceType: "independent", verificationStatus: "verified_in_page" },
-              { sourceType: "research", verificationStatus: "verified_in_page" },
+              { sourceType: "independent", verificationStatus: "verified_in_page", verificationTier: "verified", citationStatus: "verified" },
+              { sourceType: "research", verificationStatus: "verified_in_page", verificationTier: "verified", citationStatus: "verified" },
             ],
           },
         },
@@ -120,4 +120,61 @@ test("decision gate does not fail on infrastructure-unreachable sources alone", 
 
   assert.equal(result.checks.citationCoverage, true);
   assert.equal(result.checks.fabrication, true);
+});
+
+test("decision gate treats grounding-unavailable signals as neutral for fabrication ratio", () => {
+  const state = baseState();
+  state.assessment.scorecard.byId.a.sources = [
+    {
+      sourceType: "research",
+      verificationTier: "",
+      fabricationSignal: "unknown",
+      fabricationSignalReason: "grounded_set_unavailable",
+      citationStatus: "unverifiable",
+    },
+  ];
+  state.assessment.scorecard.byId.b.sources = [
+    {
+      sourceType: "research",
+      verificationTier: "",
+      fabricationSignal: "unknown",
+      fabricationSignalReason: "grounded_set_unavailable",
+      citationStatus: "unverifiable",
+    },
+  ];
+
+  const result = evaluateDecisionGate(state, {
+    minCoverageRatio: 0,
+    maxLowConfidenceRatio: 1,
+    minSourcesPerCriticalUnit: 0,
+    minIndependentSourcesPerCriticalUnit: 0,
+    maxUnresolvedCriticFlags: 0,
+    maxUnverifiedSourceRatio: 1,
+    maxFabricatedSourceRatio: 0.01,
+  });
+
+  assert.equal(result.summary.citationCoverage.unknownRatio, 1);
+  assert.equal(result.summary.citationCoverage.fabricationRatio, 0);
+  assert.ok(result.reasonCodes.includes("source_grounding_unavailable"));
+});
+
+test("decision gate fails critic defend completeness when missing-response outcomes exist", () => {
+  const state = baseState();
+  state.resolved.flagOutcomes = [{
+    resolved: false,
+    responseMissing: true,
+    disposition: "unresolved_missing_response",
+    flag: { severity: "medium" },
+  }];
+
+  const result = evaluateDecisionGate(state, {
+    minCoverageRatio: 0.5,
+    maxLowConfidenceRatio: 0.8,
+    minSourcesPerCriticalUnit: 1,
+    minIndependentSourcesPerCriticalUnit: 0,
+    maxUnresolvedCriticFlags: 5,
+  });
+
+  assert.equal(result.checks.criticDefendCompleteness, false);
+  assert.equal(result.passed, false);
 });

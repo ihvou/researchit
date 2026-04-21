@@ -19,6 +19,12 @@ const SOURCE_STATUS_META = {
     borderColor: "rgba(122, 97, 26, 0.3)",
     background: "rgba(122, 97, 26, 0.08)",
   },
+  grounding_unavailable: {
+    label: "Grounding unavailable",
+    color: "#7a611a",
+    borderColor: "rgba(122, 97, 26, 0.3)",
+    background: "rgba(122, 97, 26, 0.08)",
+  },
   excluded_marketing: {
     label: "Excluded: marketing",
     color: "#7b2a2a",

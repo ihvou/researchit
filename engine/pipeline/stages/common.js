@@ -198,6 +198,8 @@ export async function callActorJson({
   deepResearch = false,
   routeOverride = {},
   schemaHint = "",
+  allowCompaction = true,
+  callContext = {},
 } = {}) {
   const transport = runtime?.transport;
   if (!transport) throw new Error("Missing transport in runtime.");
@@ -217,6 +219,7 @@ export async function callActorJson({
     promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
     tokenBudget,
     splitStrategy: promptSplitHalf,
+    allowCompaction,
   });
   reasonCodes.push(...(promptPrep.reasonCodes || []));
   if (!promptPrep.ok) {
@@ -228,6 +231,10 @@ export async function callActorJson({
   const callFn = chooseTransportCall(transport, actor);
   const payloadOptions = {
     stageId: clean(stageId),
+    runId: clean(state?.runId),
+    chunkId: clean(callContext?.chunkId),
+    callIndex: Number.isFinite(Number(callContext?.callIndex)) ? Number(callContext.callIndex) : undefined,
+    promptVersion: clean(callContext?.promptVersion),
     provider: route.provider,
     model: route.model,
     webSearchModel: route.webSearchModel,
@@ -316,6 +323,7 @@ export async function callActorJson({
           promptText: buildPromptPayload(workingPromptBody, schemaHint, parseRepairNotice),
           tokenBudget,
           splitStrategy: promptSplitHalf,
+          allowCompaction,
         });
         reasonCodes.push(...(promptPrep.reasonCodes || []));
         if (!promptPrep.ok) {
@@ -387,6 +395,7 @@ export async function callActorJson({
   if (parseFailureTruncationSuspected) {
     reasonCodes.push(REASON_CODES.TRUNCATION_SUSPECTED);
   }
+  reasonCodes.push(...ensureArray(meta?.reasonCodes));
 
   return {
     ...execution.result,
@@ -410,6 +419,7 @@ export async function callActorJson({
       webSearchCalls: toFiniteNumber(meta?.webSearchCalls, 0),
       groundedSourceCount: groundedSourceCount(meta?.groundedSources),
       liveSearchUsed: !!meta?.liveSearchUsed,
+      rawResponseKey: clean(meta?.rawResponseKey) || undefined,
       finishReason,
       outputTokensCap: toFiniteNumber(outputTokensCap, 0),
       outputTruncated,
@@ -577,14 +587,38 @@ export function annotateSourcesWithGrounding(sources = [], groundedSources = [])
   };
 }
 
-export function fabricationSignalFromSources(sources = [], { liveSearchUsed = false, groundedSourceCount: count = 0 } = {}) {
+export function fabricationAssessmentFromSources(
+  sources = [],
+  { liveSearchUsed = false, groundedSourceCount: count = 0, callFailedGrounding = false } = {}
+) {
   const normalized = normalizeSources(sources);
-  if (!normalized.length) return "low";
+  if (!normalized.length) return { signal: "low", reason: "" };
   const considered = normalized.filter((source) => clean(source?.url));
-  if (!considered.length) return liveSearchUsed ? "medium" : "low";
+  if (!considered.length) {
+    return {
+      signal: liveSearchUsed ? "medium" : "low",
+      reason: "",
+    };
+  }
   const grounded = considered.filter((source) => source?.groundedByProvider === true).length;
-  if (!liveSearchUsed || count <= 0) return grounded ? "low" : "medium";
-  if (grounded === considered.length) return "low";
-  if (grounded === 0) return "high";
-  return "medium";
+  const groundedSetUnavailable = !liveSearchUsed || (count <= 0 && callFailedGrounding === true);
+  if (groundedSetUnavailable) {
+    return {
+      signal: "unknown",
+      reason: "grounded_set_unavailable",
+    };
+  }
+  if (count <= 0) {
+    return {
+      signal: grounded ? "low" : "medium",
+      reason: "",
+    };
+  }
+  if (grounded === considered.length) return { signal: "low", reason: "" };
+  if (grounded === 0) return { signal: "high", reason: "" };
+  return { signal: "medium", reason: "" };
+}
+
+export function fabricationSignalFromSources(sources = [], options = {}) {
+  return fabricationAssessmentFromSources(sources, options).signal;
 }

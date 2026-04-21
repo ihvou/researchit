@@ -1,5 +1,5 @@
-import { callActorJson, clean } from "./common.js";
-import { REASON_CODES } from "../contracts/reason-codes.js";
+import { callActorJson, clean, combineTokenDiagnostics, ensureArray } from "./common.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_02_plan";
 export const STAGE_TITLE = "Research Planning";
@@ -95,10 +95,17 @@ function summarizePlanInputDiagnostics(parsed = {}, fallbackUnits = [], outputTy
 
   return {
     plannerReturnedUnits: rawUnitIds.length,
+    plannerReturnedUnitIds: rawUnitIds,
     discardedUnknownUnitIds,
     discardedCellLevelUnitIds,
     discardedUnitsCount: discardedUnknownUnitIds.length,
   };
+}
+
+function missingUnitIds(plannerUnitIds = [], fallbackUnits = []) {
+  const expected = new Set(ensureArray(fallbackUnits).map((unit) => clean(unit?.unitId)).filter(Boolean));
+  const returned = new Set(ensureArray(plannerUnitIds).map((id) => clean(id)).filter(Boolean));
+  return [...expected].filter((id) => !returned.has(id));
 }
 
 export async function runStage(context = {}) {
@@ -136,22 +143,87 @@ Return JSON:
   }]
 }`;
 
-  const result = await callActorJson({
+  const expectedUnitCount = units.length;
+  const stageBudget = runtime?.budgets?.[STAGE_ID] || {};
+  const callPlanner = async (userPrompt) => callActorJson({
     state,
     runtime,
     stageId: STAGE_ID,
     actor: "analyst",
     systemPrompt: plannerSystemPrompt,
-    userPrompt: prompt,
-    tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 4000,
-    timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 45000,
-    maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
+    userPrompt,
+    tokenBudget: stageBudget?.tokenBudget || 4000,
+    timeoutMs: stageBudget?.timeoutMs || 45000,
+    maxRetries: stageBudget?.retryMax || 1,
     liveSearch: false,
     schemaHint: '{"niche":"","aliases":[""],"units":[{"unitId":"","supportingQueries":[""],"counterfactualQueries":[""],"sourceTargets":[""]}]}',
   });
 
-  const planInputDiagnostics = summarizePlanInputDiagnostics(result?.parsed, units, state?.outputType);
-  const plan = normalizePlan(result?.parsed, units);
+  const firstResult = await callPlanner(prompt);
+  const firstDiag = summarizePlanInputDiagnostics(firstResult?.parsed, units, state?.outputType);
+  const firstCount = Number(firstDiag?.plannerReturnedUnits || 0);
+  const firstMissing = missingUnitIds(firstDiag?.plannerReturnedUnitIds, units);
+  const truncationSuspected = firstResult?.tokenDiagnostics?.parseFailureTruncationSuspected === true;
+  const mismatch = firstCount !== expectedUnitCount;
+
+  let finalResult = firstResult;
+  let finalDiag = firstDiag;
+  const stageReasonCodes = [
+    ...ensureArray(firstResult?.reasonCodes),
+    ...(truncationSuspected ? [REASON_CODES.PLAN_TRUNCATION_RETRIED] : []),
+  ];
+  const tokenDiagnosticsList = [firstResult?.tokenDiagnostics];
+  let secondCount = null;
+  let secondMissing = [];
+  let retries = Number(firstResult?.retries || 0);
+
+  if (truncationSuspected || mismatch) {
+    const retryPrompt = `${prompt}
+
+Retry requirements (strict):
+- Return exactly ${expectedUnitCount} unit entries.
+- Unit ids must match this exact set: ${units.map((unit) => unit.unitId).join(", ")}.
+- Missing from previous response: ${firstMissing.length ? firstMissing.join(", ") : "none"}.
+- Do not omit any unit.`;
+
+    const secondResult = await callPlanner(retryPrompt);
+    finalResult = secondResult;
+    finalDiag = summarizePlanInputDiagnostics(secondResult?.parsed, units, state?.outputType);
+    secondCount = Number(finalDiag?.plannerReturnedUnits || 0);
+    secondMissing = missingUnitIds(finalDiag?.plannerReturnedUnitIds, units);
+    stageReasonCodes.push(...ensureArray(secondResult?.reasonCodes));
+    tokenDiagnosticsList.push(secondResult?.tokenDiagnostics);
+    retries += Number(secondResult?.retries || 0);
+
+    if (secondCount !== expectedUnitCount) {
+      const err = new Error(`Planner unit count mismatch: expected ${expectedUnitCount}, got ${secondCount}.`);
+      err.reasonCode = REASON_CODES.PLAN_UNIT_COUNT_MISMATCH;
+      err.reasonCodes = normalizeReasonCodes([
+        ...stageReasonCodes,
+        REASON_CODES.PLAN_UNIT_COUNT_MISMATCH,
+        REASON_CODES.PIPELINE_STRUCTURAL_FAILURE,
+      ]);
+      err.planUnitCountMismatch = {
+        expected: expectedUnitCount,
+        returned: secondCount,
+        missingUnitIds: secondMissing,
+        firstAttemptCount: firstCount,
+        secondAttemptCount: secondCount,
+      };
+      throw err;
+    }
+  }
+
+  const planInputDiagnostics = {
+    ...finalDiag,
+    expectedUnitCount,
+    firstAttemptUnitCount: firstCount,
+    secondAttemptUnitCount: secondCount,
+    firstAttemptMissingUnitIds: firstMissing,
+    secondAttemptMissingUnitIds: secondMissing,
+    truncationRetryTriggered: truncationSuspected,
+  };
+  const plan = normalizePlan(finalResult?.parsed, units);
   const unresolved = plan.units.filter((unit) => !unit.supportingQueries.length || !unit.counterfactualQueries.length);
   if (unresolved.length) {
     const err = new Error("Plan did not cover all required units.");
@@ -161,24 +233,24 @@ Return JSON:
 
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: normalizeReasonCodes(stageReasonCodes),
     statePatch: {
       ui: { phase: STAGE_ID },
       plan,
     },
     diagnostics: {
       unitCount: plan.units.length,
-      retries: result.retries,
-      modelRoute: result.route,
-      tokenDiagnostics: result.tokenDiagnostics,
+      retries,
+      modelRoute: finalResult.route,
+      tokenDiagnostics: combineTokenDiagnostics(tokenDiagnosticsList),
       ...planInputDiagnostics,
     },
     io: {
       prompt,
-      response: result.text,
+      response: finalResult.text,
     },
-    modelRoute: result.route,
-    tokens: result.tokenDiagnostics,
-    retries: result.retries,
+    modelRoute: finalResult.route,
+    tokens: combineTokenDiagnostics(tokenDiagnosticsList),
+    retries,
   };
 }

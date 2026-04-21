@@ -14,13 +14,6 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeCitationStatus(value = "") {
-  const status = clean(value).toLowerCase();
-  if (status === "verified") return "verified";
-  if (status === "unverifiable") return "unverifiable";
-  return "not_found";
-}
-
 function normalizeVerificationTier(value = "") {
   const tier = clean(value).toLowerCase();
   if (tier === "verified") return "verified";
@@ -50,10 +43,15 @@ function unresolvedCriticCounts(state = {}) {
   const unresolved = outcomes.filter((item) => !item?.resolved);
   const unresolvedHigh = unresolved.filter((item) => clean(item?.flag?.severity).toLowerCase() === "high");
   const unresolvedHighWithoutMitigation = unresolvedHigh.filter((item) => !clean(item?.mitigationNote));
+  const missingResponse = outcomes.filter((item) => (
+    clean(item?.disposition).toLowerCase() === "unresolved_missing_response"
+    || item?.responseMissing === true
+  ));
   return {
     unresolvedCount: unresolved.length,
     unresolvedHighCount: unresolvedHigh.length,
     unresolvedHighWithoutMitigationCount: unresolvedHighWithoutMitigation.length,
+    missingResponseCount: missingResponse.length,
   };
 }
 
@@ -86,6 +84,8 @@ function citationCoverageMetrics(units = []) {
     unreachableStale: 0,
     unverifiable: 0,
     notFound: 0,
+    unknown: 0,
+    missingVerificationTier: 0,
   };
 
   relevantSources.forEach((source) => {
@@ -111,20 +111,26 @@ function citationCoverageMetrics(units = []) {
       return;
     }
 
-    const status = normalizeCitationStatus(source?.citationStatus);
-    if (status === "verified") totals.verified += 1;
-    else if (status === "unverifiable") totals.unverifiable += 1;
-    else totals.notFound += 1;
+    const signal = clean(source?.fabricationSignal).toLowerCase();
+    if (signal === "unknown") {
+      totals.unknown += 1;
+      return;
+    }
+
+    totals.missingVerificationTier += 1;
+    totals.unverifiable += 1;
   });
 
   const denom = Math.max(1, totals.totalRelevant);
+  const fabricationDenominator = Math.max(1, totals.totalRelevant - totals.unknown);
   const unresolvedNumerator = totals.fabricated + totals.unreachableStale + totals.unverifiable + totals.notFound;
   return {
     ...totals,
     unresolvedNumerator,
     verifiedRatio: totals.totalRelevant ? (totals.verified / denom) : 1,
     unresolvedRatio: totals.totalRelevant ? (unresolvedNumerator / denom) : 0,
-    fabricationRatio: totals.totalRelevant ? (totals.fabricated / denom) : 0,
+    fabricationRatio: totals.totalRelevant ? (totals.fabricated / fabricationDenominator) : 0,
+    unknownRatio: totals.totalRelevant ? (totals.unknown / denom) : 0,
   };
 }
 
@@ -172,15 +178,22 @@ export function evaluateDecisionGate(state = {}, options = {}) {
     fabrication: !fabricationFailed,
     criticResolution: critic.unresolvedCount <= gate.maxUnresolvedCriticFlags,
     highSeverityCoverage: critic.unresolvedHighWithoutMitigationCount === 0,
+    criticDefendCompleteness: critic.missingResponseCount === 0,
   };
 
   const passed = Object.values(checks).every(Boolean);
-  const reasonCodes = passed
-    ? []
-    : [
-      REASON_CODES.DECISION_GATE_FAILED,
-      ...(fabricationFailed ? [REASON_CODES.DECISION_GATE_FABRICATION_FLAGGED] : []),
-    ];
+  const reasonCodes = [
+    ...(
+      passed
+        ? []
+        : [
+          REASON_CODES.DECISION_GATE_FAILED,
+          ...(fabricationFailed ? [REASON_CODES.DECISION_GATE_FABRICATION_FLAGGED] : []),
+        ]
+    ),
+    ...(citationCoverage.missingVerificationTier > 0 ? [REASON_CODES.SOURCE_MISSING_VERIFICATION_TIER] : []),
+    ...(citationCoverage.unknownRatio > 0.5 ? [REASON_CODES.SOURCE_GROUNDING_UNAVAILABLE] : []),
+  ];
 
   const deprecatedConfigUsed = [];
   if (Object.prototype.hasOwnProperty.call(gate, "minCitedSourceRatio")) {

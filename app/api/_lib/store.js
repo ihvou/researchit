@@ -186,6 +186,22 @@ function stageCacheIndexKey(userId, runId) {
   return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:stage-index`;
 }
 
+function rawCallRunIndexKey(userId, runId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall-run-index`;
+}
+
+function rawCallStageIndexKey(userId, runId, stageId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall-stage-index:${String(stageId || "").trim()}`;
+}
+
+function rawCallEntryKey(userId, runId, stageId, chunkId, callIndex) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall:${String(stageId || "").trim()}:${String(chunkId || "default").trim()}:${Math.max(0, Number(callIndex) || 0)}`;
+}
+
+function rawCallChunkLockKey(userId, runId, stageId, chunkId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall-lock:${String(stageId || "").trim()}:${String(chunkId || "default").trim()}`;
+}
+
 function magicTokenKey(token) {
   return `ri:auth:magic:${String(token || "").trim()}`;
 }
@@ -203,8 +219,41 @@ function createUserRecord(email) {
   };
 }
 
+const DEFAULT_RAW_CALL_CACHE_STAGES = new Set([
+  "stage_03a_evidence_memory",
+  "stage_03b_evidence_web",
+  "stage_08_recover",
+]);
+
+function parseRawCallCacheStages(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) return new Set(DEFAULT_RAW_CALL_CACHE_STAGES);
+  return new Set(
+    text
+      .split(",")
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function rawCallCacheDisabled() {
+  const raw = String(process.env.RESEARCHIT_RAW_CALL_CACHE_DISABLED || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 export function getStorageMode() {
   return KV_ENABLED ? "kv" : "memory";
+}
+
+export function getRawCallCacheStages() {
+  if (rawCallCacheDisabled()) return new Set();
+  return parseRawCallCacheStages(process.env.RESEARCHIT_RAW_CALL_CACHE_STAGES);
+}
+
+export function isRawCallCacheEnabledForStage(stageId = "") {
+  const stage = String(stageId || "").trim();
+  if (!stage) return false;
+  return getRawCallCacheStages().has(stage);
 }
 
 export function assertPersistentStoreAvailable() {
@@ -429,5 +478,154 @@ export async function deleteRunStageCache(userId, runId) {
     deleted += 1;
   }
   await deleteValue(indexKey);
+  return { deleted };
+}
+
+const REDACTED_KEYS = new Set([
+  "authorization",
+  "api-key",
+  "apikey",
+  "x-api-key",
+  "x-goog-api-key",
+  "cookie",
+  "set-cookie",
+]);
+
+function sanitizeRawResponse(value, depth = 0) {
+  if (depth > 12) return null;
+  if (Array.isArray(value)) return value.map((item) => sanitizeRawResponse(item, depth + 1));
+  if (!value || typeof value !== "object") return value ?? null;
+  const out = {};
+  Object.keys(value).forEach((key) => {
+    const normalized = String(key || "").trim().toLowerCase();
+    if (REDACTED_KEYS.has(normalized)) return;
+    out[key] = sanitizeRawResponse(value[key], depth + 1);
+  });
+  return out;
+}
+
+export async function appendRawProviderCall(userId, runId, stageId, payload = {}, options = {}) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  const safeStageId = String(stageId || "").trim();
+  const safeChunkId = String(payload?.chunkId || "default").trim() || "default";
+  if (!safeUserId || !safeRunId || !safeStageId) {
+    return { ok: false, skipped: true, reason: "missing_identity" };
+  }
+  const ttlSeconds = Number.isFinite(Number(options?.ttlSeconds))
+    ? Math.max(60, Math.floor(Number(options.ttlSeconds)))
+    : 7 * 86400;
+  return withKvLock(
+    rawCallChunkLockKey(safeUserId, safeRunId, safeStageId, safeChunkId),
+    async () => {
+      const stageIndexKey = rawCallStageIndexKey(safeUserId, safeRunId, safeStageId);
+      const stageIndex = await getValue(stageIndexKey);
+      const entries = Array.isArray(stageIndex) ? stageIndex.filter((item) => item && typeof item === "object") : [];
+      const existingChunkEntries = entries.filter((entry) => String(entry?.chunkId || "default") === safeChunkId);
+      const nextCallIndex = existingChunkEntries.reduce((max, entry) => {
+        const n = Number(entry?.callIndex || 0);
+        return Number.isFinite(n) && n > max ? n : max;
+      }, -1) + 1;
+
+      const entryKey = rawCallEntryKey(safeUserId, safeRunId, safeStageId, safeChunkId, nextCallIndex);
+      const normalizedPayload = {
+        provider: String(payload?.provider || "").trim().toLowerCase(),
+        model: String(payload?.model || "").trim(),
+        stageId: safeStageId,
+        chunkId: safeChunkId,
+        callIndex: nextCallIndex,
+        requestHash: String(payload?.requestHash || "").trim(),
+        promptVersion: String(payload?.promptVersion || "").trim(),
+        rawResponse: sanitizeRawResponse(payload?.rawResponse),
+        storedAt: nowIso(),
+      };
+      await setValue(entryKey, normalizedPayload, { ttlSeconds });
+
+      const stageEntry = {
+        key: entryKey,
+        chunkId: safeChunkId,
+        callIndex: nextCallIndex,
+        provider: normalizedPayload.provider,
+        model: normalizedPayload.model,
+        requestHash: normalizedPayload.requestHash,
+        promptVersion: normalizedPayload.promptVersion,
+        storedAt: normalizedPayload.storedAt,
+      };
+      const nextStageEntries = [...entries, stageEntry];
+      await setValue(stageIndexKey, nextStageEntries, { ttlSeconds });
+
+      const runIndexKey = rawCallRunIndexKey(safeUserId, safeRunId);
+      const runIndex = await getValue(runIndexKey);
+      const runStages = Array.isArray(runIndex) ? runIndex.map((item) => String(item || "").trim()).filter(Boolean) : [];
+      const nextRunStages = [...new Set([...runStages, safeStageId])];
+      await setValue(runIndexKey, nextRunStages, { ttlSeconds });
+
+      return {
+        ok: true,
+        rawResponseKey: entryKey,
+        stageId: safeStageId,
+        chunkId: safeChunkId,
+        callIndex: nextCallIndex,
+      };
+    }
+  );
+}
+
+export async function listRawProviderCalls(userId, runId, stageId) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  const safeStageId = String(stageId || "").trim();
+  if (!safeUserId || !safeRunId || !safeStageId) return [];
+  const stageIndexKey = rawCallStageIndexKey(safeUserId, safeRunId, safeStageId);
+  const stageIndex = await getValue(stageIndexKey);
+  const entries = Array.isArray(stageIndex) ? stageIndex.filter((item) => item && typeof item === "object") : [];
+  const out = [];
+  for (const entry of entries) {
+    const key = String(entry?.key || "").trim();
+    if (!key) continue;
+    const payload = await getValue(key);
+    if (!payload || typeof payload !== "object") continue;
+    out.push({
+      key,
+      chunkId: String(payload?.chunkId || entry?.chunkId || "default").trim() || "default",
+      callIndex: Number(payload?.callIndex ?? entry?.callIndex ?? 0) || 0,
+      provider: String(payload?.provider || entry?.provider || "").trim().toLowerCase(),
+      model: String(payload?.model || entry?.model || "").trim(),
+      requestHash: String(payload?.requestHash || entry?.requestHash || "").trim(),
+      promptVersion: String(payload?.promptVersion || entry?.promptVersion || "").trim(),
+      storedAt: String(payload?.storedAt || entry?.storedAt || "").trim(),
+      rawResponse: sanitizeRawResponse(payload?.rawResponse),
+    });
+  }
+  out.sort((a, b) => {
+    const chunkCmp = String(a.chunkId).localeCompare(String(b.chunkId));
+    if (chunkCmp !== 0) return chunkCmp;
+    return Number(a.callIndex || 0) - Number(b.callIndex || 0);
+  });
+  return out;
+}
+
+export async function deleteRunRawProviderCalls(userId, runId) {
+  const safeUserId = String(userId || "").trim();
+  const safeRunId = String(runId || "").trim();
+  if (!safeUserId || !safeRunId) return { deleted: 0 };
+
+  const runIndexKey = rawCallRunIndexKey(safeUserId, safeRunId);
+  const runIndex = await getValue(runIndexKey);
+  const stages = Array.isArray(runIndex) ? runIndex.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  let deleted = 0;
+  for (const stageId of stages) {
+    const stageIndexKey = rawCallStageIndexKey(safeUserId, safeRunId, stageId);
+    const stageIndex = await getValue(stageIndexKey);
+    const entries = Array.isArray(stageIndex) ? stageIndex.filter((item) => item && typeof item === "object") : [];
+    for (const entry of entries) {
+      const key = String(entry?.key || "").trim();
+      if (!key) continue;
+      await deleteValue(key);
+      deleted += 1;
+    }
+    await deleteValue(stageIndexKey);
+  }
+  await deleteValue(runIndexKey);
   return { deleted };
 }

@@ -14,6 +14,7 @@ import {
   splitMatrixCellChunk,
   toChunkManifestEntry,
 } from "../../lib/chunking/matrix-chunks.js";
+import { runChunkPool } from "../../lib/runtime/chunk-pool.js";
 
 export const STAGE_ID = "stage_03a_evidence_memory";
 export const STAGE_TITLE = "Evidence Memory";
@@ -171,130 +172,143 @@ async function gatherMatrixChunk({
   const attributesById = new Map(attributes.map((attribute) => [clean(attribute?.id), attribute]));
 
   const manifestMap = new Map(rootChunks.map((chunk) => [chunk.chunkId, toChunkManifestEntry(chunk)]));
-  const queue = [...rootChunks];
   const cellsByKey = new Map();
   const reasonCodes = [];
   const diagnostics = [];
   const chunkTrace = [];
+  const envConcurrency = Number(globalThis?.process?.env?.RESEARCHIT_STAGE_03A_CHUNK_CONCURRENCY || 0);
+  const chunkConcurrency = Math.max(
+    1,
+    Number(runtime?.budgets?.[STAGE_ID]?.chunkConcurrency || envConcurrency || 4)
+  );
 
-  while (queue.length) {
-    const current = queue.shift();
-    const prompt = buildMatrixChunkPrompt(state, current, subjectsById, attributesById);
-    chunkTrace.push({
-      chunkId: current.chunkId,
-      event: "started",
-      timestamp: nowIso(),
-      depth: Number(current?.depth || 0),
-      cellCount: ensureArray(current?.cells).length,
-    });
-    try {
-      const result = await callActorJson({
-        state,
-        runtime,
-        stageId: STAGE_ID,
-        actor: "analyst",
-        systemPrompt: runtime?.prompts?.analyst || "You produce memory-only matrix evidence.",
-        userPrompt: prompt,
-        tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
-        timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 180000,
-        maxRetries: 1,
-        liveSearch: false,
-        schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+  const pool = await runChunkPool({
+    initialChunks: rootChunks,
+    concurrency: chunkConcurrency,
+    processChunk: async (current) => {
+      const prompt = buildMatrixChunkPrompt(state, current, subjectsById, attributesById);
+      chunkTrace.push({
+        chunkId: current.chunkId,
+        event: "started",
+        timestamp: nowIso(),
+        depth: Number(current?.depth || 0),
+        cellCount: ensureArray(current?.cells).length,
       });
+      try {
+        const result = await callActorJson({
+          state,
+          runtime,
+          stageId: STAGE_ID,
+          actor: "analyst",
+          systemPrompt: runtime?.prompts?.analyst || "You produce memory-only matrix evidence.",
+          userPrompt: prompt,
+          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 24000,
+          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 180000,
+          maxRetries: 1,
+          liveSearch: false,
+          callContext: {
+            chunkId: current.chunkId,
+            promptVersion: PROMPT_VERSION,
+          },
+          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+        });
 
-      const confidenceStats = { coerced: 0 };
-      const normalizedCells = normalizeMatrixCellsForChunk(result?.parsed, current, confidenceStats);
-      normalizedCells.forEach((cell) => {
-        cellsByKey.set(`${cell.subjectId}::${cell.attributeId}`, cell);
-      });
+        const confidenceStats = { coerced: 0 };
+        const normalizedCells = normalizeMatrixCellsForChunk(result?.parsed, current, confidenceStats);
+        normalizedCells.forEach((cell) => {
+          cellsByKey.set(`${cell.subjectId}::${cell.attributeId}`, cell);
+        });
 
-      const tokenDiagnostics = {
-        ...(result?.tokenDiagnostics || {}),
-        confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-      };
-      const chunkReasonCodes = [
-        ...ensureArray(result?.reasonCodes),
-        ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
-      ];
-      reasonCodes.push(...chunkReasonCodes);
+        const tokenDiagnostics = {
+          ...(result?.tokenDiagnostics || {}),
+          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+        };
+        const chunkReasonCodes = [
+          ...ensureArray(result?.reasonCodes),
+          ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+        ];
+        reasonCodes.push(...chunkReasonCodes);
 
-      const retryCount = Number(result?.retries || 0);
-      for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+        const retryCount = Number(result?.retries || 0);
+        for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+          chunkTrace.push({
+            chunkId: current.chunkId,
+            event: "retried",
+            timestamp: nowIso(),
+            retryIndex,
+            reason: "call_retry",
+            depth: Number(current?.depth || 0),
+          });
+        }
+
         chunkTrace.push({
           chunkId: current.chunkId,
-          event: "retried",
+          event: "completed",
           timestamp: nowIso(),
-          retryIndex,
-          reason: "call_retry",
           depth: Number(current?.depth || 0),
+          outputSize: normalizedCells.length,
+          outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
+          finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
         });
-      }
 
-      chunkTrace.push({
-        chunkId: current.chunkId,
-        event: "completed",
-        timestamp: nowIso(),
-        depth: Number(current?.depth || 0),
-        outputSize: normalizedCells.length,
-        outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
-        finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
-      });
-
-      diagnostics.push({
-        chunkId: current.chunkId,
-        parentId: current.parentId || null,
-        depth: Number(current?.depth || 0),
-        cellCount: ensureArray(current?.cells).length,
-        retries: retryCount,
-        tokenDiagnostics,
-        modelRoute: result.route,
-      });
-    } catch (err) {
-      chunkTrace.push({
-        chunkId: current.chunkId,
-        event: "failed",
-        timestamp: nowIso(),
-        depth: Number(current?.depth || 0),
-        error: clean(err?.message || "chunk_failure"),
-        abortReason: err?.abortReason || null,
-        finishReason: clean(err?.finishReason) || "unknown",
-      });
-      if (ensureArray(current?.cells).length <= 1) {
-        err.chunkId = clean(current?.chunkId) || null;
-        err.chunkDepth = Number(current?.depth || 0);
-        err.chunkSplitDepthMax = Math.max(Number(err?.chunkSplitDepthMax || 0), Number(current?.depth || 0));
-        err.chunkSplitExhausted = Number(current?.depth || 0) > 0;
-        throw err;
+        diagnostics.push({
+          chunkId: current.chunkId,
+          parentId: current.parentId || null,
+          depth: Number(current?.depth || 0),
+          cellCount: ensureArray(current?.cells).length,
+          retries: retryCount,
+          tokenDiagnostics,
+          modelRoute: result.route,
+        });
+        return {};
+      } catch (err) {
+        chunkTrace.push({
+          chunkId: current.chunkId,
+          event: "failed",
+          timestamp: nowIso(),
+          depth: Number(current?.depth || 0),
+          error: clean(err?.message || "chunk_failure"),
+          abortReason: err?.abortReason || null,
+          finishReason: clean(err?.finishReason) || "unknown",
+        });
+        if (ensureArray(current?.cells).length <= 1) {
+          err.chunkId = clean(current?.chunkId) || null;
+          err.chunkDepth = Number(current?.depth || 0);
+          err.chunkSplitDepthMax = Math.max(Number(err?.chunkSplitDepthMax || 0), Number(current?.depth || 0));
+          err.chunkSplitExhausted = Number(current?.depth || 0) > 0;
+          throw err;
+        }
+        const children = splitMatrixCellChunk(current);
+        if (!children.length) throw err;
+        children.forEach((child) => {
+          manifestMap.set(child.chunkId, toChunkManifestEntry(child));
+        });
+        chunkTrace.push({
+          chunkId: current.chunkId,
+          event: "split",
+          timestamp: nowIso(),
+          depth: Number(current?.depth || 0),
+          parentId: current.chunkId,
+          childIds: children.map((child) => child.chunkId),
+          reason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+        });
+        diagnostics.push({
+          chunkId: current.chunkId,
+          parentId: current.parentId || null,
+          depth: Number(current?.depth || 0),
+          cellCount: ensureArray(current?.cells).length,
+          splitInto: children.map((child) => child.chunkId),
+          splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+          error: clean(err?.message || "chunk_failure"),
+          abortReason: err?.abortReason || null,
+        });
+        return {
+          children,
+          enqueueFront: true,
+        };
       }
-      const children = splitMatrixCellChunk(current);
-      if (!children.length) throw err;
-      children.forEach((child) => {
-        manifestMap.set(child.chunkId, toChunkManifestEntry(child));
-      });
-      chunkTrace.push({
-        chunkId: current.chunkId,
-        event: "split",
-        timestamp: nowIso(),
-        depth: Number(current?.depth || 0),
-        parentId: current.chunkId,
-        childIds: children.map((child) => child.chunkId),
-        reason: clean(err?.reasonCode || err?.message || "chunk_failure"),
-      });
-      diagnostics.push({
-        chunkId: current.chunkId,
-        parentId: current.parentId || null,
-        depth: Number(current?.depth || 0),
-        cellCount: ensureArray(current?.cells).length,
-        splitInto: children.map((child) => child.chunkId),
-        splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
-        error: clean(err?.message || "chunk_failure"),
-        abortReason: err?.abortReason || null,
-      });
-      for (let idx = children.length - 1; idx >= 0; idx -= 1) {
-        queue.unshift(children[idx]);
-      }
-    }
-  }
+    },
+  });
 
   const completedCells = allCells.map((cell) => (
     cellsByKey.get(cell.key) || {
@@ -314,6 +328,13 @@ async function gatherMatrixChunk({
     diagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
   );
   const modelRoute = diagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
+  diagnostics.sort((a, b) => String(a?.chunkId || "").localeCompare(String(b?.chunkId || "")));
+  chunkTrace.sort((a, b) => {
+    const chunkCmp = String(a?.chunkId || "").localeCompare(String(b?.chunkId || ""));
+    if (chunkCmp !== 0) return chunkCmp;
+    return String(a?.event || "").localeCompare(String(b?.event || ""));
+  });
+
   return {
     cells: completedCells,
     reasonCodes: normalizeReasonCodes(reasonCodes),
@@ -322,6 +343,8 @@ async function gatherMatrixChunk({
     chunkManifest: makeChunkManifest([...manifestMap.values()]),
     tokenDiagnostics: aggregatedTokens,
     modelRoute,
+    chunkConcurrency,
+    peakWorkerCount: Number(pool?.peakWorkerCount || 0),
   };
 }
 
@@ -362,6 +385,8 @@ export async function runStage(context = {}) {
         chunkTrace: matrix.chunkTrace,
         chunkManifest: matrix.chunkManifest,
         chunkTruncationRate: Number(matrix?.tokenDiagnostics?.outputTruncatedRate || 0),
+        chunkConcurrency: Number(matrix?.chunkConcurrency || 1),
+        peakWorkerCount: Number(matrix?.peakWorkerCount || 1),
         ...chunkSummary,
         retries: Number(matrix?.tokenDiagnostics?.retries || 0),
         tokenDiagnostics: matrix.tokenDiagnostics,
@@ -417,6 +442,10 @@ Return JSON:
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
     liveSearch: false,
+    callContext: {
+      chunkId: "scorecard",
+      promptVersion: PROMPT_VERSION,
+    },
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 

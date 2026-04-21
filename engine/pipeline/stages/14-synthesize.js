@@ -1,4 +1,5 @@
 import { callActorJson, clean, ensureArray } from "./common.js";
+import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_14_synthesize";
 export const STAGE_TITLE = "Synthesize";
@@ -85,16 +86,16 @@ function compactCriticSummary(state = {}) {
 function buildFinalAssessmentSnapshot(state = {}) {
   if (clean(state?.outputType).toLowerCase() === "matrix") {
     const cells = ensureArray(state?.resolved?.assessment?.matrix?.cells || state?.assessment?.matrix?.cells);
-    return cells.slice(0, 220).map((cell) => ({
+    return cells.map((cell) => ({
       unitKey: `${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`,
       subjectId: clean(cell?.subjectId),
       attributeId: clean(cell?.attributeId),
       value: clean(cell?.value),
-      full: clean(cell?.full).slice(0, 900),
+      full: clean(cell?.full),
       confidence: clean(cell?.confidence),
       confidenceReason: clean(cell?.confidenceReason),
       missingEvidence: clean(cell?.missingEvidence),
-      sources: ensureArray(cell?.sources).slice(0, 6).map((source) => ({
+      sources: ensureArray(cell?.sources).map((source) => ({
         name: clean(source?.name),
         url: clean(source?.url),
       })),
@@ -112,11 +113,11 @@ function buildFinalAssessmentSnapshot(state = {}) {
     score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
     confidence: clean(unit?.confidence),
     confidenceReason: clean(unit?.confidenceReason),
-    brief: clean(unit?.brief).slice(0, 420),
-    full: clean(unit?.full).slice(0, 900),
+    brief: clean(unit?.brief),
+    full: clean(unit?.full),
     missingEvidence: clean(unit?.missingEvidence),
     risks: clean(unit?.risks),
-    sources: ensureArray(unit?.sources).slice(0, 6).map((source) => ({
+    sources: ensureArray(unit?.sources).map((source) => ({
       name: clean(source?.name),
       url: clean(source?.url),
     })),
@@ -124,15 +125,15 @@ function buildFinalAssessmentSnapshot(state = {}) {
 }
 
 function buildFlagOutcomesSnapshot(state = {}) {
-  return ensureArray(state?.resolved?.flagOutcomes).slice(0, 180).map((outcome) => ({
+  return ensureArray(state?.resolved?.flagOutcomes).map((outcome) => ({
     flagId: clean(outcome?.flagId),
     unitKey: clean(outcome?.flag?.unitKey),
     severity: clean(outcome?.flag?.severity),
     category: clean(outcome?.flag?.category),
     resolved: !!outcome?.resolved,
     disposition: clean(outcome?.disposition),
-    analystNote: clean(outcome?.analystNote).slice(0, 320),
-    mitigationNote: clean(outcome?.mitigationNote).slice(0, 240),
+    analystNote: clean(outcome?.analystNote),
+    mitigationNote: clean(outcome?.mitigationNote),
   }));
 }
 
@@ -154,6 +155,14 @@ export async function runStage(context = {}) {
   const criticSummary = compactCriticSummary(state);
   const finalAssessment = buildFinalAssessmentSnapshot(state);
   const flagOutcomes = buildFlagOutcomesSnapshot(state);
+  const stageBudget = runtime?.budgets?.[STAGE_ID] || {};
+  const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
+  const tokenBudget = isMatrix
+    ? Math.max(20000, Number(stageBudget?.matrixTokenBudget || stageBudget?.tokenBudget || 120000))
+    : Math.max(6000, Number(stageBudget?.scorecardTokenBudget || stageBudget?.tokenBudget || 12000));
+  const timeoutMs = isMatrix
+    ? Math.max(60000, Number(stageBudget?.matrixTimeoutMs || stageBudget?.timeoutMs || 120000))
+    : Math.max(45000, Number(stageBudget?.scorecardTimeoutMs || stageBudget?.timeoutMs || 60000));
   const prompt = `Produce the final executive synthesis.
 Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
@@ -187,25 +196,44 @@ Return JSON:
   }]
 }
 Final assessment snapshot:
-${JSON.stringify(finalAssessment).slice(0, 32000)}
+${JSON.stringify(finalAssessment)}
 Critic summary:
 ${JSON.stringify(criticSummary)}
 Flag outcomes:
-${JSON.stringify(flagOutcomes).slice(0, 14000)}`;
+${JSON.stringify(flagOutcomes)}`;
 
-  const result = await callActorJson({
-    state,
-    runtime,
-    stageId: STAGE_ID,
-    actor: "analyst",
-    systemPrompt: runtime?.prompts?.analystSynthesis || runtime?.prompts?.analyst || "You provide final executive synthesis.",
-    userPrompt: prompt,
-    tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 6000,
-    timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 60000,
-    maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
-    liveSearch: false,
-    schemaHint: '{"executiveSummary":"","decisionImplication":"","dissent":"","decisionAnswer":"","closestThreats":"","whitespace":"","strategicClassification":"","keyRisks":"","providerAgreementHighlights":"","subjectSummaries":[{"subjectId":"","summary":"","strengths":"","risks":"","recommendedAction":""}]}',
-  });
+  let result;
+  try {
+    result = await callActorJson({
+      state,
+      runtime,
+      stageId: STAGE_ID,
+      actor: "analyst",
+      systemPrompt: runtime?.prompts?.analystSynthesis || runtime?.prompts?.analyst || "You provide final executive synthesis.",
+      userPrompt: prompt,
+      tokenBudget,
+      timeoutMs,
+      maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
+      liveSearch: false,
+      allowCompaction: false,
+      schemaHint: '{"executiveSummary":"","decisionImplication":"","dissent":"","decisionAnswer":"","closestThreats":"","whitespace":"","strategicClassification":"","keyRisks":"","providerAgreementHighlights":"","subjectSummaries":[{"subjectId":"","summary":"","strengths":"","risks":"","recommendedAction":""}]}',
+    });
+  } catch (err) {
+    const existingCodes = normalizeReasonCodes([
+      ...(err?.reasonCodes || []),
+      clean(err?.reasonCode),
+    ]);
+    const isOversize = existingCodes.includes(REASON_CODES.PROMPT_TOKEN_OVER_BUDGET)
+      || existingCodes.includes(REASON_CODES.PROMPT_COMPACTION_EXHAUSTED);
+    if (!isOversize) throw err;
+    const reasonCodes = normalizeReasonCodes([
+      ...existingCodes,
+      REASON_CODES.STAGE_14_OVERSIZE_ABORT,
+    ]);
+    err.reasonCode = REASON_CODES.STAGE_14_OVERSIZE_ABORT;
+    err.reasonCodes = reasonCodes;
+    throw err;
+  }
 
   const synthesis = {
     executiveSummary: clean(result?.parsed?.executiveSummary || result?.parsed?.decisionAnswer),

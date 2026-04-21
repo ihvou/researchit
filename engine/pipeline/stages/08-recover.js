@@ -4,12 +4,16 @@ import {
   clean,
   combineTokenDiagnostics,
   ensureArray,
-  fabricationSignalFromSources,
+  fabricationAssessmentFromSources,
   normalizeArguments,
   normalizeConfidence,
-  normalizeSources,
 } from "./common.js";
 import { REASON_CODES } from "../contracts/reason-codes.js";
+import {
+  aggregateVerificationCounters,
+  verifySourcesForUnit,
+} from "../../lib/sources/verify-source.js";
+import { runChunkPool } from "../../lib/runtime/chunk-pool.js";
 
 export const STAGE_ID = "stage_08_recover";
 export const STAGE_TITLE = "Targeted Recovery";
@@ -283,19 +287,28 @@ function normalizeScorecardPatch(parsed = {}, options = {}) {
   const confidenceStats = options?.confidenceStats || { coerced: 0 };
   const providerGroundedCount = groundedSources.length;
   const liveSearchUsed = options?.liveSearchUsed === true;
+  const callFailedGrounding = options?.callFailedGrounding === true;
   return ensureArray(parsed?.dimensions).map((unit) => {
     const grounded = annotateSourcesWithGrounding(unit?.sources || [], groundedSources);
+    const fabricationAssessment = fabricationAssessmentFromSources(grounded.sources, {
+      liveSearchUsed,
+      groundedSourceCount: providerGroundedCount,
+      callFailedGrounding,
+    });
+    const sourcesWithSignal = grounded.sources.map((source) => ({
+      ...source,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason || undefined,
+    }));
     return {
     id: clean(unit?.id || unit?.unitId),
     brief: clean(unit?.brief),
     full: clean(unit?.full),
     confidence: normalizeConfidence(unit?.confidence, confidenceStats),
     confidenceReason: clean(unit?.confidenceReason),
-    sources: grounded.sources,
-    fabricationSignal: fabricationSignalFromSources(grounded.sources, {
-      liveSearchUsed,
-      groundedSourceCount: providerGroundedCount,
-    }),
+    sources: sourcesWithSignal,
+    fabricationSignal: fabricationAssessment.signal,
+    fabricationSignalReason: fabricationAssessment.reason,
     arguments: normalizeArguments(unit?.arguments || {}, `recover-${clean(unit?.id || unit?.unitId)}`),
     risks: clean(unit?.risks),
     missingEvidence: clean(unit?.missingEvidence),
@@ -308,8 +321,19 @@ function normalizeMatrixPatch(parsed = {}, options = {}) {
   const confidenceStats = options?.confidenceStats || { coerced: 0 };
   const providerGroundedCount = groundedSources.length;
   const liveSearchUsed = options?.liveSearchUsed === true;
+  const callFailedGrounding = options?.callFailedGrounding === true;
   return ensureArray(parsed?.cells).map((cell) => {
     const grounded = annotateSourcesWithGrounding(cell?.sources || [], groundedSources);
+    const fabricationAssessment = fabricationAssessmentFromSources(grounded.sources, {
+      liveSearchUsed,
+      groundedSourceCount: providerGroundedCount,
+      callFailedGrounding,
+    });
+    const sourcesWithSignal = grounded.sources.map((source) => ({
+      ...source,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason || undefined,
+    }));
     return {
     subjectId: clean(cell?.subjectId),
     attributeId: clean(cell?.attributeId),
@@ -317,11 +341,9 @@ function normalizeMatrixPatch(parsed = {}, options = {}) {
     full: clean(cell?.full),
     confidence: normalizeConfidence(cell?.confidence, confidenceStats),
     confidenceReason: clean(cell?.confidenceReason),
-    sources: grounded.sources,
-    fabricationSignal: fabricationSignalFromSources(grounded.sources, {
-      liveSearchUsed,
-      groundedSourceCount: providerGroundedCount,
-    }),
+    sources: sourcesWithSignal,
+    fabricationSignal: fabricationAssessment.signal,
+    fabricationSignalReason: fabricationAssessment.reason,
     arguments: normalizeArguments(cell?.arguments || {}, `recover-${clean(cell?.subjectId)}-${clean(cell?.attributeId)}`),
     risks: clean(cell?.risks),
     missingEvidence: clean(cell?.missingEvidence),
@@ -349,6 +371,10 @@ function computeGroundingCoverage(units = []) {
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const reasonCodes = [];
+  const fetchSource = runtime?.transport?.fetchSource;
+  const verifyBudget = runtime?.budgets?.stage_06_source_verify || {};
+  const verifyTimeoutMs = Math.max(4000, Number(verifyBudget?.sourceTimeoutMs || 12000));
+  const verifyResolveTimeoutMs = Math.max(2500, Number(verifyBudget?.resolveTimeoutMs || 9000));
 
   if (state?.outputType === "matrix") {
     const subjects = ensureArray(state?.request?.matrix?.subjects);
@@ -388,15 +414,24 @@ export async function runStage(context = {}) {
       })),
     }));
 
-    const groupResults = await Promise.all(groups.map(async (group) => {
-      chunkTrace.push({
-        chunkId: group.chunkId,
-        event: "started",
-        timestamp: nowIso(),
-        depth: Number(group?.depth || 0),
-        cellCount: ensureArray(group?.cells).length,
-      });
-      const prompt = `Objective: ${clean(state?.request?.objective)}
+    const envConcurrency = Number(globalThis?.process?.env?.RESEARCHIT_STAGE_08_CHUNK_CONCURRENCY || 0);
+    const chunkConcurrency = Math.max(
+      1,
+      Number(runtime?.budgets?.[STAGE_ID]?.chunkConcurrency || envConcurrency || 3)
+    );
+
+    const pool = await runChunkPool({
+      initialChunks: groups,
+      concurrency: chunkConcurrency,
+      processChunk: async (group) => {
+        chunkTrace.push({
+          chunkId: group.chunkId,
+          event: "started",
+          timestamp: nowIso(),
+          depth: Number(group?.depth || 0),
+          cellCount: ensureArray(group?.cells).length,
+        });
+        const prompt = `Objective: ${clean(state?.request?.objective)}
 Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
 Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
 Role context: ${clean(state?.request?.roleContext) || "not provided"}
@@ -420,81 +455,127 @@ Rules:
 
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 
-      try {
-        const result = await callActorJson({
-          state,
-          runtime,
-          stageId: STAGE_ID,
-          actor: "analyst",
-          systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
-          userPrompt: prompt,
-          tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
-          timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
-          maxRetries: 1,
-          liveSearch: true,
-          schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
-        });
-        const confidenceStats = { coerced: 0 };
-        const patches = normalizeMatrixPatch(result?.parsed, {
-          groundedSources: result?.meta?.groundedSources || [],
-          liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
-          confidenceStats,
-        });
-        const tokenDiagnostics = {
-          ...(result?.tokenDiagnostics || {}),
-          confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
-        };
-        const reasonCodes = [
-          ...ensureArray(result?.reasonCodes),
-          ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
-        ];
-        const retryCount = Number(result?.retries || 0);
-        for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+        try {
+          const result = await callActorJson({
+            state,
+            runtime,
+            stageId: STAGE_ID,
+            actor: "analyst",
+            systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence.",
+            userPrompt: prompt,
+            tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
+            timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
+            maxRetries: 1,
+            liveSearch: true,
+            callContext: {
+              chunkId: group.chunkId,
+              promptVersion: PROMPT_VERSION,
+            },
+            schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+          });
+          const confidenceStats = { coerced: 0 };
+          const patches = normalizeMatrixPatch(result?.parsed, {
+            groundedSources: result?.meta?.groundedSources || [],
+            liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+            callFailedGrounding: result?.meta?.callFailedGrounding === true,
+            confidenceStats,
+          });
+          const tokenDiagnostics = {
+            ...(result?.tokenDiagnostics || {}),
+            confidenceScaleCoerced: Number(confidenceStats.coerced || 0),
+          };
+          const reasonCodes = [
+            ...ensureArray(result?.reasonCodes),
+            ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+          ];
+          const retryCount = Number(result?.retries || 0);
+          for (let retryIndex = 1; retryIndex <= retryCount; retryIndex += 1) {
+            chunkTrace.push({
+              chunkId: group.chunkId,
+              event: "retried",
+              timestamp: nowIso(),
+              retryIndex,
+              reason: "call_retry",
+              depth: Number(group?.depth || 0),
+            });
+          }
           chunkTrace.push({
             chunkId: group.chunkId,
-            event: "retried",
+            event: "completed",
             timestamp: nowIso(),
-            retryIndex,
-            reason: "call_retry",
             depth: Number(group?.depth || 0),
+            outputSize: patches.length,
+            outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
+            finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
           });
+          return {
+            result: {
+              chunkId: group.chunkId,
+              depth: Number(group?.depth || 0),
+              cellCount: ensureArray(group?.cells).length,
+              patches,
+              reasonCodes,
+              tokenDiagnostics,
+              citations: computeGroundingCoverage(patches),
+              route: result?.route || null,
+              retries: retryCount,
+              groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
+            },
+          };
+        } catch (err) {
+          chunkTrace.push({
+            chunkId: group.chunkId,
+            event: "failed",
+            timestamp: nowIso(),
+            depth: Number(group?.depth || 0),
+            error: clean(err?.message || "chunk_failure"),
+            abortReason: err?.abortReason || null,
+            finishReason: clean(err?.finishReason) || "unknown",
+          });
+          throw err;
         }
-        chunkTrace.push({
-          chunkId: group.chunkId,
-          event: "completed",
-          timestamp: nowIso(),
-          depth: Number(group?.depth || 0),
-          outputSize: patches.length,
-          outputTokens: Number(tokenDiagnostics?.outputTokens || 0),
-          finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
-        });
-        return {
-          chunkId: group.chunkId,
-          depth: Number(group?.depth || 0),
-          cellCount: ensureArray(group?.cells).length,
-          patches,
-          reasonCodes,
-          tokenDiagnostics,
-          citations: computeGroundingCoverage(patches),
-          route: result?.route || null,
-          retries: retryCount,
-          groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
-        };
-      } catch (err) {
-        chunkTrace.push({
-          chunkId: group.chunkId,
-          event: "failed",
-          timestamp: nowIso(),
-          depth: Number(group?.depth || 0),
-          error: clean(err?.message || "chunk_failure"),
-          abortReason: err?.abortReason || null,
-          finishReason: clean(err?.finishReason) || "unknown",
-        });
-        throw err;
-      }
-    }));
+      },
+    });
+    const groupResults = ensureArray(pool?.results);
 
     const patches = groupResults.flatMap((r) => r.patches);
+    let recoveryVerification = null;
+    if (typeof fetchSource === "function") {
+      const verifyCache = new Map();
+      const unitsNeedingVerify = patches.filter((cell) => (
+        ensureArray(cell?.sources).some((source) => !clean(source?.verificationTier))
+      ));
+      if (unitsNeedingVerify.length) {
+        const countersByUnit = await Promise.all(unitsNeedingVerify.map((cell) => (
+          verifySourcesForUnit(cell, {
+            fetchSource,
+            cache: verifyCache,
+            timeoutMs: verifyTimeoutMs,
+            resolveTimeoutMs: verifyResolveTimeoutMs,
+          })
+        )));
+        recoveryVerification = aggregateVerificationCounters(countersByUnit);
+      }
+    }
+
+    let missingTierSourceCount = 0;
+    const missingTierSampleCellIds = [];
+    patches.forEach((cell) => {
+      const cellKey = `${clean(cell?.subjectId)}::${clean(cell?.attributeId)}`;
+      ensureArray(cell?.sources).forEach((source) => {
+        if (clean(source?.verificationTier)) return;
+        missingTierSourceCount += 1;
+        if (missingTierSampleCellIds.length < 6 && cellKey) {
+          missingTierSampleCellIds.push(cellKey);
+        }
+        source.verificationTier = "unverifiable";
+        source.citationStatus = clean(source?.citationStatus || "unverifiable") || "unverifiable";
+      });
+    });
+    if (missingTierSourceCount > 0) {
+      reasonCodes.push(REASON_CODES.SOURCE_MISSING_VERIFICATION_TIER);
+    }
+
     const matrixReasonCodes = groupResults.flatMap((r) => r.reasonCodes);
     const tokenDiagnosticsList = groupResults.map((r) => r.tokenDiagnostics);
     const modelRoutes = groupResults.map((r) => r.route).filter(Boolean);
@@ -514,6 +595,12 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
       acc.unresolved += Number(stats?.unresolved || 0);
       return acc;
     }, { total: 0, resolved: 0, unresolved: 0 });
+    groupResults.sort((a, b) => String(a?.chunkId || "").localeCompare(String(b?.chunkId || "")));
+    chunkTrace.sort((a, b) => {
+      const chunkCmp = String(a?.chunkId || "").localeCompare(String(b?.chunkId || ""));
+      if (chunkCmp !== 0) return chunkCmp;
+      return String(a?.event || "").localeCompare(String(b?.event || ""));
+    });
     const modelRoute = modelRoutes[0] || null;
 
     return {
@@ -555,6 +642,11 @@ Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","con
         chunkTruncationRate: Number(aggregatedTokens?.outputTruncatedRate || 0),
         tokenDiagnostics: aggregatedTokens,
         modelRoute,
+        chunkConcurrency,
+        peakWorkerCount: Number(pool?.peakWorkerCount || 1),
+        recoveryVerification,
+        missingTierSourceCount,
+        missingTierSampleCellIds,
       },
       modelRoute,
       tokens: aggregatedTokens,
@@ -613,6 +705,10 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
     maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 2,
     liveSearch: true,
+    callContext: {
+      chunkId: "scorecard",
+      promptVersion: PROMPT_VERSION,
+    },
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
   });
 
@@ -620,8 +716,46 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
   const patch = normalizeScorecardPatch(result?.parsed, {
     groundedSources: result?.meta?.groundedSources || [],
     liveSearchUsed: result?.tokenDiagnostics?.liveSearchUsed === true,
+    callFailedGrounding: result?.meta?.callFailedGrounding === true,
     confidenceStats,
   });
+  let recoveryVerification = null;
+  if (typeof fetchSource === "function") {
+    const verifyCache = new Map();
+    const unitsNeedingVerify = patch.filter((unit) => (
+      ensureArray(unit?.sources).some((source) => !clean(source?.verificationTier))
+    ));
+    if (unitsNeedingVerify.length) {
+      const countersByUnit = await Promise.all(unitsNeedingVerify.map((unit) => (
+        verifySourcesForUnit(unit, {
+          fetchSource,
+          cache: verifyCache,
+          timeoutMs: verifyTimeoutMs,
+          resolveTimeoutMs: verifyResolveTimeoutMs,
+        })
+      )));
+      recoveryVerification = aggregateVerificationCounters(countersByUnit);
+    }
+  }
+
+  let missingTierSourceCount = 0;
+  const missingTierSampleUnitIds = [];
+  patch.forEach((unit) => {
+    const unitId = clean(unit?.id);
+    ensureArray(unit?.sources).forEach((source) => {
+      if (clean(source?.verificationTier)) return;
+      missingTierSourceCount += 1;
+      if (missingTierSampleUnitIds.length < 6 && unitId) {
+        missingTierSampleUnitIds.push(unitId);
+      }
+      source.verificationTier = "unverifiable";
+      source.citationStatus = clean(source?.citationStatus || "unverifiable") || "unverifiable";
+    });
+  });
+  if (missingTierSourceCount > 0) {
+    reasonCodes.push(REASON_CODES.SOURCE_MISSING_VERIFICATION_TIER);
+  }
+
   const scorecardReasonCodes = [
     ...reasonCodes,
     ...ensureArray(result?.reasonCodes),
@@ -654,6 +788,9 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics,
+      recoveryVerification,
+      missingTierSourceCount,
+      missingTierSampleUnitIds,
     },
     io: {
       prompt,

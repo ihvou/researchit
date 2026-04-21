@@ -191,6 +191,10 @@ function mergeNativeMatrix(memory = {}, merged = {}) {
 function mergeStats(bundle = {}, baseline = {}) {
   const lowCount = (units = []) => ensureArray(units).filter((unit) => clean(unit?.confidence).toLowerCase() === "low").length;
   const sourcedCount = (units = []) => ensureArray(units).filter((unit) => ensureArray(unit?.sources).length > 0).length;
+  const contradictionCount = (units = []) => ensureArray(units).filter((unit) => (
+    ensureArray(unit?.arguments?.supporting).length > 0
+    && ensureArray(unit?.arguments?.limiting).length > 0
+  )).length;
 
   const extractUnits = (item = {}) => {
     if (item?.scorecard?.dimensions) return ensureArray(item.scorecard.dimensions);
@@ -206,6 +210,8 @@ function mergeStats(bundle = {}, baseline = {}) {
     prevLow: lowCount(previousUnits),
     currentCovered: sourcedCount(currentUnits),
     prevCovered: sourcedCount(previousUnits),
+    currentContradictions: contradictionCount(currentUnits),
+    prevContradictions: contradictionCount(previousUnits),
   };
 }
 
@@ -213,11 +219,22 @@ function shouldRejectReconcile(candidate = {}, baseline = {}, threshold = 1) {
   const stats = mergeStats(candidate, baseline);
   const confidenceLift = Math.max(0, stats.prevLow - stats.currentLow);
   const sourceLift = Math.max(0, stats.currentCovered - stats.prevCovered);
-  const contradictionReduced = true;
+  const contradictionReduced = stats.currentContradictions < stats.prevContradictions;
+  const contradictionDelta = stats.prevContradictions - stats.currentContradictions;
   const lowReduced = stats.currentLow < stats.prevLow;
 
   const reject = confidenceLift < threshold && !lowReduced && sourceLift <= 0 && !contradictionReduced;
-  return { reject, stats };
+  return {
+    reject,
+    stats: {
+      ...stats,
+      confidenceLift,
+      sourceLift,
+      contradictionReduced,
+      contradictionDelta,
+      threshold,
+    },
+  };
 }
 
 export async function runStage(context = {}) {
@@ -225,6 +242,7 @@ export async function runStage(context = {}) {
   const thresholds = runtime?.config?.deepAssist?.agreementThresholds || { high: 0.72, low: 0.38 };
   let merged;
   let reasonCodes = [];
+  let reconcileDiagnostics = null;
 
   const mergeMode = clean(state?.mode).toLowerCase();
   if (mergeMode === "deep-research-x3" || mergeMode === "deep-assist") {
@@ -243,9 +261,13 @@ export async function runStage(context = {}) {
       ? { matrix: { cells: ensureArray(memory?.matrix?.cells) } }
       : { scorecard: { dimensions: ensureArray(memory?.scorecard?.dimensions) } };
     const reconcile = shouldRejectReconcile(merged, baseline, Number(runtime?.config?.limits?.reconcileMinLift || 1));
+    reconcileDiagnostics = reconcile?.stats || null;
     if (reconcile.reject) {
       merged = baseline;
       reasonCodes.push(REASON_CODES.RECONCILE_REJECTED_NO_LIFT);
+      if (mergeMode === "native") {
+        reasonCodes.push(REASON_CODES.RECONCILE_SCORED_RETAINED_EVIDENCE_MERGED);
+      }
     }
   }
 
@@ -260,6 +282,7 @@ export async function runStage(context = {}) {
       mode: state?.mode,
       outputType: state?.outputType,
       providerContributions: ensureArray(merged?.providerContributions),
+      reconcile: reconcileDiagnostics,
     },
   };
 }

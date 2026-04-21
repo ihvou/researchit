@@ -241,6 +241,7 @@ async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, ma
 
   return {
     text,
+    rawResponse: data,
     meta: {
       model,
       liveSearchUsed: false,
@@ -277,6 +278,7 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
   const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
   return {
     text,
+    rawResponse: data,
     meta: {
       model,
       liveSearchUsed: false,
@@ -335,6 +337,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
 
     return {
       text,
+      rawResponse: data,
       sources: sourcesFromUrls(extractWebSearchUrls(data)),
       meta: {
         model,

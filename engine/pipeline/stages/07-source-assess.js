@@ -14,6 +14,11 @@ export const STAGE_TITLE = "Source Assessment";
 function assessSourceStatus(source = {}) {
   const sourceType = clean(source?.sourceType).toLowerCase();
   if (sourceType === "marketing" || sourceType === "press_release") return "excluded_marketing";
+  const fabricationSignal = clean(source?.fabricationSignal).toLowerCase();
+  const fabricationSignalReason = clean(source?.fabricationSignalReason).toLowerCase();
+  if (fabricationSignal === "unknown" || fabricationSignalReason === "grounded_set_unavailable") {
+    return "grounding_unavailable";
+  }
 
   const citationStatus = normalizeCitationStatus(source?.citationStatus);
   if (citationStatus === "verified") {

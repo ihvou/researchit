@@ -17,6 +17,16 @@ export const REASON_CODES = {
   PARTIAL_PAYLOAD_REJECTED: "partial_payload_rejected",
   CONFIDENCE_SCALE_COERCED: "confidence_scale_coerced",
   DEFEND_NOTE_MISSING: "defend_note_missing",
+  DEFEND_MISSING_RESPONSE: "defend_missing_response",
+  PLAN_UNIT_COUNT_MISMATCH: "plan_unit_count_mismatch",
+  PLAN_TRUNCATION_RETRIED: "plan_truncation_retried",
+  STAGE_14_OVERSIZE_ABORT: "stage_14_oversize_abort",
+  GROUNDING_EXTRACTION_FAILED: "grounding_extraction_failed",
+  STAGE_03B_NO_SEARCH_PERFORMED: "stage_03b_no_search_performed",
+  SOURCE_MISSING_VERIFICATION_TIER: "source_missing_verification_tier",
+  SOURCE_GROUNDING_UNAVAILABLE: "source_grounding_unavailable",
+  RECONCILE_SCORED_RETAINED_EVIDENCE_MERGED: "reconcile_scored_retained_evidence_merged",
+  PIPELINE_STRUCTURAL_FAILURE: "pipeline_structural_failure",
 
   CACHE_HIT: "cache_hit",
 

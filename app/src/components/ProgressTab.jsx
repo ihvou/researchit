@@ -355,7 +355,7 @@ function getStepState(step, idx, currentIdx, uc, stageRecord = null) {
   }
   if (currentIdx > idx) return "done";
   if (currentIdx === idx && uc.status === "analyzing") return "active";
-  if (uc.status === "error" && currentIdx <= idx) return "failed";
+  if (uc.status === "error" && currentIdx >= 0 && currentIdx <= idx) return "failed";
   return "pending";
 }
 
@@ -719,7 +719,9 @@ export default function ProgressTab({ uc, outputMode = "scorecard" }) {
   const flow = flowByEvidenceMode(outputMode === "matrix" ? MATRIX_FLOW : HYBRID_FLOW, evidenceMode);
   const rank = phaseRankMap(flow);
   const resolvedPhase = resolveProgressPhase(uc.phase, outputMode);
-  const currentIdx = rank[resolvedPhase] ?? 0;
+  const currentIdx = Object.prototype.hasOwnProperty.call(rank, resolvedPhase)
+    ? rank[resolvedPhase]
+    : -1;
   const stageRecords = buildStageRecordMap(uc);
 
   return (

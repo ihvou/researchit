@@ -735,7 +735,7 @@ test("stage 02 does not fail on matrix cell-level planner ids and reports diagno
   assert.equal(result?.statePatch?.plan?.units?.[0]?.unitId, "attribute-1");
 });
 
-test("stage 13 marks omitted flag outcomes as no_response without fabricated dismissal", async () => {
+test("stage 13 marks omitted flag outcomes as unresolved_missing_response when retry is exhausted", async () => {
   const runtime = {
     config: { models: baseModels() },
     budgets: {
@@ -786,9 +786,9 @@ test("stage 13 marks omitted flag outcomes as no_response without fabricated dis
 
   assert.equal(outcomes.length, 2);
   assert.equal(omitted?.resolved, false);
-  assert.equal(omitted?.disposition, "no_response");
+  assert.equal(omitted?.disposition, "unresolved_missing_response");
   assert.equal(omitted?.responseMissing, true);
-  assert.match(String(omitted?.analystNote || ""), /No analyst response returned/i);
+  assert.match(String(omitted?.analystNote || ""), /retry exhausted/i);
 });
 
 test("stage 13 keeps resolved outcomes when analyst note is missing and emits reason code", async () => {
