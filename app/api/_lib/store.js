@@ -19,6 +19,13 @@ function getMemoryStore() {
   return globalThis.__RESEARCHIT_MEMORY_STORE__;
 }
 
+function getMemoryLocks() {
+  if (!globalThis.__RESEARCHIT_MEMORY_LOCKS__) {
+    globalThis.__RESEARCHIT_MEMORY_LOCKS__ = new Map();
+  }
+  return globalThis.__RESEARCHIT_MEMORY_LOCKS__;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -60,11 +67,30 @@ async function kvCommand(args = []) {
 }
 
 async function withKvLock(lockKey, fn, options = {}) {
+  const maxWaitMs = Math.max(300, Number(options?.maxWaitMs) || KV_LOCK_WAIT_MS);
+
   if (!KV_ENABLED) {
-    return fn();
+    const owner = crypto.randomUUID();
+    const deadline = Date.now() + maxWaitMs;
+    const locks = getMemoryLocks();
+    while (Date.now() <= deadline) {
+      if (!locks.has(lockKey)) {
+        locks.set(lockKey, owner);
+        try {
+          return await fn();
+        } finally {
+          if (locks.get(lockKey) === owner) {
+            locks.delete(lockKey);
+          }
+        }
+      }
+      await sleep(20 + Math.floor(Math.random() * 15));
+    }
+    const err = new Error("Storage is busy. Please retry.");
+    err.code = "STORE_LOCK_TIMEOUT";
+    throw err;
   }
   const ttlSeconds = Math.max(2, Number(options?.ttlSeconds) || KV_LOCK_TTL_SECONDS);
-  const maxWaitMs = Math.max(300, Number(options?.maxWaitMs) || KV_LOCK_WAIT_MS);
   const owner = crypto.randomUUID();
   const deadline = Date.now() + maxWaitMs;
 
@@ -200,6 +226,10 @@ function rawCallEntryKey(userId, runId, stageId, chunkId, callIndex) {
 
 function rawCallChunkLockKey(userId, runId, stageId, chunkId) {
   return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall-lock:${String(stageId || "").trim()}:${String(chunkId || "default").trim()}`;
+}
+
+function rawCallStageLockKey(userId, runId, stageId) {
+  return `ri:user:${String(userId || "").trim()}:run:${String(runId || "").trim()}:rawcall-stage-lock:${String(stageId || "").trim()}`;
 }
 
 function magicTokenKey(token) {
@@ -541,24 +571,36 @@ export async function appendRawProviderCall(userId, runId, stageId, payload = {}
       };
       await setValue(entryKey, normalizedPayload, { ttlSeconds });
 
-      const stageEntry = {
-        key: entryKey,
-        chunkId: safeChunkId,
-        callIndex: nextCallIndex,
-        provider: normalizedPayload.provider,
-        model: normalizedPayload.model,
-        requestHash: normalizedPayload.requestHash,
-        promptVersion: normalizedPayload.promptVersion,
-        storedAt: normalizedPayload.storedAt,
-      };
-      const nextStageEntries = [...entries, stageEntry];
-      await setValue(stageIndexKey, nextStageEntries, { ttlSeconds });
+      await withKvLock(
+        rawCallStageLockKey(safeUserId, safeRunId, safeStageId),
+        async () => {
+          const stageIndexLatest = await getValue(stageIndexKey);
+          const stageEntries = Array.isArray(stageIndexLatest)
+            ? stageIndexLatest.filter((item) => item && typeof item === "object")
+            : [];
+          const stageEntry = {
+            key: entryKey,
+            chunkId: safeChunkId,
+            callIndex: nextCallIndex,
+            provider: normalizedPayload.provider,
+            model: normalizedPayload.model,
+            requestHash: normalizedPayload.requestHash,
+            promptVersion: normalizedPayload.promptVersion,
+            storedAt: normalizedPayload.storedAt,
+          };
+          const nextStageEntries = [
+            ...stageEntries.filter((entry) => String(entry?.key || "").trim() !== entryKey),
+            stageEntry,
+          ];
+          await setValue(stageIndexKey, nextStageEntries, { ttlSeconds });
 
-      const runIndexKey = rawCallRunIndexKey(safeUserId, safeRunId);
-      const runIndex = await getValue(runIndexKey);
-      const runStages = Array.isArray(runIndex) ? runIndex.map((item) => String(item || "").trim()).filter(Boolean) : [];
-      const nextRunStages = [...new Set([...runStages, safeStageId])];
-      await setValue(runIndexKey, nextRunStages, { ttlSeconds });
+          const runIndexKey = rawCallRunIndexKey(safeUserId, safeRunId);
+          const runIndex = await getValue(runIndexKey);
+          const runStages = Array.isArray(runIndex) ? runIndex.map((item) => String(item || "").trim()).filter(Boolean) : [];
+          const nextRunStages = [...new Set([...runStages, safeStageId])];
+          await setValue(runIndexKey, nextRunStages, { ttlSeconds });
+        }
+      );
 
       return {
         ok: true,

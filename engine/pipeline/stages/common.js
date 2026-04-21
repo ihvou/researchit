@@ -188,6 +188,7 @@ export async function callActorJson({
   state,
   runtime,
   stageId,
+  routeStageId = "",
   actor,
   systemPrompt,
   userPrompt,
@@ -207,7 +208,7 @@ export async function callActorJson({
 
   const route = resolveActorRoute({
     actor,
-    stageId,
+    stageId: clean(routeStageId) || clean(stageId),
     config: runtime?.config || state?.config || {},
     mode: state?.mode,
     override: routeOverride,

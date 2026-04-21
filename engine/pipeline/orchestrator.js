@@ -1004,24 +1004,147 @@ export async function reprocessStage({
     transport: createReplayTransport(baseRuntime.transport, targetStageId, loadedRawCalls),
   };
 
+  const emitReplayProgress = () => {
+    const onProgress = typeof callbacks?.onProgress === "function" ? callbacks.onProgress : null;
+    if (!onProgress) return;
+    const uiState = toUseCaseState(workingState);
+    onProgress(uiState.phase, uiState);
+  };
+
   let workingState = state;
   const executed = [];
   for (let i = stageIdx; i < STAGES.length; i += 1) {
     const stage = STAGES[i];
     if (!stageEnabled(stage, workingState)) continue;
-    const stageRuntime = clean(stage.id) === targetStageId ? replayRuntime : baseRuntime;
-    const result = await stage.run({ state: workingState, runtime: stageRuntime, callbacks });
-    const reasonCodes = normalizeReasonCodes(result?.reasonCodes || []);
-    workingState = applyStatePatch(workingState, result?.statePatch || {});
-    appendQualityReasonCodes(workingState, reasonCodes);
-    pushReasonCodes(workingState, reasonCodes);
-    executed.push({
+
+    const stageRecord = createStageRecord(stage.id, { title: stage.title });
+    updateStageRecord(workingState, stageRecord);
+    appendProgressRecord(workingState, {
       stageId: stage.id,
-      stageStatus: clean(result?.stageStatus || "ok"),
-      reasonCodes,
-      retries: Number(result?.retries || 0),
-      fromRawReplay: clean(stage.id) === targetStageId,
+      title: stage.title,
+      status: "started",
     });
+    workingState = applyStatePatch(workingState, {
+      ui: {
+        status: "analyzing",
+        phase: stage.id,
+        errorMsg: "",
+      },
+    });
+    emitReplayProgress();
+
+    try {
+      const stageRuntime = clean(stage.id) === targetStageId ? replayRuntime : baseRuntime;
+      const result = await stage.run({ state: workingState, runtime: stageRuntime, callbacks });
+      const reasonCodes = enforceStrictReasonCodeInvariant(
+        workingState,
+        normalizeReasonCodes(result?.reasonCodes || [])
+      );
+
+      workingState = applyStatePatch(workingState, result?.statePatch || {});
+      workingState = applyStatePatch(workingState, {
+        ui: { phase: stage.id },
+      });
+      appendQualityReasonCodes(workingState, reasonCodes);
+      pushReasonCodes(workingState, reasonCodes);
+      if (result?.io) appendIoRecord(workingState, { stageId: stage.id, ...result.io });
+
+      const completedRecord = completeStageRecord(stageRecord, {
+        status: clean(result?.stageStatus || "ok"),
+        reasonCodes,
+        retries: Number(result?.retries || 0),
+        modelRoute: result?.modelRoute || stageRecord.modelRoute,
+        tokens: result?.tokens || null,
+        diagnostics: finalizeStageDiagnostics(
+          result?.diagnostics && typeof result.diagnostics === "object"
+            ? result.diagnostics
+            : {}
+        ),
+      });
+      completedRecord.cost = estimateStageCost({
+        tokens: completedRecord.tokens,
+        modelRoute: completedRecord.modelRoute,
+        config: baseRuntime?.config || workingState?.config || {},
+      });
+      updateStageRecord(workingState, completedRecord);
+      appendCostDiagnostics(workingState, completedRecord);
+
+      appendProgressRecord(workingState, {
+        stageId: stage.id,
+        title: stage.title,
+        status: clean(result?.stageStatus || "ok"),
+        reasonCodes,
+      });
+
+      executed.push({
+        stageId: stage.id,
+        stageStatus: clean(result?.stageStatus || "ok"),
+        reasonCodes,
+        retries: Number(result?.retries || 0),
+        fromRawReplay: clean(stage.id) === targetStageId,
+      });
+      emitReplayProgress();
+    } catch (err) {
+      const reasonCodes = enforceStrictReasonCodeInvariant(workingState, normalizeReasonCodes([
+        ...(Array.isArray(err?.reasonCodes) ? err.reasonCodes : []),
+        clean(err?.reasonCode),
+      ]));
+      const completedRecord = completeStageRecord(stageRecord, {
+        status: "failed",
+        reasonCodes,
+        retries: Number(err?.attempts || 0),
+        diagnostics: finalizeStageDiagnostics({
+          error: clean(err?.message),
+          abortReason: err?.abortReason || null,
+          finishReason: clean(err?.finishReason) || undefined,
+          outputTokens: Number(err?.outputTokens || 0) || undefined,
+          outputTokensCap: Number(err?.outputTokensCap || 0) || undefined,
+          outputTruncated: err?.outputTruncated === true,
+        }),
+      });
+      completedRecord.cost = estimateStageCost({
+        tokens: completedRecord.tokens,
+        modelRoute: completedRecord.modelRoute,
+        config: baseRuntime?.config || workingState?.config || {},
+      });
+      updateStageRecord(workingState, completedRecord);
+      appendCostDiagnostics(workingState, completedRecord);
+
+      appendQualityReasonCodes(workingState, reasonCodes);
+      pushReasonCodes(workingState, reasonCodes);
+      appendFailureCause(workingState, classifyStageFailureCause({
+        err,
+        reasonCodes,
+        diagnostics: completedRecord?.diagnostics || {},
+        stageId: stage.id,
+      }));
+      appendProgressRecord(workingState, {
+        stageId: stage.id,
+        title: stage.title,
+        status: "failed",
+        reasonCodes,
+      });
+      workingState = applyStatePatch(workingState, {
+        ui: {
+          status: "error",
+          phase: stage.id,
+          errorMsg: clean(err?.message) || `Stage failed: ${stage.id}`,
+        },
+      });
+      emitReplayProgress();
+      err.reasonCodes = reasonCodes;
+      throw err;
+    }
+  }
+
+  if (clean(workingState?.ui?.status) !== "error") {
+    workingState = applyStatePatch(workingState, {
+      ui: {
+        status: "complete",
+        phase: STAGE_15_ID,
+      },
+    });
+    emitReplayProgress();
   }
 
   return {

@@ -21,6 +21,8 @@ import { runChunkPool } from "../../lib/runtime/chunk-pool.js";
 export const STAGE_ID = "stage_03b_evidence_web";
 export const STAGE_TITLE = "Evidence Web";
 export const PROMPT_VERSION = "v2";
+const STAGE_ROUTE_RETRIEVE_ID = "stage_03b_evidence_web_retrieve";
+const STAGE_ROUTE_READ_ID = "stage_03b_evidence_web_read";
 
 function nowIso() {
   return new Date().toISOString();
@@ -495,6 +497,7 @@ async function gatherMatrixWeb({
           state,
           runtime,
           stageId: STAGE_ID,
+          routeStageId: STAGE_ROUTE_RETRIEVE_ID,
           actor: "analyst",
           systemPrompt: runtime?.prompts?.analyst || "You produce retrieval query plans.",
           userPrompt: retrievePrompt,
@@ -510,7 +513,6 @@ async function gatherMatrixWeb({
         });
 
         if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted !== true) {
-          reasonCodes.push(REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED);
           chunkTrace.push({
             chunkId: current.chunkId,
             event: "retried",
@@ -552,6 +554,7 @@ async function gatherMatrixWeb({
           state,
           runtime,
           stageId: STAGE_ID,
+          routeStageId: STAGE_ROUTE_READ_ID,
           actor: "analyst",
           systemPrompt: runtime?.prompts?.analyst || "You produce web-backed evidence from a fixed corpus.",
           userPrompt: readPrompt,

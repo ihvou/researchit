@@ -100,7 +100,7 @@ flowchart TD
     PLAN["#02 RESEARCH PLANNING\nGoal: define per-unit scope, queries, source strategy\nActor: Analyst | Model: openai:gpt-5.4\nIn: objective + unit definitions\nReq: build per-unit research plan\nResp: queries, source targets, gap hypotheses\nOut: ResearchPlan"]
     EVROUTER{"evidence\nmode?"}
     MEM_NATIVE["#03a EVIDENCE - MEMORY\nGoal: produce memory-grounded first-pass evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: ResearchPlan + unit briefs\nReq: generate evidence per unit (no web)\nResp: per-unit evidence, scores, sources\nOut: memory evidence bundle"]
-    WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro\nIn: memory bundle + ResearchPlan\nReq: web search + extend evidence per unit\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
+    WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro (retrieve) + openai:gpt-5.4 (read)\nIn: memory bundle + ResearchPlan\nReq: retrieve grounded corpus, then reason only over corpus\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
     EVID_DA["#03c EVIDENCE - DEEP RESEARCH ×3\nGoal: parallel Deep Research calls to 3 providers for cross-validation\nActor: Analyst | Model: openai:o3 + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: ChatGPT Deep Research (o3 + web_search_preview, Responses API); Claude Research (claude-sonnet-4 + web_search, max 20 uses); Gemini Deep Research (gemini-2.5-pro + google_search + thinkingConfig unlimited budget) — all three in parallel\nResp: 3 independent deep-researched evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
     MERGE{{"#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: engine\nIn: evidence bundle(s)\nOut: EvidenceBundle"}}
     SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units/cells and assign calibrated confidence\nActor: Analyst | Model: openai:gpt-5.4 (scorecard)\n       engine (matrix)\nIn: EvidenceBundle + scoring criteria\nReq: score scorecard units against rubric anchors and calibrate confidence\nResp: per-unit assessment with confidence rationale (scorecard)\nOut: AssessedState"]
@@ -190,6 +190,7 @@ Both modes use the same stage graph.
 - Pipeline progress is tracked by canonical stage IDs.
 - Progress tab reflects this stage sequence and stage goals (see Stage Breakdown table).
 - Diagnostics include stage-level status, exact model route used, retries, token usage, and estimated cost.
+- Raw provider payloads are cached for stages 03a/03b/08 and can be replayed through `reprocessStage(...)` after parser/normalizer fixes without spending new model calls.
 - On abort: show failure popup with primary reason code and plain-language explanation; offer Download Debug Log immediately.
 
 ---

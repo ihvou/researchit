@@ -27,7 +27,9 @@ export function resolveActorRoute({ actor = "", stageId = "", config = {}, mode 
   const retrievalStages = new Set([
     "stage_01b_subject_discovery",
     "stage_03b_evidence_web",
+    "stage_03b_evidence_web_retrieve",
     "stage_08_recover",
+    "stage_08_recover_retrieve",
     "stage_14_synthesize",
   ]);
 

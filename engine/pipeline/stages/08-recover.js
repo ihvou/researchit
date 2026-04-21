@@ -18,6 +18,8 @@ import { runChunkPool } from "../../lib/runtime/chunk-pool.js";
 export const STAGE_ID = "stage_08_recover";
 export const STAGE_TITLE = "Targeted Recovery";
 export const PROMPT_VERSION = "v2";
+const STAGE_ROUTE_RETRIEVE_ID = "stage_08_recover_retrieve";
+const STAGE_ROUTE_READ_ID = "stage_08_recover_read";
 
 function nowIso() {
   return new Date().toISOString();
@@ -651,6 +653,7 @@ export async function runStage(context = {}) {
             state,
             runtime,
             stageId: STAGE_ID,
+            routeStageId: STAGE_ROUTE_RETRIEVE_ID,
             actor: "analyst",
             systemPrompt: runtime?.prompts?.analyst || "You produce retrieval query plans for targeted recovery.",
             userPrompt: retrievePrompt,
@@ -667,7 +670,6 @@ export async function runStage(context = {}) {
           });
 
           if (retrieveResult?.meta?.noSearchPerformed === true && group?.searchRetryAttempted !== true) {
-            reasonCodes.push(REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED);
             chunkTrace.push({
               chunkId: group.chunkId,
               event: "retried",
@@ -693,6 +695,7 @@ export async function runStage(context = {}) {
             state,
             runtime,
             stageId: STAGE_ID,
+            routeStageId: STAGE_ROUTE_READ_ID,
             actor: "analyst",
             systemPrompt: runtime?.prompts?.analyst || "You recover targeted evidence from a fixed corpus.",
             userPrompt: readPrompt,
