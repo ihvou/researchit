@@ -7,7 +7,7 @@ test("route preflight fails when retrieval stage is not gemini", () => {
   const config = {
     models: {
       analyst: { provider: "openai", model: "gpt-5.4" },
-      critic: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+      critic: { provider: "anthropic", model: "claude-sonnet-4-6" },
       retrieval: { provider: "openai", model: "gpt-5.4" },
       synthesizer: { provider: "gemini", model: "gemini-2.5-pro" },
     },
@@ -24,7 +24,7 @@ test("route preflight fails deep-research-x3 preflight when required provider is
   const config = {
     models: {
       analyst: { provider: "openai", model: "gpt-5.4" },
-      critic: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+      critic: { provider: "anthropic", model: "claude-sonnet-4-6" },
       retrieval: { provider: "gemini", model: "gemini-2.5-pro" },
       synthesizer: { provider: "gemini", model: "gemini-2.5-pro" },
     },
@@ -32,7 +32,7 @@ test("route preflight fails deep-research-x3 preflight when required provider is
       defaults: { providers: ["chatgpt", "claude"] },
       providers: {
         chatgpt: { analyst: { provider: "openai", model: "gpt-5.4" } },
-        claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-20250514" } },
+        claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-6" } },
       },
     },
   };

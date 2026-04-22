@@ -39,7 +39,7 @@ const HYBRID_FLOW = [
     key: "stage_03c_evidence_deep_assist",
     phase: "stage_03c_evidence_deep_assist",
     title: "Stage 03c - Deep Research ×3 evidence",
-    detail: "Runs ChatGPT Deep Research, Claude Research, and Gemini Deep Research in parallel.",
+    detail: "Runs ChatGPT Deep Research, Gemini Deep Research, and a Claude web-research lane in parallel.",
     modes: ["deep-research-x3", "deep-assist"],
   },
   {
@@ -165,7 +165,7 @@ const MATRIX_FLOW = [
     key: "stage_03c_evidence_deep_assist",
     phase: "stage_03c_evidence_deep_assist",
     title: "Stage 03c - Deep Research ×3 evidence",
-    detail: "Runs three-provider parallel Deep Research evidence collection.",
+    detail: "Runs ChatGPT Deep Research, Gemini Deep Research, and a Claude web-research lane in parallel.",
     modes: ["deep-research-x3", "deep-assist"],
   },
   {

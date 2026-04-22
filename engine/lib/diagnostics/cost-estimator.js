@@ -52,6 +52,13 @@ const MODEL_PRICING_USD_PER_1M = [
   },
   {
     provider: "gemini",
+    pattern: /deep-research-pro-preview/i,
+    input: 1.25,
+    output: 5.0,
+    key: "gemini:deep-research-pro-preview",
+  },
+  {
+    provider: "gemini",
     pattern: /gemini-2\.5-pro/i,
     input: 1.25,
     output: 5.0,

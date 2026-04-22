@@ -155,7 +155,7 @@ export default function ExpandedRow({
                 ? "Matrix pipeline + Deep Research ×3 enrichment | Per-cell provider agreement and confidence calibration"
                 : "Analyst LLM + Critic LLM matrix pipeline | Each cell includes evidence-backed confidence")
               : (isDeepResearchX3
-                ? "Deep Research ×3 scorecard flow | ChatGPT + Claude + Gemini Deep Research merged before critic and finalization"
+                ? "Deep Research ×3 scorecard flow | ChatGPT + Gemini Deep Research plus Claude web-research lane merged before critic and finalization"
                 : "Analyst LLM + Critic LLM pipeline | Sources combine model memory and live web evidence")}
             {!isMatrixMode && uc.analysisMeta?.lowConfidenceInitialCount > 0 && uc.status === "complete" && (
               <span style={{ marginLeft: 6, color: "var(--ck-text)" }}>

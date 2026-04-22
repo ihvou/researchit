@@ -21,7 +21,7 @@ function baseModels() {
   return {
     analyst: { provider: "openai", model: "gpt-5.4" },
     retrieval: { provider: "gemini", model: "gemini-2.5-pro" },
-    critic: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    critic: { provider: "anthropic", model: "claude-sonnet-4-6" },
   };
 }
 
@@ -397,7 +397,7 @@ test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias
         defaults: { providers: ["chatgpt", "claude", "gemini"] },
         providers: {
           chatgpt: { analyst: { provider: "openai", model: "gpt-5.4" } },
-          claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-20250514" } },
+          claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-6" } },
           gemini: { analyst: { provider: "gemini", model: "gemini-2.5-pro" } },
         },
       },
@@ -446,8 +446,8 @@ test("stage 03c resumes from prior provider success and runs only missing provid
         defaults: { providers: ["chatgpt", "claude", "gemini"] },
         providers: {
           chatgpt: { analyst: { provider: "openai", model: "o3-deep-research" } },
-          claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-20250514" } },
-          gemini: { analyst: { provider: "gemini", model: "gemini-2.5-pro" } },
+          claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-6" } },
+          gemini: { analyst: { provider: "gemini", model: "deep-research-pro-preview-12-2025" } },
         },
       },
     },
@@ -471,7 +471,7 @@ test("stage 03c resumes from prior provider success and runs only missing provid
           }),
           meta: {
             providerId: provider,
-            model: provider === "anthropic" ? "claude-sonnet-4-20250514" : "gemini-2.5-pro",
+            model: provider === "anthropic" ? "claude-sonnet-4-6" : "deep-research-pro-preview-12-2025",
           },
         };
       },

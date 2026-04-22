@@ -2,6 +2,9 @@ import { callOpenAI } from "@researchit/engine";
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_DEEP_RESEARCH_AGENT = "deep-research-pro-preview-12-2025";
+const GEMINI_DEEP_RESEARCH_POLL_MS = 8000;
+const GEMINI_DEEP_RESEARCH_MAX_WAIT_MS = 20 * 60 * 1000;
 const GEMINI_EMPTY_SUCCESS_REASON_CODE = "gemini_empty_success_response";
 
 function cleanText(value) {
@@ -11,6 +14,10 @@ function cleanText(value) {
 function toFinite(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 function normalizeUsage({ inputTokens = 0, outputTokens = 0, totalTokens = 0 } = {}) {
@@ -115,6 +122,16 @@ function extractHttpUrlsDeep(payload = {}) {
   return urls;
 }
 
+function isAnthropicToolConfigError(error) {
+  const message = cleanText(error?.message || error);
+  if (!message) return false;
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("tool")
+    && (lowered.includes("invalid") || lowered.includes("unknown") || lowered.includes("unsupported") || lowered.includes("not found"))
+  );
+}
+
 async function callAnthropic({
   apiKey,
   model,
@@ -138,12 +155,17 @@ async function callAnthropic({
     anthropicMessages.push({ role: "user", content: "Continue." });
   }
 
-  // Deep Research uses more search iterations to match Claude's Research mode.
+  // For extended Claude research lanes, allow higher search iteration caps.
   const resolvedSearchMaxUses = Number.isFinite(Number(searchMaxUses)) && Number(searchMaxUses) > 0
     ? Math.max(1, Math.min(20, Math.floor(Number(searchMaxUses))))
     : (deepResearch ? 20 : 6);
+  const configuredTool = cleanText(process.env.ANTHROPIC_WEB_SEARCH_TOOL);
+  const webSearchToolCandidates = [...new Set([
+    configuredTool || "web_search",
+    "web_search_20250305",
+  ].filter(Boolean))];
 
-  const makeRequest = async (withSearch) => {
+  const makeRequest = async (withSearch, toolType = "") => {
     const body = {
       model: resolvedModel,
       max_tokens: Math.max(256, Number(maxTokens) || 4000),
@@ -152,7 +174,7 @@ async function callAnthropic({
       ...(withSearch
         ? {
           tools: [{
-            type: "web_search_20250305",
+            type: cleanText(toolType) || "web_search_20250305",
             name: "web_search",
             max_uses: resolvedSearchMaxUses,
           }],
@@ -171,9 +193,25 @@ async function callAnthropic({
     return toJsonBody(response, "Anthropic request failed");
   };
 
-  const data = liveSearch
-    ? await makeRequest(true)
-    : await makeRequest(false);
+  let data = null;
+  if (liveSearch) {
+    let lastError = null;
+    for (let idx = 0; idx < webSearchToolCandidates.length; idx += 1) {
+      const toolType = webSearchToolCandidates[idx];
+      try {
+        data = await makeRequest(true, toolType);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        const isLast = idx === webSearchToolCandidates.length - 1;
+        if (isLast || !isAnthropicToolConfigError(error)) throw error;
+      }
+    }
+    if (!data && lastError) throw lastError;
+  } else {
+    data = await makeRequest(false);
+  }
 
   const blocks = Array.isArray(data?.content) ? data.content : [];
   const text = blocks
@@ -257,6 +295,106 @@ function countGeminiSearchCalls(data = {}) {
     calls += queries.length;
   });
   return calls;
+}
+
+function buildGeminiDeepResearchPrompt(messages = [], systemPrompt = "") {
+  const sections = [];
+  const systemText = cleanText(systemPrompt);
+  if (systemText) {
+    sections.push("System instructions:");
+    sections.push(systemText);
+  }
+  normalizeMessages(messages).forEach((message) => {
+    const role = cleanText(message?.role).toLowerCase() === "assistant" ? "assistant" : "user";
+    const content = cleanText(normalizeMessageContent(message?.content));
+    if (!content) return;
+    sections.push(`${role.toUpperCase()}:`);
+    sections.push(content);
+  });
+  const merged = cleanText(sections.join("\n\n"));
+  return merged || "Continue.";
+}
+
+function extractGeminiDeepResearchText(payload = {}) {
+  const out = [];
+  const seenNodes = new Set();
+  const queue = [payload];
+  const push = (value = "") => {
+    const text = cleanText(value);
+    if (!text) return;
+    out.push(text);
+  };
+
+  while (queue.length) {
+    const node = queue.shift();
+    if (!node || typeof node !== "object") continue;
+    if (seenNodes.has(node)) continue;
+    seenNodes.add(node);
+
+    if (Array.isArray(node)) {
+      node.forEach((item) => queue.push(item));
+      continue;
+    }
+
+    if (typeof node?.text === "string") push(node.text);
+    if (typeof node?.output_text === "string") push(node.output_text);
+    if (typeof node?.responseText === "string") push(node.responseText);
+    if (typeof node?.content === "string") push(node.content);
+
+    const parts = Array.isArray(node?.parts) ? node.parts : [];
+    parts.forEach((part) => {
+      if (typeof part?.text === "string") push(part.text);
+      queue.push(part);
+    });
+
+    const content = Array.isArray(node?.content) ? node.content : [];
+    content.forEach((part) => {
+      if (typeof part === "string") push(part);
+      if (typeof part?.text === "string") push(part.text);
+      if (typeof part?.output_text === "string") push(part.output_text);
+      queue.push(part);
+    });
+
+    ["output", "outputs", "response", "result", "message", "messages", "turns", "candidates"].forEach((key) => {
+      const value = node?.[key];
+      if (value && typeof value === "object") queue.push(value);
+    });
+  }
+
+  return [...new Set(out)].join("\n").trim();
+}
+
+function countGeminiDeepResearchSearchCalls(payload = {}) {
+  let calls = 0;
+  const seenNodes = new Set();
+  const queue = [payload];
+
+  while (queue.length) {
+    const node = queue.shift();
+    if (!node || typeof node !== "object") continue;
+    if (seenNodes.has(node)) continue;
+    seenNodes.add(node);
+    if (Array.isArray(node)) {
+      node.forEach((item) => queue.push(item));
+      continue;
+    }
+    const type = cleanText(node?.type || node?.name).toLowerCase();
+    if (type.includes("web_search") || type.includes("google_search")) calls += 1;
+    const searchQueries = Array.isArray(node?.webSearchQueries) ? node.webSearchQueries : [];
+    calls += searchQueries.length;
+    Object.values(node).forEach((value) => {
+      if (value && typeof value === "object") queue.push(value);
+    });
+  }
+  return calls;
+}
+
+function extractGeminiDeepResearchUsage(payload = {}) {
+  return normalizeUsage({
+    inputTokens: payload?.usageMetadata?.promptTokenCount || payload?.usage?.input_tokens,
+    outputTokens: payload?.usageMetadata?.candidatesTokenCount || payload?.usage?.output_tokens,
+    totalTokens: payload?.usageMetadata?.totalTokenCount || payload?.usage?.total_tokens,
+  });
 }
 
 function extractUrlsFromRenderedContent(value = "") {
@@ -473,6 +611,132 @@ async function resolveCanonicalGeminiSources(items = [], { concurrency = 8, time
   return { sources: deduped, diagnostics };
 }
 
+async function callGeminiDeepResearch({
+  apiKey,
+  messages,
+  systemPrompt,
+  maxTokens,
+  baseUrl = "",
+}) {
+  const resolvedBase = cleanText(baseUrl).replace(/\/+$/, "");
+  const root = resolvedBase && !resolvedBase.includes("/openai")
+    ? resolvedBase
+    : GEMINI_API_BASE_URL;
+  const createEndpoint = `${root}/interactions`;
+  const prompt = buildGeminiDeepResearchPrompt(messages, systemPrompt);
+  const createBody = {
+    agent: GEMINI_DEEP_RESEARCH_AGENT,
+    input: prompt,
+    background: true,
+    store: true,
+  };
+  const createResponse = await fetch(createEndpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    body: JSON.stringify(createBody),
+  });
+  const createData = await toJsonBody(createResponse, "Gemini Deep Research create interaction failed");
+  const interactionId = cleanText(createData?.name || createData?.id || createData?.interaction?.name);
+  if (!interactionId) {
+    const err = new Error("Gemini Deep Research did not return an interaction ID.");
+    err.status = 502;
+    err.payload = createData;
+    throw err;
+  }
+
+  const pollPath = interactionId.startsWith("interactions/") || interactionId.startsWith("projects/")
+    ? interactionId
+    : `interactions/${interactionId}`;
+  const pollEndpoint = `${root}/${pollPath}`;
+  const deadlineAt = Date.now() + GEMINI_DEEP_RESEARCH_MAX_WAIT_MS;
+  let latest = createData;
+  while (Date.now() < deadlineAt) {
+    const state = cleanText(latest?.state || latest?.status || latest?.interaction?.state).toLowerCase();
+    if (["succeeded", "complete", "completed", "done"].includes(state)) break;
+    if (["failed", "error", "cancelled", "canceled", "expired"].includes(state)) {
+      const err = new Error(`Gemini Deep Research interaction failed (${state || "unknown"}).`);
+      err.status = 502;
+      err.payload = latest;
+      throw err;
+    }
+    await sleep(GEMINI_DEEP_RESEARCH_POLL_MS);
+    const pollResponse = await fetch(pollEndpoint, {
+      method: "GET",
+      headers: {
+        "x-goog-api-key": apiKey,
+      },
+    });
+    latest = await toJsonBody(pollResponse, "Gemini Deep Research poll failed");
+  }
+  const finalState = cleanText(latest?.state || latest?.status || latest?.interaction?.state).toLowerCase();
+  if (!["succeeded", "complete", "completed", "done"].includes(finalState)) {
+    const err = new Error("Gemini Deep Research polling timed out.");
+    err.status = 504;
+    err.payload = latest;
+    throw err;
+  }
+
+  const text = extractGeminiDeepResearchText(latest);
+  const usage = extractGeminiDeepResearchUsage(latest) || extractGeminiDeepResearchUsage(createData);
+  const outputTokensCap = Math.max(256, Number(maxTokens) || 4000);
+  if (!text) {
+    const err = new Error("No text content in Gemini Deep Research response.");
+    err.reasonCode = GEMINI_EMPTY_SUCCESS_REASON_CODE;
+    err.status = 200;
+    err.providerId = "gemini";
+    err.providerMeta = {
+      providerId: "gemini",
+      model: GEMINI_DEEP_RESEARCH_AGENT,
+      finishReason: normalizeFinishReason(finalState),
+      outputTokens: Number(usage?.outputTokens || 0),
+      outputTokensCap,
+      usage,
+    };
+    throw err;
+  }
+
+  const rawUrls = [
+    ...extractHttpUrlsDeep(latest),
+    ...extractUrlsFromRenderedContent(text),
+  ];
+  const grounded = await resolveCanonicalGeminiSources(
+    uniqueSourcesFromUrls(rawUrls, "Gemini source").map((source) => ({
+      url: source?.url,
+      title: source?.name || "Gemini source",
+    })),
+    {
+      concurrency: 8,
+      timeoutMs: 1800,
+    }
+  );
+  const webSearchCalls = countGeminiDeepResearchSearchCalls(latest);
+  return {
+    text,
+    sources: grounded.sources,
+    rawResponse: {
+      interactionCreate: createData,
+      interactionFinal: latest,
+    },
+    meta: {
+      providerId: "gemini",
+      model: GEMINI_DEEP_RESEARCH_AGENT,
+      liveSearchUsed: webSearchCalls > 0,
+      webSearchCalls,
+      finishReason: normalizeFinishReason(finalState),
+      outputTokens: Number(usage?.outputTokens || 0),
+      outputTokensCap,
+      groundedSourcesResolved: grounded.diagnostics,
+      noSearchPerformed: webSearchCalls === 0,
+      callFailedGrounding: webSearchCalls > 0 && grounded.sources.length === 0,
+      reasonCodes: [],
+      usage,
+    },
+  };
+}
+
 async function callGemini({
   apiKey,
   model,
@@ -484,6 +748,16 @@ async function callGemini({
   baseUrl = "",
 }) {
   if (!apiKey) throw new Error("Gemini API key is required");
+  if (deepResearch) {
+    return callGeminiDeepResearch({
+      apiKey,
+      messages,
+      systemPrompt,
+      maxTokens,
+      baseUrl,
+    });
+  }
+
   const resolvedModel = normalizeGeminiModel(model);
   if (!resolvedModel) throw new Error("Gemini model is required");
   const resolvedBase = cleanText(baseUrl).replace(/\/+$/, "");
@@ -500,10 +774,6 @@ async function callGemini({
         : {}),
       generationConfig: {
         maxOutputTokens: Math.max(256, Number(maxTokens) || 4000),
-        // Deep Research: enable extended thinking (thinkingBudget: -1 = unlimited).
-        // This activates Gemini 2.5 Pro's multi-step reasoning loop, matching
-        // the behaviour of Gemini Deep Research in the UI.
-        ...(deepResearch ? { thinkingConfig: { thinkingBudget: -1 } } : {}),
       },
       ...(withSearch
         ? {

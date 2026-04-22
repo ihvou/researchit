@@ -15,8 +15,8 @@ const SHARED_MODELS = {
   },
   critic: {
     provider: "anthropic",
-    model: "claude-sonnet-4-20250514",
-    webSearchModel: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
+    webSearchModel: "claude-sonnet-4-6",
   },
   retrieval: {
     provider: "gemini",
@@ -45,15 +45,15 @@ const SHARED_DEEP_ASSIST = {
     claude: {
       analyst: {
         provider: "anthropic",
-        model: "claude-sonnet-4-20250514",
-        webSearchModel: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
+        webSearchModel: "claude-sonnet-4-6",
       },
     },
     gemini: {
       analyst: {
         provider: "gemini",
-        model: "gemini-2.5-pro",
-        webSearchModel: "gemini-2.5-pro",
+        model: "deep-research-pro-preview-12-2025",
+        webSearchModel: "deep-research-pro-preview-12-2025",
       },
     },
   },

@@ -43,7 +43,7 @@ The pipeline uses two actor roles:
 
 Default model policy in `configs/research-configurations.js`:
 - Analyst reasoning: OpenAI (`gpt-5.4`)
-- Critic reasoning: Anthropic (`claude-sonnet-4-20250514`)
+- Critic reasoning: Anthropic (`claude-sonnet-4-6`)
 - Retrieval-heavy Analyst stages (including synthesis): Gemini (`gemini-2.5-pro`)
 
 Route preflight is enforced before paid calls in `engine/lib/routing/route-preflight.js`.
@@ -191,7 +191,7 @@ ANTHROPIC_API_KEY=...
 GEMINI_API_KEY=...
 
 RESEARCHIT_ANALYST_MODEL=gpt-5.4
-RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-20250514
+RESEARCHIT_CRITIC_MODEL=claude-sonnet-4-6
 ```
 
 Provider/model/base URL resolution precedence remains:

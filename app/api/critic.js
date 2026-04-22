@@ -5,7 +5,7 @@ import {
 } from "./providerConfig.js";
 import { callProviderModel } from "./providerCalls.js";
 
-const CRITIC_DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const CRITIC_DEFAULT_MODEL = "claude-sonnet-4-6";
 const ROUTE_MISMATCH_REASON_CODE = "route_mismatch_preflight";
 
 function clean(value) {
