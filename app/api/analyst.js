@@ -146,12 +146,18 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const detail = err?.message || "Unknown provider error";
+    const reasonCode = clean(err?.reasonCode);
     const abortReason = err?.abortReason && typeof err.abortReason === "object"
       ? err.abortReason
       : undefined;
+    const providerMeta = err?.providerMeta && typeof err.providerMeta === "object"
+      ? err.providerMeta
+      : undefined;
     return res.status(500).json({
       error: `Pinned analyst provider route failed (${resolved.providerId}): ${detail}`,
+      ...(reasonCode ? { reasonCode } : {}),
       ...(abortReason ? { abortReason } : {}),
+      ...(providerMeta ? { providerMeta } : {}),
     });
   }
 }

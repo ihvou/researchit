@@ -2,6 +2,7 @@ import { callOpenAI } from "@researchit/engine";
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_EMPTY_SUCCESS_REASON_CODE = "gemini_empty_success_response";
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -526,8 +527,28 @@ async function callGemini({
     : await makeRequest(false);
 
   const text = extractGeminiText(data);
+  const firstCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+  const usage = normalizeUsage({
+    inputTokens: data?.usageMetadata?.promptTokenCount,
+    outputTokens: data?.usageMetadata?.candidatesTokenCount,
+    totalTokens: data?.usageMetadata?.totalTokenCount,
+  });
+  const outputTokensCap = Math.max(256, Number(maxTokens) || 4000);
   if (!text) {
-    throw new Error("No text content in Gemini response.");
+    const err = new Error("No text content in Gemini response.");
+    err.reasonCode = GEMINI_EMPTY_SUCCESS_REASON_CODE;
+    err.status = 200;
+    err.providerId = "gemini";
+    err.providerMeta = {
+      providerId: "gemini",
+      model: cleanText(model),
+      finishReason: normalizeFinishReason(firstCandidate?.finishReason || firstCandidate?.finish_reason),
+      outputTokens: Number(usage?.outputTokens || 0),
+      outputTokensCap,
+      usage,
+      groundingMetadataKeys: collectGroundingMetadataKeys(data),
+    };
+    throw err;
   }
 
   const webSearchCalls = countGeminiSearchCalls(data);
@@ -542,13 +563,6 @@ async function callGemini({
     ...(noSearchPerformed ? ["stage_03b_no_search_performed"] : []),
     ...(callFailedGrounding ? ["grounding_extraction_failed"] : []),
   ];
-  const firstCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
-  const usage = normalizeUsage({
-    inputTokens: data?.usageMetadata?.promptTokenCount,
-    outputTokens: data?.usageMetadata?.candidatesTokenCount,
-    totalTokens: data?.usageMetadata?.totalTokenCount,
-  });
-  const outputTokensCap = Math.max(256, Number(maxTokens) || 4000);
   return {
     text,
     sources: grounded.sources,

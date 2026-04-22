@@ -23,6 +23,8 @@ export const REASON_CODES = {
   STAGE_14_OVERSIZE_ABORT: "stage_14_oversize_abort",
   GROUNDING_EXTRACTION_FAILED: "grounding_extraction_failed",
   STAGE_03B_NO_SEARCH_PERFORMED: "stage_03b_no_search_performed",
+  GEMINI_EMPTY_SUCCESS_RESPONSE: "gemini_empty_success_response",
+  STAGE_03B_GEMINI_EMPTY_FALLBACK_USED: "stage_03b_gemini_empty_fallback_used",
   SOURCE_MISSING_VERIFICATION_TIER: "source_missing_verification_tier",
   SOURCE_GROUNDING_UNAVAILABLE: "source_grounding_unavailable",
   SOURCE_ABSENT_FROM_CORPUS: "source_absent_from_corpus",

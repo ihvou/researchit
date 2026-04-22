@@ -28,6 +28,62 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function hasReasonCode(err = {}, code = "") {
+  const expected = clean(code);
+  if (!expected) return false;
+  if (clean(err?.reasonCode) === expected) return true;
+  return ensureArray(err?.reasonCodes).some((value) => clean(value) === expected);
+}
+
+function isGeminiEmptySuccessFailure(err = {}) {
+  if (hasReasonCode(err, REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE)) return true;
+  const message = clean(err?.message).toLowerCase();
+  return message.includes("no text content in gemini response");
+}
+
+function buildOpenAiRetrieveFallbackRoute(runtime = {}) {
+  const analystModel = runtime?.config?.models?.analyst || {};
+  const provider = clean(analystModel?.provider || "openai").toLowerCase();
+  const model = clean(analystModel?.model || "gpt-5.4");
+  const webSearchModel = clean(analystModel?.webSearchModel || model);
+  if (provider !== "openai" || !model || !webSearchModel) return null;
+  return {
+    provider: "openai",
+    model,
+    webSearchModel,
+    baseUrl: clean(analystModel?.baseUrl),
+  };
+}
+
+async function callRetrieveWithGeminiEmptyFallback(baseCall = {}, runtime = {}) {
+  try {
+    const result = await callActorJson(baseCall);
+    return {
+      result,
+      fallbackUsed: false,
+    };
+  } catch (err) {
+    if (!isGeminiEmptySuccessFailure(err)) throw err;
+    const fallbackRoute = buildOpenAiRetrieveFallbackRoute(runtime);
+    if (!fallbackRoute) throw err;
+    const fallbackResult = await callActorJson({
+      ...baseCall,
+      routeOverride: fallbackRoute,
+      callContext: {
+        ...(baseCall?.callContext || {}),
+        chunkId: `${clean(baseCall?.callContext?.chunkId) || "retrieve"}-openai-fallback`,
+      },
+    });
+    return {
+      result: fallbackResult,
+      fallbackUsed: true,
+      fallbackReasonCode: clean(err?.reasonCode) || REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE,
+      fallbackReasonMessage: clean(err?.message || "gemini_empty_success_response"),
+      fallbackRoute,
+    };
+  }
+}
+
 function confidenceRank(value = "") {
   const normalized = normalizeConfidence(value);
   if (normalized === "high") return 3;
@@ -493,7 +549,7 @@ async function gatherMatrixWeb({
         cellCount: ensureArray(current?.cells).length,
       });
       try {
-        const retrieveResult = await callActorJson({
+        const retrieveCall = await callRetrieveWithGeminiEmptyFallback({
           state,
           runtime,
           stageId: STAGE_ID,
@@ -510,7 +566,8 @@ async function gatherMatrixWeb({
             promptVersion: PROMPT_VERSION,
           },
           schemaHint: '{"queries":[{"cellKey":"","query":"","rationale":""}]}',
-        });
+        }, runtime);
+        const retrieveResult = retrieveCall.result;
 
         if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted !== true) {
           chunkTrace.push({
@@ -590,6 +647,12 @@ async function gatherMatrixWeb({
         const chunkReasonCodes = [
           ...ensureArray(retrieveResult?.reasonCodes),
           ...ensureArray(readResult?.reasonCodes),
+          ...(retrieveCall?.fallbackUsed
+            ? [
+              REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE,
+              REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED,
+            ]
+            : []),
           ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
           ...(Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0) > 0 ? [REASON_CODES.SOURCE_ABSENT_FROM_CORPUS] : []),
         ];
@@ -631,6 +694,14 @@ async function gatherMatrixWeb({
           groundedSourcesResolved: retrieveResult?.meta?.groundedSourcesResolved || null,
           retrievedCorpusCount: retrievedCorpus.entries.length,
           sourceAbsentFromCorpus: Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0),
+          retrieveFallbackUsed: retrieveCall?.fallbackUsed === true,
+          retrieveFallbackReasonCode: clean(retrieveCall?.fallbackReasonCode),
+          retrieveFallbackReasonMessage: clean(retrieveCall?.fallbackReasonMessage),
+          retrieveFallbackRoute: retrieveCall?.fallbackUsed ? {
+            provider: clean(retrieveCall?.fallbackRoute?.provider),
+            model: clean(retrieveCall?.fallbackRoute?.model),
+            webSearchModel: clean(retrieveCall?.fallbackRoute?.webSearchModel),
+          } : null,
         });
         return {};
       } catch (err) {
@@ -713,6 +784,9 @@ async function gatherMatrixWeb({
   }, { total: 0, resolved: 0, unresolved: 0 });
   const retrievedCorpusCount = allDiagnostics.reduce((sum, item) => sum + Number(item?.retrievedCorpusCount || 0), 0);
   const sourceAbsentFromCorpus = allDiagnostics.reduce((sum, item) => sum + Number(item?.sourceAbsentFromCorpus || 0), 0);
+  const retrieveFallbackUsedCount = allDiagnostics.reduce((sum, item) => (
+    sum + (item?.retrieveFallbackUsed === true ? 1 : 0)
+  ), 0);
   const retrieveWebSearchCalls = allDiagnostics.reduce((sum, item) => (
     sum + Number(item?.retrieveTokenDiagnostics?.webSearchCalls || 0)
   ), 0);
@@ -743,6 +817,7 @@ async function gatherMatrixWeb({
     groundedSourcesResolved,
     retrievedCorpusCount,
     sourceAbsentFromCorpus,
+    retrieveFallbackUsedCount,
     retrieveWebSearchCalls,
     readWebSearchCalls,
     groundingPropagation: computeGroundingPropagation(completedCells),
@@ -801,6 +876,7 @@ export async function runStage(context = {}) {
         groundedSourcesResolved: matrixWeb.groundedSourcesResolved,
         retrievedCorpusCount: Number(matrixWeb?.retrievedCorpusCount || 0),
         sourceAbsentFromCorpus: Number(matrixWeb?.sourceAbsentFromCorpus || 0),
+        retrieveFallbackUsedCount: Number(matrixWeb?.retrieveFallbackUsedCount || 0),
         retrieveCalls: Number(matrixWeb?.diagnostics?.length || 0),
         readCalls: Number(matrixWeb?.diagnostics?.length || 0),
         retrieveWebSearchCalls: Number(matrixWeb?.retrieveWebSearchCalls || 0),
@@ -842,7 +918,7 @@ Rules:
 
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 
-  const callScorecardWeb = async (extraRequirement = "") => callActorJson({
+  const callScorecardWeb = async (extraRequirement = "") => callRetrieveWithGeminiEmptyFallback({
     state,
     runtime,
     stageId: STAGE_ID,
@@ -858,17 +934,31 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       promptVersion: PROMPT_VERSION,
     },
     schemaHint: '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
-  });
+  }, runtime);
 
-  const firstResult = await callScorecardWeb();
+  const firstCall = await callScorecardWeb();
+  const firstResult = firstCall.result;
   let result = firstResult;
+  let anyScorecardFallbackUsed = firstCall?.fallbackUsed === true;
   const tokenDiagnosticsList = [firstResult?.tokenDiagnostics];
   let combinedRetries = Number(firstResult?.retries || 0);
-  const stageReasonCodes = [...ensureArray(firstResult?.reasonCodes)];
+  const stageReasonCodes = [
+    ...ensureArray(firstResult?.reasonCodes),
+    ...(firstCall?.fallbackUsed
+      ? [REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE, REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
+      : []),
+  ];
   if (firstResult?.meta?.noSearchPerformed === true) {
-    const retryResult = await callScorecardWeb("Mandatory requirement: call google_search for each dimension before returning sources.");
+    const retryCall = await callScorecardWeb("Mandatory requirement: call google_search for each dimension before returning sources.");
+    const retryResult = retryCall.result;
     combinedRetries += Number(retryResult?.retries || 0);
-    stageReasonCodes.push(...ensureArray(retryResult?.reasonCodes));
+    anyScorecardFallbackUsed = anyScorecardFallbackUsed || retryCall?.fallbackUsed === true;
+    stageReasonCodes.push(
+      ...ensureArray(retryResult?.reasonCodes),
+      ...(retryCall?.fallbackUsed
+        ? [REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE, REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
+        : [])
+    );
     tokenDiagnosticsList.push(retryResult?.tokenDiagnostics);
     if (retryResult?.meta?.noSearchPerformed === true) {
       const noSearchErr = new Error("No google_search calls were performed for the scorecard web evidence pass.");
@@ -921,6 +1011,7 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       groundingPropagation: computeGroundingPropagation(normalizedWeb),
       groundedSourcesResolved: result?.meta?.groundedSourcesResolved || null,
       retries: combinedRetries,
+      retrieveFallbackUsed: anyScorecardFallbackUsed,
       modelRoute: result.route,
       tokenDiagnostics,
     },

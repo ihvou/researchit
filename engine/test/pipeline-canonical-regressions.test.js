@@ -15,6 +15,7 @@ import { runStage as run14 } from "../pipeline/stages/14-synthesize.js";
 import { runStage as run15 } from "../pipeline/stages/15-finalize.js";
 import { classifyStageFailureCause, reasonCodesForUpstreamHash } from "../pipeline/orchestrator.js";
 import { toUseCaseState } from "../pipeline/contracts/run-state.js";
+import { SYS_ANALYST } from "../prompts/defaults.js";
 
 function baseModels() {
   return {
@@ -32,6 +33,11 @@ test("normalizeConfidence maps numeric scales and reports coercion", () => {
   assert.equal(normalizeConfidence(2, stats), "low");
   assert.equal(normalizeConfidence(null, stats), "low");
   assert.equal(stats.coerced, 3);
+});
+
+test("SYS_ANALYST stays mode-neutral (no scorecard-only rubric wording)", () => {
+  assert.equal(/weighted scoring rubric/i.test(SYS_ANALYST), false);
+  assert.match(SYS_ANALYST, /evidence-first rigor/i);
 });
 
 test("callActorJson parse retry applies repair prompt and reduces scope", async () => {
@@ -289,6 +295,97 @@ test("stage 03b marks grounded sources from provider metadata", async () => {
   assert.equal(source.groundedByProvider, true);
   assert.equal(source.groundedSetAvailable, true);
   assert.equal(groundedRatio, 1);
+});
+
+test("stage 03b matrix retrieve falls back to OpenAI only for Gemini empty-success responses", async () => {
+  const attrs = [{ id: "a1", label: "Attr 1" }];
+  const subjects = [{ id: "s1", label: "Subject 1" }];
+  const calls = [];
+
+  const runtime = {
+    config: {
+      models: baseModels(),
+      limits: { matrixWebChunkMaxCells: 4 },
+    },
+    budgets: {
+      stage_03b_evidence_web: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
+    },
+    prompts: { analyst: "web evidence" },
+    transport: {
+      callAnalyst: async (_messages, _system, _maxTokens, options = {}) => {
+        const provider = String(options?.provider || "").toLowerCase();
+        const chunkId = String(options?.chunkId || "");
+        calls.push({ provider, chunkId, liveSearch: !!options?.liveSearch });
+
+        if (chunkId.endsWith("-retrieve")) {
+          if (provider === "gemini") {
+            const err = new Error("Pinned analyst provider route failed (gemini): No text content in Gemini response.");
+            err.reasonCode = "gemini_empty_success_response";
+            throw err;
+          }
+          return {
+            text: JSON.stringify({
+              queries: [{ cellKey: "s1::a1", query: "q", rationale: "r" }],
+            }),
+            sources: [{ name: "Grounded", url: "https://example.com/r" }],
+            meta: { webSearchCalls: 1, liveSearchUsed: true },
+          };
+        }
+
+        return {
+          text: JSON.stringify({
+            cells: [{
+              subjectId: "s1",
+              attributeId: "a1",
+              value: "Recovered",
+              full: "Recovered from retrieved corpus",
+              confidence: "medium",
+              confidenceReason: "grounded source found",
+              sources: [{ corpusId: "chunk-1-src-01", name: "Grounded", sourceType: "news" }],
+              arguments: { supporting: [], limiting: [] },
+              risks: "",
+              missingEvidence: "",
+            }],
+          }),
+        };
+      },
+      callCritic: async () => ({ text: "{\"ok\":true}" }),
+      callSynthesizer: async () => ({ text: "{\"ok\":true}" }),
+    },
+  };
+
+  const state = {
+    outputType: "matrix",
+    request: {
+      objective: "compare subjects",
+      matrix: { subjects, attributes: attrs },
+    },
+    evidenceDrafts: {
+      memory: {
+        matrix: {
+          cells: [{
+            subjectId: "s1",
+            attributeId: "a1",
+            value: "memory",
+            confidence: "low",
+            sources: [],
+            arguments: { supporting: [], limiting: [] },
+          }],
+        },
+      },
+    },
+    mode: "native",
+  };
+
+  const result = await run03b({ state, runtime });
+  const reasonCodes = result?.reasonCodes || [];
+  const diagnostics = result?.diagnostics || {};
+
+  assert.equal(reasonCodes.includes("gemini_empty_success_response"), true);
+  assert.equal(reasonCodes.includes("stage_03b_gemini_empty_fallback_used"), true);
+  assert.equal(Number(diagnostics?.retrieveFallbackUsedCount || 0), 1);
+  assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve") && call.provider === "gemini"), true);
+  assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve-openai-fallback") && call.provider === "openai"), true);
 });
 
 test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias mode, non-strict included)", async () => {
