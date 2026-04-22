@@ -13,7 +13,6 @@ import { REASON_CODES, normalizeReasonCodes } from "../contracts/reason-codes.js
 import {
   createInitialMatrixCellChunks,
   makeChunkManifest,
-  splitMatrixCellChunk,
   toChunkManifestEntry,
 } from "../../lib/chunking/matrix-chunks.js";
 import { runChunkPool } from "../../lib/runtime/chunk-pool.js";
@@ -28,17 +27,17 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function hasReasonCode(err = {}, code = "") {
-  const expected = clean(code);
-  if (!expected) return false;
-  if (clean(err?.reasonCode) === expected) return true;
-  return ensureArray(err?.reasonCodes).some((value) => clean(value) === expected);
-}
-
-function isGeminiEmptySuccessFailure(err = {}) {
-  if (hasReasonCode(err, REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE)) return true;
+function isLikelyRequestBug(err = {}) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (Number.isFinite(status) && status >= 400 && status < 500) return true;
   const message = clean(err?.message).toLowerCase();
-  return message.includes("no text content in gemini response");
+  return (
+    message.includes("function_declarations")
+    || message.includes("function calling config")
+    || message.includes("tool_config")
+    || message.includes("invalid argument")
+    || message.includes("invalid request")
+  );
 }
 
 function buildOpenAiRetrieveFallbackRoute(runtime = {}) {
@@ -56,32 +55,103 @@ function buildOpenAiRetrieveFallbackRoute(runtime = {}) {
 }
 
 async function callRetrieveWithGeminiEmptyFallback(baseCall = {}, runtime = {}) {
-  try {
-    const result = await callActorJson(baseCall);
-    return {
-      result,
-      fallbackUsed: false,
+  const attempts = [];
+  const runAttempt = async ({ routeOverride = null, labelSuffix = "", fallback = false } = {}) => {
+    const callContext = {
+      ...(baseCall?.callContext || {}),
+      chunkId: `${clean(baseCall?.callContext?.chunkId) || "retrieve"}${labelSuffix}`,
     };
-  } catch (err) {
-    if (!isGeminiEmptySuccessFailure(err)) throw err;
-    const fallbackRoute = buildOpenAiRetrieveFallbackRoute(runtime);
-    if (!fallbackRoute) throw err;
-    const fallbackResult = await callActorJson({
-      ...baseCall,
-      routeOverride: fallbackRoute,
-      callContext: {
-        ...(baseCall?.callContext || {}),
-        chunkId: `${clean(baseCall?.callContext?.chunkId) || "retrieve"}-openai-fallback`,
-      },
-    });
+    try {
+      const result = await callActorJson({
+        ...baseCall,
+        ...(routeOverride ? { routeOverride } : {}),
+        callContext,
+      });
+      attempts.push({
+        ok: true,
+        fallback,
+        route: result?.route || null,
+        tokenDiagnostics: result?.tokenDiagnostics || null,
+        reasonCodes: ensureArray(result?.reasonCodes),
+        noSearchPerformed: result?.meta?.noSearchPerformed === true,
+      });
+      return { ok: true, result };
+    } catch (err) {
+      attempts.push({
+        ok: false,
+        fallback,
+        route: routeOverride || null,
+        tokenDiagnostics: null,
+        reasonCodes: ensureArray(err?.reasonCodes),
+        errorMessage: clean(err?.message || "retrieve_failed"),
+        errorReasonCode: clean(err?.reasonCode),
+        noSearchPerformed: false,
+      });
+      return { ok: false, error: err };
+    }
+  };
+
+  const first = await runAttempt();
+  if (first.ok && first.result?.meta?.noSearchPerformed !== true) {
     return {
-      result: fallbackResult,
-      fallbackUsed: true,
-      fallbackReasonCode: clean(err?.reasonCode) || REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE,
-      fallbackReasonMessage: clean(err?.message || "gemini_empty_success_response"),
-      fallbackRoute,
+      resolved: true,
+      result: first.result,
+      fallbackUsed: false,
+      attempts,
     };
   }
+
+  if (!first.ok && isLikelyRequestBug(first.error)) {
+    throw first.error;
+  }
+
+  const fallbackRoute = buildOpenAiRetrieveFallbackRoute(runtime);
+  if (!fallbackRoute) {
+    if (first.ok) {
+      return {
+        resolved: false,
+        attempts,
+        fallbackUsed: false,
+        unresolvedReasonCode: REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED,
+        unresolvedReasonMessage: "No google_search calls were performed for this chunk.",
+      };
+    }
+    throw first.error;
+  }
+
+  const second = await runAttempt({
+    routeOverride: fallbackRoute,
+    labelSuffix: "-openai-fallback",
+    fallback: true,
+  });
+  if (second.ok && second.result?.meta?.noSearchPerformed !== true) {
+    return {
+      resolved: true,
+      result: second.result,
+      fallbackUsed: true,
+      fallbackReasonCode: first.ok
+        ? REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED
+        : (clean(first?.error?.reasonCode) || REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE),
+      fallbackReasonMessage: first.ok
+        ? "No google_search calls were performed for this chunk."
+        : clean(first?.error?.message || "gemini_empty_success_response"),
+      fallbackRoute,
+      attempts,
+    };
+  }
+
+  if (!second.ok && isLikelyRequestBug(second.error)) {
+    throw second.error;
+  }
+
+  return {
+    resolved: false,
+    attempts,
+    fallbackUsed: true,
+    fallbackRoute,
+    unresolvedReasonCode: REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED,
+    unresolvedReasonMessage: "No web search content was returned by retrieval providers for this chunk.",
+  };
 }
 
 function confidenceRank(value = "") {
@@ -495,6 +565,7 @@ function summarizeChunkEvents(trace = []) {
   const started = events.filter((entry) => entry?.event === "started").length;
   const completed = events.filter((entry) => entry?.event === "completed").length;
   const failed = events.filter((entry) => entry?.event === "failed").length;
+  const unresolved = events.filter((entry) => entry?.event === "unresolved").length;
   const retries = events.filter((entry) => entry?.event === "retried").length;
   const splitDepthMax = events.reduce((maxDepth, entry) => {
     const depth = Number(entry?.depth || 0);
@@ -504,6 +575,7 @@ function summarizeChunkEvents(trace = []) {
     chunksStarted: started,
     chunksCompleted: completed,
     chunksFailed: failed,
+    chunksUnresolved: unresolved,
     chunkRetriesTotal: retries,
     chunkSplitDepthMax: splitDepthMax,
   };
@@ -567,43 +639,66 @@ async function gatherMatrixWeb({
           },
           schemaHint: '{"queries":[{"cellKey":"","query":"","rationale":""}]}',
         }, runtime);
-        const retrieveResult = retrieveCall.result;
+        const retrieveAttemptCodes = normalizeReasonCodes([
+          ...retrieveCall.attempts.flatMap((attempt) => ensureArray(attempt?.reasonCodes)),
+          ...retrieveCall.attempts
+            .filter((attempt) => attempt?.noSearchPerformed === true)
+            .map(() => REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED),
+          ...retrieveCall.attempts
+            .filter((attempt) => clean(attempt?.errorReasonCode) === REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE)
+            .map(() => REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE),
+        ]);
+        const retrieveAttemptTokenDiagnostics = combineTokenDiagnostics(
+          retrieveCall.attempts.map((attempt) => attempt?.tokenDiagnostics).filter(Boolean)
+        ) || null;
 
-        if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted !== true) {
+        if (retrieveCall?.resolved !== true || !retrieveCall?.result) {
+          const unresolvedCode = clean(retrieveCall?.unresolvedReasonCode) || REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED;
+          const unresolvedMessage = clean(retrieveCall?.unresolvedReasonMessage || "Web retrieval unresolved for this chunk.");
+          reasonCodes.push(
+            unresolvedCode,
+            ...retrieveAttemptCodes,
+            ...(retrieveCall?.fallbackUsed === true
+              && clean(retrieveCall?.fallbackReasonCode) === REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE
+              ? [REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
+              : [])
+          );
           chunkTrace.push({
             chunkId: current.chunkId,
-            event: "retried",
+            event: "unresolved",
             timestamp: nowIso(),
-            retryIndex: 1,
-            reason: "no_search_performed",
             depth: Number(current?.depth || 0),
+            reasonCode: unresolvedCode,
+            reason: unresolvedMessage,
           });
           diagnostics.push({
             chunkId: current.chunkId,
             parentId: current.parentId || null,
             depth: Number(current?.depth || 0),
             cellCount: ensureArray(current?.cells).length,
-            retries: Number(retrieveResult?.retries || 0),
-            tokenDiagnostics: {
-              ...(retrieveResult?.tokenDiagnostics || {}),
-              noSearchPerformed: true,
-            },
-            retrieveModelRoute: retrieveResult.route,
-            modelRoute: retrieveResult.route,
+            retries: Number(retrieveAttemptTokenDiagnostics?.retries || 0),
+            tokenDiagnostics: retrieveAttemptTokenDiagnostics,
+            retrieveTokenDiagnostics: retrieveAttemptTokenDiagnostics,
+            retrieveModelRoute: retrieveCall?.attempts?.find((attempt) => attempt?.ok === true)?.route || null,
+            modelRoute: retrieveCall?.attempts?.find((attempt) => attempt?.ok === true)?.route || null,
             citations: computeGroundingCoverage([]),
-            groundedSourcesResolved: retrieveResult?.meta?.groundedSourcesResolved || null,
-            noSearchPerformed: true,
+            groundedSourcesResolved: null,
+            noSearchPerformed: unresolvedCode === REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED,
+            unresolved: true,
+            unresolvedReasonCode: unresolvedCode,
+            unresolvedReason: unresolvedMessage,
+            retrieveFallbackUsed: retrieveCall?.fallbackUsed === true,
+            retrieveFallbackReasonCode: clean(retrieveCall?.fallbackReasonCode),
+            retrieveFallbackReasonMessage: clean(retrieveCall?.fallbackReasonMessage),
+            retrieveFallbackRoute: retrieveCall?.fallbackUsed ? {
+              provider: clean(retrieveCall?.fallbackRoute?.provider),
+              model: clean(retrieveCall?.fallbackRoute?.model),
+              webSearchModel: clean(retrieveCall?.fallbackRoute?.webSearchModel),
+            } : null,
           });
-          return {
-            children: [{ ...current, searchRetryAttempted: true }],
-            enqueueFront: true,
-          };
+          return {};
         }
-        if (retrieveResult?.meta?.noSearchPerformed === true && current?.searchRetryAttempted === true) {
-          const noSearchErr = new Error("No google_search calls were performed for this chunk.");
-          noSearchErr.reasonCode = REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED;
-          throw noSearchErr;
-        }
+        const retrieveResult = retrieveCall.result;
 
         const retrievedCorpus = buildRetrievedCorpus(retrieveResult?.meta?.groundedSources || [], current.chunkId);
         const readPrompt = buildMatrixReadPrompt(state, current, subjectsById, attributesById, retrievedCorpus.entries);
@@ -645,14 +740,16 @@ async function gatherMatrixWeb({
         ]) || {};
         tokenDiagnostics.confidenceScaleCoerced = Number(confidenceStats.coerced || 0);
         const chunkReasonCodes = [
+          ...retrieveAttemptCodes,
           ...ensureArray(retrieveResult?.reasonCodes),
           ...ensureArray(readResult?.reasonCodes),
           ...(retrieveCall?.fallbackUsed
+            && clean(retrieveCall?.fallbackReasonCode) === REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE
             ? [
-              REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE,
               REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED,
             ]
             : []),
+          ...(clean(retrieveCall?.fallbackReasonCode) ? [clean(retrieveCall.fallbackReasonCode)] : []),
           ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
           ...(Number(corpusDiagnostics?.sourceAbsentFromCorpus || 0) > 0 ? [REASON_CODES.SOURCE_ABSENT_FROM_CORPUS] : []),
         ];
@@ -714,41 +811,32 @@ async function gatherMatrixWeb({
           abortReason: err?.abortReason || null,
           finishReason: clean(err?.finishReason) || "unknown",
         });
-        if (ensureArray(current?.cells).length <= 1) {
+        if (isLikelyRequestBug(err)) {
           err.chunkId = clean(current?.chunkId) || null;
-          err.chunkDepth = Number(current?.depth || 0);
-          err.chunkSplitDepthMax = Math.max(Number(err?.chunkSplitDepthMax || 0), Number(current?.depth || 0));
-          err.chunkSplitExhausted = Number(current?.depth || 0) > 0;
           throw err;
         }
-        const children = splitMatrixCellChunk(current);
-        if (!children.length) throw err;
-        children.forEach((child) => {
-          manifestMap.set(child.chunkId, toChunkManifestEntry(child));
-        });
+        reasonCodes.push(clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED));
+        const unresolvedMessage = clean(err?.message || "chunk_failure");
         chunkTrace.push({
           chunkId: current.chunkId,
-          event: "split",
+          event: "unresolved",
           timestamp: nowIso(),
           depth: Number(current?.depth || 0),
-          parentId: current.chunkId,
-          childIds: children.map((child) => child.chunkId),
-          reason: clean(err?.reasonCode || err?.message || "chunk_failure"),
+          reasonCode: clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED),
+          reason: unresolvedMessage,
         });
         diagnostics.push({
           chunkId: current.chunkId,
           parentId: current.parentId || null,
           depth: Number(current?.depth || 0),
           cellCount: ensureArray(current?.cells).length,
-          splitInto: children.map((child) => child.chunkId),
-          splitReason: clean(err?.reasonCode || err?.message || "chunk_failure"),
-          error: clean(err?.message || "chunk_failure"),
+          error: unresolvedMessage,
+          unresolved: true,
+          unresolvedReasonCode: clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED),
+          unresolvedReason: unresolvedMessage,
           abortReason: err?.abortReason || null,
         });
-        return {
-          children,
-          enqueueFront: true,
-        };
+        return {};
       }
     },
   });
@@ -797,6 +885,14 @@ async function gatherMatrixWeb({
     allDiagnostics.map((entry) => entry?.tokenDiagnostics).filter(Boolean)
   );
   const modelRoute = allDiagnostics.find((entry) => entry?.modelRoute)?.modelRoute || null;
+  const unresolvedChunks = allDiagnostics
+    .filter((entry) => entry?.unresolved === true)
+    .map((entry) => ({
+      chunkId: clean(entry?.chunkId),
+      reasonCode: clean(entry?.unresolvedReasonCode),
+      reason: clean(entry?.unresolvedReason),
+    }))
+    .filter((entry) => entry.chunkId);
   allDiagnostics.sort((a, b) => String(a?.chunkId || "").localeCompare(String(b?.chunkId || "")));
   chunkTrace.sort((a, b) => {
     const chunkCmp = String(a?.chunkId || "").localeCompare(String(b?.chunkId || ""));
@@ -825,6 +921,7 @@ async function gatherMatrixWeb({
     modelRoute,
     chunkConcurrency,
     peakWorkerCount: Number(pool?.peakWorkerCount || 0),
+    unresolvedChunks,
   };
 }
 
@@ -884,6 +981,8 @@ export async function runStage(context = {}) {
         groundingPropagation: matrixWeb.groundingPropagation,
         chunkConcurrency: Number(matrixWeb?.chunkConcurrency || 1),
         peakWorkerCount: Number(matrixWeb?.peakWorkerCount || 1),
+        unresolvedChunkCount: Number(matrixWeb?.unresolvedChunks?.length || 0),
+        unresolvedChunks: ensureArray(matrixWeb?.unresolvedChunks).slice(0, 40),
         retries: Number(matrixWeb?.tokenDiagnostics?.retries || 0),
         tokenDiagnostics: matrixWeb.tokenDiagnostics,
         modelRoute: matrixWeb.modelRoute,
@@ -937,35 +1036,80 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
   }, runtime);
 
   const firstCall = await callScorecardWeb();
-  const firstResult = firstCall.result;
-  let result = firstResult;
-  let anyScorecardFallbackUsed = firstCall?.fallbackUsed === true;
-  const tokenDiagnosticsList = [firstResult?.tokenDiagnostics];
-  let combinedRetries = Number(firstResult?.retries || 0);
+  const result = firstCall?.result || null;
+  const retrieveAttemptCodes = normalizeReasonCodes([
+    ...ensureArray(firstCall?.attempts).flatMap((attempt) => ensureArray(attempt?.reasonCodes)),
+    ...ensureArray(firstCall?.attempts)
+      .filter((attempt) => attempt?.noSearchPerformed === true)
+      .map(() => REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED),
+    ...ensureArray(firstCall?.attempts)
+      .filter((attempt) => clean(attempt?.errorReasonCode) === REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE)
+      .map(() => REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE),
+  ]);
+  const retrieveAttemptTokenDiagnostics = combineTokenDiagnostics(
+    ensureArray(firstCall?.attempts).map((attempt) => attempt?.tokenDiagnostics).filter(Boolean)
+  );
+  const tokenDiagnosticsList = [result?.tokenDiagnostics, retrieveAttemptTokenDiagnostics].filter(Boolean);
+  const combinedRetries = Number(result?.retries || 0) + Number(retrieveAttemptTokenDiagnostics?.retries || 0);
   const stageReasonCodes = [
-    ...ensureArray(firstResult?.reasonCodes),
-    ...(firstCall?.fallbackUsed
-      ? [REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE, REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
+    ...retrieveAttemptCodes,
+    ...ensureArray(result?.reasonCodes),
+    ...(firstCall?.fallbackUsed === true
+      && clean(firstCall?.fallbackReasonCode) === REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE
+      ? [REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
+      : []),
+    ...(clean(firstCall?.fallbackReasonCode) ? [clean(firstCall?.fallbackReasonCode)] : []),
+    ...((firstCall?.resolved === false && clean(firstCall?.unresolvedReasonCode))
+      ? [clean(firstCall?.unresolvedReasonCode)]
       : []),
   ];
-  if (firstResult?.meta?.noSearchPerformed === true) {
-    const retryCall = await callScorecardWeb("Mandatory requirement: call google_search for each dimension before returning sources.");
-    const retryResult = retryCall.result;
-    combinedRetries += Number(retryResult?.retries || 0);
-    anyScorecardFallbackUsed = anyScorecardFallbackUsed || retryCall?.fallbackUsed === true;
-    stageReasonCodes.push(
-      ...ensureArray(retryResult?.reasonCodes),
-      ...(retryCall?.fallbackUsed
-        ? [REASON_CODES.GEMINI_EMPTY_SUCCESS_RESPONSE, REASON_CODES.STAGE_03B_GEMINI_EMPTY_FALLBACK_USED]
-        : [])
-    );
-    tokenDiagnosticsList.push(retryResult?.tokenDiagnostics);
-    if (retryResult?.meta?.noSearchPerformed === true) {
-      const noSearchErr = new Error("No google_search calls were performed for the scorecard web evidence pass.");
-      noSearchErr.reasonCode = REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED;
-      throw noSearchErr;
-    }
-    result = retryResult;
+
+  if (!result) {
+    const fallbackTokenDiagnostics = {
+      ...(combineTokenDiagnostics(tokenDiagnosticsList) || {}),
+      unresolved: true,
+    };
+    const mergedOnFailure = mergeScorecard(ensureArray(memory?.scorecard?.dimensions), []);
+    return {
+      stageStatus: "ok",
+      reasonCodes: normalizeReasonCodes(stageReasonCodes),
+      statePatch: {
+        ui: { phase: STAGE_ID },
+        evidenceDrafts: {
+          web: {
+            scorecard: {
+              dimensions: [],
+            },
+          },
+          merged: {
+            scorecard: {
+              dimensions: mergedOnFailure,
+            },
+          },
+        },
+      },
+      diagnostics: {
+        mode: "scorecard",
+        dimensions: mergedOnFailure.length,
+        citations: computeGroundingCoverage([]),
+        groundingPropagation: computeGroundingPropagation([]),
+        groundedSourcesResolved: null,
+        retries: combinedRetries,
+        retrieveFallbackUsed: firstCall?.fallbackUsed === true,
+        retrieveUnresolved: true,
+        retrieveUnresolvedReasonCode: clean(firstCall?.unresolvedReasonCode) || REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED,
+        retrieveUnresolvedReason: clean(firstCall?.unresolvedReasonMessage),
+        modelRoute: firstCall?.attempts?.find((attempt) => attempt?.ok === true)?.route || null,
+        tokenDiagnostics: fallbackTokenDiagnostics,
+      },
+      io: {
+        prompt,
+        response: "",
+      },
+      modelRoute: firstCall?.attempts?.find((attempt) => attempt?.ok === true)?.route || null,
+      tokens: fallbackTokenDiagnostics,
+      retries: combinedRetries,
+    };
   }
 
   const confidenceStats = { coerced: 0 };

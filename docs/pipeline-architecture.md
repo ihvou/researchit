@@ -190,7 +190,7 @@ Both modes use the same stage graph.
 - Pipeline progress is tracked by canonical stage IDs.
 - Progress tab reflects this stage sequence and stage goals (see Stage Breakdown table).
 - Diagnostics include stage-level status, exact model route used, retries, token usage, and estimated cost.
-- Raw provider payloads are cached for stages 03a/03b/08 and can be replayed through `reprocessStage(...)` after parser/normalizer fixes without spending new model calls.
+- Raw provider payloads are cached for stages 03a/03b/03c/08 and can be replayed through `reprocessStage(...)` after parser/normalizer fixes without spending new model calls.
 - On abort: show failure popup with primary reason code and plain-language explanation; offer Download Debug Log immediately.
 
 ---

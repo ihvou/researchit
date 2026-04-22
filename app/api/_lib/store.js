@@ -252,6 +252,7 @@ function createUserRecord(email) {
 const DEFAULT_RAW_CALL_CACHE_STAGES = new Set([
   "stage_03a_evidence_memory",
   "stage_03b_evidence_web",
+  "stage_03c_evidence_deep_assist",
   "stage_08_recover",
 ]);
 

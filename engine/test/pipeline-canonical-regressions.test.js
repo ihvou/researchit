@@ -146,7 +146,7 @@ test("reasonCodesForUpstreamHash excludes cache_hit when stage result is cached"
   assert.deepEqual(fromFresh, ["prompt_compaction_applied", "cache_hit"]);
 });
 
-test("stage 03b matrix web pass adaptively splits chunks and preserves full cell coverage", async () => {
+test("stage 03b matrix web pass keeps deterministic chunks and preserves full cell coverage on chunk failures", async () => {
   const attrs = [
     { id: "attr-1", label: "Attribute 1" },
     { id: "attr-2", label: "Attribute 2" },
@@ -225,7 +225,8 @@ test("stage 03b matrix web pass adaptively splits chunks and preserves full cell
 
   assert.equal(webCells.length, subjects.length * attrs.length);
   assert.equal(mergedCells.length, subjects.length * attrs.length);
-  assert.ok((result?.diagnostics?.chunks || []).some((item) => Array.isArray(item?.splitInto)));
+  assert.ok((result?.diagnostics?.chunks || []).some((item) => item?.unresolved === true));
+  assert.equal(Number(result?.diagnostics?.chunkSplitDepthMax || 0), 0);
 });
 
 test("stage 03b marks grounded sources from provider metadata", async () => {
@@ -493,6 +494,95 @@ test("stage 08 reserves per-attribute recovery floor before pressure fill", asyn
   assert.equal(result?.diagnostics?.attributeCoverageFloorReserved, 2);
   assert.equal(result?.diagnostics?.effectiveBudget, 2);
   assert.equal(result?.statePatch?.recoveredPatch?.matrix?.cells?.length, 2);
+});
+
+test("stage 08 matrix recovery falls back to OpenAI retrieval when Gemini returns no-search", async () => {
+  const calls = [];
+  const runtime = {
+    config: {
+      models: baseModels(),
+      limits: { matrixAdaptiveTargetedMax: 1 },
+    },
+    budgets: {
+      stage_08_recover: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
+    },
+    prompts: { analyst: "recover" },
+    transport: {
+      callAnalyst: async (_messages, _system, _maxTokens, options = {}) => {
+        const provider = String(options?.provider || "").toLowerCase();
+        const chunkId = String(options?.chunkId || "");
+        calls.push({ provider, chunkId, liveSearch: !!options?.liveSearch });
+        if (chunkId.endsWith("-retrieve")) {
+          return {
+            text: JSON.stringify({
+              queries: [{ cellKey: "s1::a1", query: "q", rationale: "r" }],
+            }),
+            meta: {
+              liveSearchUsed: false,
+              webSearchCalls: 0,
+              noSearchPerformed: true,
+            },
+          };
+        }
+        if (chunkId.endsWith("-retrieve-openai-fallback")) {
+          return {
+            text: JSON.stringify({
+              queries: [{ cellKey: "s1::a1", query: "q", rationale: "r" }],
+            }),
+            sources: [{ name: "Recovered source", url: "https://example.com/recover" }],
+            meta: {
+              liveSearchUsed: true,
+              webSearchCalls: 1,
+              noSearchPerformed: false,
+            },
+          };
+        }
+        return {
+          text: JSON.stringify({
+            cells: [{
+              subjectId: "s1",
+              attributeId: "a1",
+              value: "Recovered",
+              full: "Recovered from fallback retrieval",
+              confidence: "medium",
+              confidenceReason: "fallback web evidence",
+              sources: [{ corpusId: "c01-src-01", name: "Recovered source", sourceType: "news" }],
+              arguments: { supporting: [], limiting: [] },
+              risks: "",
+              missingEvidence: "",
+            }],
+          }),
+        };
+      },
+      callCritic: async () => ({ text: "{\"ok\":true}" }),
+      callSynthesizer: async () => ({ text: "{\"ok\":true}" }),
+    },
+  };
+
+  const state = {
+    outputType: "matrix",
+    mode: "native",
+    request: {
+      objective: "recover matrix",
+      matrix: {
+        subjects: [{ id: "s1", label: "Subject 1" }],
+        attributes: [{ id: "a1", label: "Attribute 1" }],
+      },
+    },
+    assessment: {
+      matrix: {
+        cells: [{ subjectId: "s1", attributeId: "a1", confidence: "low", sources: [] }],
+      },
+    },
+  };
+
+  const result = await run08({ state, runtime });
+  const patches = result?.statePatch?.recoveredPatch?.matrix?.cells || [];
+
+  assert.equal(patches.length, 1);
+  assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve") && call.provider === "gemini"), true);
+  assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve-openai-fallback") && call.provider === "openai"), true);
+  assert.equal(Number(result?.diagnostics?.unresolvedGroupCount || 0), 0);
 });
 
 test("stage 06 applies verification tiers and isolates infrastructure noise", async () => {
