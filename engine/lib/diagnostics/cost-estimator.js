@@ -17,6 +17,20 @@ const PROVIDER_DEFAULT_PRICING_USD_PER_1M = {
 const MODEL_PRICING_USD_PER_1M = [
   {
     provider: "openai",
+    pattern: /o3-deep-research/i,
+    input: 10.0,
+    output: 40.0,
+    key: "openai:o3-deep-research",
+  },
+  {
+    provider: "openai",
+    pattern: /o4-mini-deep-research/i,
+    input: 2.0,
+    output: 8.0,
+    key: "openai:o4-mini-deep-research",
+  },
+  {
+    provider: "openai",
     pattern: /gpt-5(?:\.4)?-mini/i,
     input: 0.8,
     output: 3.2,

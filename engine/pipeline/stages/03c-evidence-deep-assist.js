@@ -7,6 +7,7 @@ import {
   normalizeConfidence,
   normalizeSources,
 } from "./common.js";
+import { normalizeReasonCodes } from "../contracts/reason-codes.js";
 
 export const STAGE_ID = "stage_03c_evidence_deep_assist";
 export const STAGE_TITLE = "Evidence Deep Research x3";
@@ -100,6 +101,28 @@ function buildPlanContext(plan = {}, unitIds = []) {
   return lines.join("\n");
 }
 
+function normalizeProviderSuccess(item = {}, state = {}) {
+  if (!item || typeof item !== "object") return null;
+  const providerId = clean(item?.providerId).toLowerCase();
+  if (!providerId) return null;
+  const route = item?.route && typeof item.route === "object" ? item.route : null;
+  const draft = item?.draft && typeof item.draft === "object"
+    ? item.draft
+    : normalizeDraftFromParsed(item?.parsed || {}, state);
+  return {
+    providerId,
+    route,
+    draft,
+    response: clean(item?.response),
+    retries: Number(item?.retries || 0),
+    tokenDiagnostics: item?.tokenDiagnostics && typeof item.tokenDiagnostics === "object"
+      ? item.tokenDiagnostics
+      : null,
+    reasonCodes: ensureArray(item?.reasonCodes),
+    success: true,
+  };
+}
+
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const mode = clean(state?.mode).toLowerCase();
@@ -114,6 +137,11 @@ export async function runStage(context = {}) {
 
   const providers = normalizeProviders(runtime?.config || state?.config || {});
   const plan = state?.plan || {};
+  const priorProviderRuns = ensureArray(state?.evidenceDrafts?.deepAssist?.providers)
+    .map((item) => normalizeProviderSuccess(item, state))
+    .filter(Boolean);
+  const priorByProvider = new Map(priorProviderRuns.map((item) => [item.providerId, item]));
+  const providersToRun = providers.filter((providerId) => !priorByProvider.has(providerId));
 
   const prompt = state?.outputType === "matrix"
     ? (() => {
@@ -161,7 +189,7 @@ Rules:
 Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
     })();
 
-  const tasks = providers.map(async (providerId) => {
+  const tasks = providersToRun.map(async (providerId) => {
     const override = providerOverride(runtime?.config || state?.config || {}, providerId);
     const result = await callActorJson({
       state,
@@ -184,6 +212,10 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       schemaHint: state?.outputType === "matrix"
         ? '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}'
         : '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+      callContext: {
+        chunkId: providerId,
+        promptVersion: "v1",
+      },
     });
 
     return {
@@ -199,27 +231,54 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
   });
 
   const settled = await Promise.allSettled(tasks);
-  const successes = [];
+  const successes = [...priorProviderRuns];
   const failures = [];
   settled.forEach((entry, idx) => {
     if (entry.status === "fulfilled") {
-      successes.push(entry.value);
+      const normalized = normalizeProviderSuccess(entry.value, state);
+      if (normalized) successes.push(normalized);
     } else {
       failures.push({
-        providerId: providers[idx],
+        providerId: providersToRun[idx],
         error: entry.reason,
       });
     }
   });
 
   if (failures.length) {
-    const first = failures[0]?.error || new Error("Deep Research x3 provider failed.");
+    const first = failures[0]?.error instanceof Error
+      ? failures[0].error
+      : new Error("Deep Research x3 provider failed.");
+    const partialProviderContributions = providers.map((providerId) => ({
+      provider: providerId,
+      success: successes.some((item) => clean(item?.providerId) === clean(providerId)),
+      durationMs: 0,
+    }));
+    first.statePatch = {
+      ui: { phase: STAGE_ID },
+      evidenceDrafts: {
+        deepAssist: {
+          providers: successes,
+        },
+      },
+      evidence: {
+        providerContributions: partialProviderContributions,
+      },
+    };
+    first.io = {
+      prompt,
+      providerResponses: successes.map((item) => ({ provider: item.providerId, response: item.response })),
+      providerFailures: failures.map((item) => ({ provider: item.providerId, error: String(item?.error?.message || item?.error || "") })),
+    };
+    first.reasonCodes = normalizeReasonCodes([
+      ...(Array.isArray(first?.reasonCodes) ? first.reasonCodes : []),
+    ]);
     throw first;
   }
 
-  const providerContributions = successes.map((item) => ({
-    provider: item.providerId,
-    success: true,
+  const providerContributions = providers.map((providerId) => ({
+    provider: providerId,
+    success: successes.some((item) => clean(item?.providerId) === clean(providerId)),
     durationMs: 0,
   }));
   const tokenBreakdown = successes.map((item) => ({

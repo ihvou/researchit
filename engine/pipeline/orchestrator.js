@@ -772,6 +772,12 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
         ...(Array.isArray(err?.reasonCodes) ? err.reasonCodes : []),
         clean(err?.reasonCode),
       ]);
+      if (err?.statePatch && typeof err.statePatch === "object") {
+        state = applyStatePatch(state, err.statePatch);
+      }
+      if (err?.io && typeof err.io === "object") {
+        appendIoRecord(state, { stageId: stage.id, ...err.io });
+      }
 
       const completedRecord = completeStageRecord(stageRecord, {
         status: "failed",

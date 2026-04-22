@@ -437,6 +437,87 @@ test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias
   await assert.rejects(() => run03c({ state, runtime }), /provider down/i);
 });
 
+test("stage 03c resumes from prior provider success and runs only missing providers", async () => {
+  const calls = [];
+  const runtime = {
+    config: {
+      models: baseModels(),
+      deepAssist: {
+        defaults: { providers: ["chatgpt", "claude", "gemini"] },
+        providers: {
+          chatgpt: { analyst: { provider: "openai", model: "o3-deep-research" } },
+          claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-20250514" } },
+          gemini: { analyst: { provider: "gemini", model: "gemini-2.5-pro" } },
+        },
+      },
+    },
+    budgets: {
+      stage_03c_evidence_deep_assist: { retryMax: 0, timeoutMs: 10_000, tokenBudget: 8_000 },
+    },
+    prompts: { analystDeepResearch: "deep research x3" },
+    transport: {
+      callAnalyst: async (_messages, _system, _budget, options = {}) => {
+        calls.push({
+          provider: String(options?.provider || "").toLowerCase(),
+          chunkId: String(options?.chunkId || ""),
+        });
+        const provider = String(options?.provider || "").toLowerCase();
+        if (provider === "openai") {
+          throw new Error("openai should have been reused from prior run");
+        }
+        return {
+          text: JSON.stringify({
+            dimensions: [{ unitId: "dim-1", brief: "ok", full: `from-${provider}`, confidence: "medium", sources: [] }],
+          }),
+          meta: {
+            providerId: provider,
+            model: provider === "anthropic" ? "claude-sonnet-4-20250514" : "gemini-2.5-pro",
+          },
+        };
+      },
+      callCritic: async () => ({ text: '{"ok":true}' }),
+      callSynthesizer: async () => ({ text: '{"ok":true}' }),
+    },
+  };
+
+  const state = {
+    mode: "deep-research-x3",
+    outputType: "scorecard",
+    request: {
+      objective: "test",
+      scorecard: {
+        dimensions: [{ id: "dim-1", label: "Dimension 1" }],
+      },
+    },
+    evidenceDrafts: {
+      deepAssist: {
+        providers: [{
+          providerId: "chatgpt",
+          route: { provider: "openai", model: "o3-deep-research" },
+          draft: {
+            scorecard: {
+              dimensions: [{ id: "dim-1", brief: "ok", full: "from-openai", confidence: "medium", sources: [] }],
+            },
+          },
+          response: "{\"dimensions\":[{\"unitId\":\"dim-1\",\"full\":\"from-openai\"}]}",
+          tokenDiagnostics: { inputTokens: 100, outputTokens: 200, totalTokens: 300, provider: "openai", model: "o3-deep-research" },
+          retries: 0,
+          reasonCodes: [],
+          success: true,
+        }],
+      },
+    },
+  };
+
+  const result = await run03c({ state, runtime });
+  const providers = result?.statePatch?.evidenceDrafts?.deepAssist?.providers || [];
+
+  assert.equal(providers.length, 3);
+  assert.equal(calls.some((call) => call.provider === "openai"), false);
+  assert.equal(calls.some((call) => call.provider === "anthropic"), true);
+  assert.equal(calls.some((call) => call.provider === "gemini"), true);
+});
+
 test("stage 08 reserves per-attribute recovery floor before pressure fill", async () => {
   const runtime = {
     config: {

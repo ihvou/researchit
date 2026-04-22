@@ -293,12 +293,11 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
 }
 
 async function callResponsesWithWebSearch({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl, deepResearch = false }) {
-  // Deep Research: prefer web_search_preview first — this is the tool used by
-  // ChatGPT Deep Research with o-series models (o3, o4-mini). The o-series model
-  // + web_search_preview combination is what powers the ChatGPT Deep Research product.
-  // Regular liveSearch: try web_search first (stable), fall back to web_search_preview.
+  // Use documented web search tool first. Keep preview as compatibility fallback.
+  // Deep research models (o3-deep-research / o4-mini-deep-research) still require
+  // at least one data source tool, and web search is the default source here.
   const toolTypes = deepResearch
-    ? ["web_search_preview", "web_search"]
+    ? ["web_search", "web_search_preview"]
     : ["web_search", "web_search_preview"];
   let lastErr;
 

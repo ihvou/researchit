@@ -35,13 +35,13 @@ Quality policy is defined in [quality-bar.md](./quality-bar.md). If any tradeoff
 The Analyst uses a two-pass hybrid approach: Stage 03a generates memory-grounded evidence (OpenAI gpt-5.4, no web) and Stages 03b.1 + 03b.2 extend it with live web evidence. 03b.1 (Gemini 2.5 Pro + Google Search grounding) retrieves a corpus only; 03b.2 (OpenAI gpt-5.4) reads the corpus and emits cells that may cite only entries from it — retrieval and reasoning are explicitly separated so the model cannot cite URLs outside the grounded corpus. Recovery (08.1 + 08.2, same split), critic debate, and synthesis follow.
 
 ### Deep Research ×3 (`deep-research-x3`)
-Stage 03c invokes the **Deep Research product feature** from all three major providers simultaneously — this is exactly what a user gets when they click the "+" Deep Research/Research button in ChatGPT, Claude, or Gemini:
+Stage 03c runs a documented deep-research stack across three providers in parallel. It uses provider-native research APIs where available and documented web-research tool configurations for the rest.
 
 | Provider | Deep Research mode | Implementation |
 |---|---|---|
-| **ChatGPT** | Deep Research | OpenAI `o3` via Responses API with `web_search_preview` tool — o3's autonomous multi-step research loop |
-| **Claude** | Research | Anthropic `claude-sonnet-4` with `web_search_20250305` tool (max 20 uses) — Claude's Research mode |
-| **Gemini** | Deep Research | Google `gemini-2.5-pro` with `google_search` grounding and `thinkingConfig { thinkingBudget: -1 }` (unlimited extended thinking) — Gemini's Deep Research mode |
+| **ChatGPT** | Deep Research | OpenAI Responses API with model `o3-deep-research` and web search tool enabled (`web_search`; preview fallback for compatibility). |
+| **Claude** | Research-style web run | Anthropic Messages API with model `claude-sonnet-4-20250514` and tool `web_search_20250305` (`max_uses` capped at 20). |
+| **Gemini** | Research-style web run | Gemini `generateContent` with model `gemini-2.5-pro`, tool `google_search`, and `thinkingConfig { thinkingBudget: -1 }` for extended reasoning. |
 
 All three run in parallel. Their independent evidence drafts are forwarded to Stage 04 (merge), which reconciles findings, preserves provenance, and resolves conflicts before the shared critic/defend/synthesis pipeline.
 
@@ -85,7 +85,7 @@ Router diamonds (`{"..."}`) stay minimal — they are control-flow only, not dat
 **Routing policy:**
 - Each stage declares one exact provider and model. The pipeline does not pick the first available key, does not fall through to env-var defaults, and does not failover to another provider.
 - If a stage's declared route is unreachable, the run fails with `route_mismatch_preflight` before any token spend.
-- Stage 03c is the only exception: it runs three providers in parallel under the Analyst actor (o3 + claude-sonnet-4 + gemini-2.5-pro). Preflight must verify all three are present and reachable. Absence of any one fails `route_mismatch_preflight`. No provider may be silently skipped.
+- Stage 03c is the only exception: it runs three providers in parallel under the Analyst actor (o3-deep-research + claude-sonnet-4 + gemini-2.5-pro). Preflight must verify all three are present and reachable. Absence of any one fails `route_mismatch_preflight`. No provider may be silently skipped.
 - `resolveProviderOrder` / "pick first provider with a valid key" must not be used for any pipeline stage call.
 
 ```mermaid
@@ -101,7 +101,7 @@ flowchart TD
     EVROUTER{"evidence\nmode?"}
     MEM_NATIVE["#03a EVIDENCE - MEMORY\nGoal: produce memory-grounded first-pass evidence\nActor: Analyst | Model: openai:gpt-5.4\nIn: ResearchPlan + unit briefs\nReq: generate evidence per unit (no web)\nResp: per-unit evidence, scores, sources\nOut: memory evidence bundle"]
     WEB_NATIVE["#03b EVIDENCE - WEB\nGoal: add web-cited evidence, patch memory gaps\nActor: Analyst | Model: gemini-2.5-pro (retrieve) + openai:gpt-5.4 (read)\nIn: memory bundle + ResearchPlan\nReq: retrieve grounded corpus, then reason only over corpus\nResp: web-cited additions and gap patches\nOut: enriched evidence bundle"]
-    EVID_DA["#03c EVIDENCE - DEEP RESEARCH ×3\nGoal: parallel Deep Research calls to 3 providers for cross-validation\nActor: Analyst | Model: openai:o3 + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: ChatGPT Deep Research (o3 + web_search_preview, Responses API); Claude Research (claude-sonnet-4 + web_search, max 20 uses); Gemini Deep Research (gemini-2.5-pro + google_search + thinkingConfig unlimited budget) — all three in parallel\nResp: 3 independent deep-researched evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
+    EVID_DA["#03c EVIDENCE - DEEP RESEARCH ×3\nGoal: parallel deep-research runs across 3 providers for cross-validation\nActor: Analyst | Model: openai:o3-deep-research + anthropic:claude-sonnet-4 + gemini:gemini-2.5-pro\nIn: ResearchPlan (gap hypotheses, angles, source targets) + unit definitions\nReq: OpenAI deep research (Responses API + o3-deep-research + web_search); Claude run (claude-sonnet-4 + web_search_20250305, max_uses 20); Gemini run (gemini-2.5-pro + google_search + thinkingConfig) — all in parallel\nResp: 3 independent research evidence drafts per unit\nOut: 3 provider drafts forwarded to stage 04 merge"]
     MERGE{{"#04 EVIDENCE MERGE\nGoal: unify evidence drafts, preserve provenance\nActor: engine\nIn: evidence bundle(s)\nOut: EvidenceBundle"}}
     SCORE_CONF["#05 SCORE + CONFIDENCE\nGoal: assess units/cells and assign calibrated confidence\nActor: Analyst | Model: openai:gpt-5.4 (scorecard)\n       engine (matrix)\nIn: EvidenceBundle + scoring criteria\nReq: score scorecard units against rubric anchors and calibrate confidence\nResp: per-unit assessment with confidence rationale (scorecard)\nOut: AssessedState"]
     VERIFY{{"#06 SOURCE VERIFICATION\nGoal: fetch and verify cited sources\nActor: engine\nIn: AssessedState with cited URLs\nOut: sources tagged with verificationStatus"}}
