@@ -122,16 +122,6 @@ function extractHttpUrlsDeep(payload = {}) {
   return urls;
 }
 
-function isAnthropicToolConfigError(error) {
-  const message = cleanText(error?.message || error);
-  if (!message) return false;
-  const lowered = message.toLowerCase();
-  return (
-    lowered.includes("tool")
-    && (lowered.includes("invalid") || lowered.includes("unknown") || lowered.includes("unsupported") || lowered.includes("not found"))
-  );
-}
-
 async function callAnthropic({
   apiKey,
   model,
@@ -159,13 +149,9 @@ async function callAnthropic({
   const resolvedSearchMaxUses = Number.isFinite(Number(searchMaxUses)) && Number(searchMaxUses) > 0
     ? Math.max(1, Math.min(20, Math.floor(Number(searchMaxUses))))
     : (deepResearch ? 20 : 6);
-  const configuredTool = cleanText(process.env.ANTHROPIC_WEB_SEARCH_TOOL);
-  const webSearchToolCandidates = [...new Set([
-    configuredTool || "web_search",
-    "web_search_20250305",
-  ].filter(Boolean))];
+  const webSearchToolType = cleanText(process.env.ANTHROPIC_WEB_SEARCH_TOOL) || "web_search_20260209";
 
-  const makeRequest = async (withSearch, toolType = "") => {
+  const makeRequest = async (withSearch) => {
     const body = {
       model: resolvedModel,
       max_tokens: Math.max(256, Number(maxTokens) || 4000),
@@ -174,7 +160,7 @@ async function callAnthropic({
       ...(withSearch
         ? {
           tools: [{
-            type: cleanText(toolType) || "web_search_20250305",
+            type: webSearchToolType,
             name: "web_search",
             max_uses: resolvedSearchMaxUses,
           }],
@@ -193,25 +179,9 @@ async function callAnthropic({
     return toJsonBody(response, "Anthropic request failed");
   };
 
-  let data = null;
-  if (liveSearch) {
-    let lastError = null;
-    for (let idx = 0; idx < webSearchToolCandidates.length; idx += 1) {
-      const toolType = webSearchToolCandidates[idx];
-      try {
-        data = await makeRequest(true, toolType);
-        lastError = null;
-        break;
-      } catch (error) {
-        lastError = error;
-        const isLast = idx === webSearchToolCandidates.length - 1;
-        if (isLast || !isAnthropicToolConfigError(error)) throw error;
-      }
-    }
-    if (!data && lastError) throw lastError;
-  } else {
-    data = await makeRequest(false);
-  }
+  const data = liveSearch
+    ? await makeRequest(true)
+    : await makeRequest(false);
 
   const blocks = Array.isArray(data?.content) ? data.content : [];
   const text = blocks

@@ -9,7 +9,7 @@ function isRateLimitError(err) {
   const status = Number(err?.status || err?.statusCode || 0);
   if (status === 429) return true;
   const message = String(err?.message || "").toLowerCase();
-  return message.includes("rate limit") || message.includes("429");
+  return message.includes("rate limit") || /\b429\b/.test(message);
 }
 
 function isTimeoutError(err) {
