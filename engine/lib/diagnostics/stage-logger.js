@@ -149,6 +149,14 @@ export function finalizeStageDiagnostics(diagnostics = {}) {
         ? out.cacheDiagnostics.hashInputs
         : {},
       missReason: String(out.cacheDiagnostics?.missReason || ""),
+      backend: String(out.cacheDiagnostics?.backend || ""),
+      layer: String(out.cacheDiagnostics?.layer || ""),
+      storeMode: String(out.cacheDiagnostics?.storeMode || ""),
+      endpointStatus: toNumber(out.cacheDiagnostics?.endpointStatus, 0),
+      reasonCode: String(out.cacheDiagnostics?.reasonCode || ""),
+      errorCode: String(out.cacheDiagnostics?.errorCode || ""),
+      error: String(out.cacheDiagnostics?.error || ""),
+      warning: String(out.cacheDiagnostics?.warning || ""),
     };
   }
   return out;

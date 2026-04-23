@@ -53,6 +53,53 @@ function normalizeMessages(messages = []) {
 }
 
 function toJsonBody(response, fallbackMessage) {
+  const parseResetValueMs = (raw) => {
+    const text = cleanText(raw);
+    if (!text) return 0;
+    if (/^\d+(\.\d+)?$/.test(text)) {
+      return Math.max(0, Math.round(Number(text) * 1000));
+    }
+    const msMatch = text.match(/^(\d+)\s*ms$/i);
+    if (msMatch) {
+      return Math.max(0, Number(msMatch[1]));
+    }
+    const sMatch = text.match(/^(\d+)\s*s(ec(onds?)?)?$/i);
+    if (sMatch) {
+      return Math.max(0, Number(sMatch[1]) * 1000);
+    }
+    const parsedDate = Date.parse(text);
+    if (Number.isFinite(parsedDate)) {
+      return Math.max(0, parsedDate - Date.now());
+    }
+    return 0;
+  };
+
+  const extractRateLimitInfo = () => {
+    const retryAfter = cleanText(response?.headers?.get("retry-after"));
+    const requestReset = cleanText(response?.headers?.get("anthropic-ratelimit-requests-reset"));
+    const inputReset = cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-reset"));
+    const outputReset = cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-reset"));
+    const retryAfterMs = Math.max(
+      parseResetValueMs(retryAfter),
+      parseResetValueMs(requestReset),
+      parseResetValueMs(inputReset),
+      parseResetValueMs(outputReset),
+    );
+    return {
+      retryAfterMs,
+      retryAfter,
+      requestsLimit: cleanText(response?.headers?.get("anthropic-ratelimit-requests-limit")),
+      requestsRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-requests-remaining")),
+      requestsReset: requestReset,
+      inputTokensLimit: cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-limit")),
+      inputTokensRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-remaining")),
+      inputTokensReset: inputReset,
+      outputTokensLimit: cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-limit")),
+      outputTokensRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-remaining")),
+      outputTokensReset: outputReset,
+    };
+  };
+
   return response.json()
     .catch(() => ({}))
     .then((data) => {
@@ -66,6 +113,13 @@ function toJsonBody(response, fallbackMessage) {
         const err = new Error(message || fallbackMessage);
         err.status = response.status;
         err.payload = data;
+        const rateLimitInfo = extractRateLimitInfo();
+        if (Number(rateLimitInfo?.retryAfterMs || 0) > 0) {
+          err.retryAfterMs = Number(rateLimitInfo.retryAfterMs);
+        }
+        if (Object.values(rateLimitInfo).some((value) => !!cleanText(value))) {
+          err.rateLimitInfo = rateLimitInfo;
+        }
         throw err;
       }
       return data || {};

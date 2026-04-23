@@ -66,11 +66,22 @@ async function callRoute(role, payload, runtime = {}) {
 
   if (!res.ok) {
     const err = new Error(data?.error || `Request failed: /api/${role} (${res.status})`);
-    err.status = res.status;
+    const resolvedStatus = Number(data?.status || 0);
+    err.status = Number.isFinite(resolvedStatus) && resolvedStatus >= 100 ? resolvedStatus : res.status;
     err.role = role;
     err.retryable = DEFAULT_RETRYABLE_STATUS.includes(res.status);
     if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
       err.reasonCode = data.reasonCode.trim();
+    }
+    const retryAfterMs = Number(data?.retryAfterMs || 0);
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+      err.retryAfterMs = retryAfterMs;
+    }
+    if (data?.rateLimitInfo && typeof data.rateLimitInfo === "object") {
+      err.rateLimitInfo = data.rateLimitInfo;
+    }
+    if (typeof data?.code === "string" && data.code.trim()) {
+      err.code = data.code.trim();
     }
     if (data?.abortReason && typeof data.abortReason === "object") {
       err.abortReason = normalizeAbortReason(data.abortReason, "unknown");
@@ -88,6 +99,16 @@ async function callRoute(role, payload, runtime = {}) {
     if (data?.url != null) err.url = String(data.url || "");
     if (typeof data?.reasonCode === "string" && data.reasonCode.trim()) {
       err.reasonCode = data.reasonCode.trim();
+    }
+    const retryAfterMs = Number(data?.retryAfterMs || 0);
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+      err.retryAfterMs = retryAfterMs;
+    }
+    if (data?.rateLimitInfo && typeof data.rateLimitInfo === "object") {
+      err.rateLimitInfo = data.rateLimitInfo;
+    }
+    if (typeof data?.code === "string" && data.code.trim()) {
+      err.code = data.code.trim();
     }
     if (data?.abortReason && typeof data.abortReason === "object") {
       err.abortReason = normalizeAbortReason(data.abortReason, "unknown");

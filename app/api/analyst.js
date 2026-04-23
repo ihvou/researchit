@@ -18,6 +18,12 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function resolveHttpStatusFromError(err) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (Number.isFinite(status) && status >= 400 && status <= 599) return status;
+  return 500;
+}
+
 function hashRequestPayload(payload = {}) {
   return crypto
     .createHash("sha256")
@@ -147,17 +153,25 @@ export default async function handler(req, res) {
   } catch (err) {
     const detail = err?.message || "Unknown provider error";
     const reasonCode = clean(err?.reasonCode);
+    const errorCode = clean(err?.code);
+    const retryAfterMs = Number(err?.retryAfterMs || 0);
     const abortReason = err?.abortReason && typeof err.abortReason === "object"
       ? err.abortReason
       : undefined;
     const providerMeta = err?.providerMeta && typeof err.providerMeta === "object"
       ? err.providerMeta
       : undefined;
-    return res.status(500).json({
+    const rateLimitInfo = err?.rateLimitInfo && typeof err.rateLimitInfo === "object"
+      ? err.rateLimitInfo
+      : undefined;
+    return res.status(resolveHttpStatusFromError(err)).json({
       error: `Pinned analyst provider route failed (${resolved.providerId}): ${detail}`,
+      ...(errorCode ? { code: errorCode } : {}),
+      ...(Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? { retryAfterMs } : {}),
       ...(reasonCode ? { reasonCode } : {}),
       ...(abortReason ? { abortReason } : {}),
       ...(providerMeta ? { providerMeta } : {}),
+      ...(rateLimitInfo ? { rateLimitInfo } : {}),
     });
   }
 }

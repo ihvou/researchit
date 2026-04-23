@@ -56,6 +56,10 @@ async function requestStageCache(payload, method = "POST") {
     const data = await res.json().catch(() => ({}));
     const err = new Error(data?.error || `Stage cache request failed (${res.status})`);
     err.status = res.status;
+    err.code = clean(data?.code);
+    err.reasonCode = clean(data?.reasonCode);
+    err.storage = data?.storage && typeof data.storage === "object" ? data.storage : null;
+    err.action = clean(data?.action);
     throw err;
   }
   return res.json().catch(() => ({}));
@@ -69,6 +73,8 @@ function localGet(runId, stageId, hashInputs = {}) {
     return {
       cacheHit: false,
       missReason: "no_entry",
+      backend: "local_memory",
+      layer: "client",
       cacheKey: key,
       hash,
       hashInputs,
@@ -80,6 +86,8 @@ function localGet(runId, stageId, hashInputs = {}) {
     return {
       cacheHit: false,
       missReason: "hash_mismatch",
+      backend: "local_memory",
+      layer: "client",
       cacheKey: key,
       hash,
       hashInputs,
@@ -91,6 +99,8 @@ function localGet(runId, stageId, hashInputs = {}) {
   return {
     cacheHit: true,
     missReason: null,
+    backend: "local_memory",
+    layer: "client",
     cacheKey: key,
     hash,
     hashInputs,
@@ -110,6 +120,8 @@ function localSet(runId, stageId, hashInputs = {}, output = null) {
   });
   return {
     ok: true,
+    backend: "local_memory",
+    layer: "client",
     cacheKey: key,
     hash,
     bytes: JSON.stringify(output || {}).length,
@@ -139,12 +151,24 @@ export function createStageCacheClient() {
         }, "POST");
         if (data && data.ok) return data;
       } catch (err) {
+        const reasonCode = clean(err?.reasonCode);
+        const code = clean(err?.code);
+        const storageMode = clean(err?.storage?.mode);
+        const missReason = reasonCode === "stage_cache_store_unavailable"
+          ? "cache_store_unavailable"
+          : "cache_unavailable";
         if ([401, 403].includes(Number(err?.status || 0))) {
           return localGet(runId, stageId, hashInputs);
         }
         return {
           ...localGet(runId, stageId, hashInputs),
-          missReason: "cache_unavailable",
+          missReason,
+          backend: "remote",
+          layer: "api",
+          endpointStatus: Number(err?.status || 0) || 0,
+          reasonCode,
+          errorCode: code,
+          storeMode: storageMode,
           error: clean(err?.message),
         };
       }
@@ -167,6 +191,12 @@ export function createStageCacheClient() {
         }
         return {
           ...localSet(runId, stageId, hashInputs, output),
+          backend: "local_fallback",
+          layer: "api",
+          endpointStatus: Number(err?.status || 0) || 0,
+          reasonCode: clean(err?.reasonCode),
+          errorCode: clean(err?.code),
+          storeMode: clean(err?.storage?.mode),
           warning: clean(err?.message),
         };
       }
@@ -189,4 +219,3 @@ export function createStageCacheClient() {
     },
   };
 }
-

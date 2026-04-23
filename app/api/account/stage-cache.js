@@ -2,6 +2,7 @@ import { requireSessionUser } from "../_lib/auth.js";
 import {
   assertPersistentStoreAvailable,
   deleteRunStageCache,
+  getStorageDiagnostics,
   getStageCache,
   setStageCache,
 } from "../_lib/store.js";
@@ -13,10 +14,16 @@ function clean(value) {
 export default async function handler(req, res) {
   const auth = await requireSessionUser(req, res);
   if (!auth.user) return auth.handled;
+  const storage = getStorageDiagnostics();
   try {
     assertPersistentStoreAvailable();
   } catch (err) {
-    return res.status(500).json({ error: err?.message || "Persistent storage is not configured" });
+    return res.status(500).json({
+      error: err?.message || "Persistent storage is not configured",
+      code: err?.code || "STAGE_CACHE_STORE_UNAVAILABLE",
+      reasonCode: "stage_cache_store_unavailable",
+      storage,
+    });
   }
 
   if (req.method === "POST") {
@@ -35,7 +42,15 @@ export default async function handler(req, res) {
         const payload = await getStageCache(auth.user.id, runId, stageId, hashInputs);
         return res.status(200).json({ ok: true, ...payload });
       } catch (err) {
-        return res.status(500).json({ error: err?.message || "Failed to load stage cache" });
+        return res.status(500).json({
+          error: err?.message || "Failed to load stage cache",
+          code: err?.code || "STAGE_CACHE_GET_FAILED",
+          reasonCode: "stage_cache_get_failed",
+          action: "get",
+          stageId,
+          runId,
+          storage,
+        });
       }
     }
 
@@ -55,7 +70,15 @@ export default async function handler(req, res) {
         );
         return res.status(200).json({ ok: true, ...payload });
       } catch (err) {
-        return res.status(500).json({ error: err?.message || "Failed to store stage cache" });
+        return res.status(500).json({
+          error: err?.message || "Failed to store stage cache",
+          code: err?.code || "STAGE_CACHE_SET_FAILED",
+          reasonCode: "stage_cache_set_failed",
+          action: "set",
+          stageId,
+          runId,
+          storage,
+        });
       }
     }
 
@@ -71,10 +94,16 @@ export default async function handler(req, res) {
       const payload = await deleteRunStageCache(auth.user.id, runId);
       return res.status(200).json({ ok: true, ...payload });
     } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to clear stage cache" });
+      return res.status(500).json({
+        error: err?.message || "Failed to clear stage cache",
+        code: err?.code || "STAGE_CACHE_DELETE_FAILED",
+        reasonCode: "stage_cache_delete_failed",
+        action: "delete",
+        runId,
+        storage,
+      });
     }
   }
 
   return res.status(405).json({ error: "Method not allowed" });
 }
-

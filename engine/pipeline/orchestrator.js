@@ -111,9 +111,9 @@ const STAGE_BUDGETS = {
   [STAGE_07_ID]: { timeoutMs: 15000, retryMax: 0, tokenBudget: 0 },
   [STAGE_08_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 16000, chunkConcurrency: 3 },
   [STAGE_09_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 6000 },
-  [STAGE_10_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
-  [STAGE_11_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
-  [STAGE_12_ID]: { timeoutMs: 90000, retryMax: 1, tokenBudget: 8000 },
+  [STAGE_10_ID]: { timeoutMs: 75000, retryMax: 2, tokenBudget: 8000 },
+  [STAGE_11_ID]: { timeoutMs: 75000, retryMax: 2, tokenBudget: 8000 },
+  [STAGE_12_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 8000 },
   [STAGE_13_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
   [STAGE_14_ID]: {
     timeoutMs: 60000,
@@ -477,6 +477,7 @@ function ensureCacheDiagnosticsContainer(state = {}) {
     totalBytes: 0,
     stagesCached: [],
     stagesMissed: [],
+    missReasons: {},
   };
   return state.diagnostics.cacheDiagnostics;
 }
@@ -491,6 +492,11 @@ function appendCacheAggregate(state = {}, stageId = "", cacheDiagnostics = {}, b
   } else {
     aggregate.totalMisses = Number(aggregate.totalMisses || 0) + 1;
     aggregate.stagesMissed = [...new Set([...(aggregate.stagesMissed || []), id])];
+    const reason = clean(cacheDiagnostics?.missReason) || "unknown";
+    aggregate.missReasons = {
+      ...(aggregate.missReasons && typeof aggregate.missReasons === "object" ? aggregate.missReasons : {}),
+      [reason]: Number((aggregate.missReasons || {})[reason] || 0) + 1,
+    };
   }
   aggregate.totalBytes = Number(aggregate.totalBytes || 0) + Math.max(0, Number(bytes) || 0);
 }
@@ -641,6 +647,14 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
               cacheAgeMs: Number(entry?.cacheAgeMs || 0),
               hashInputs: stageHashInputs,
               missReason: clean(entry?.missReason) || (entry?.cacheHit ? null : "no_entry"),
+              backend: clean(entry?.backend),
+              layer: clean(entry?.layer),
+              storeMode: clean(entry?.storeMode),
+              endpointStatus: Number(entry?.endpointStatus || 0) || 0,
+              reasonCode: clean(entry?.reasonCode),
+              errorCode: clean(entry?.errorCode),
+              error: clean(entry?.error),
+              warning: clean(entry?.warning),
             };
             if (entry?.cacheHit && entry?.output && typeof entry.output === "object") {
               if (isCacheableStageResult(entry.output)) {
@@ -664,6 +678,11 @@ export async function runCanonicalPipeline(input, config, callbacks = {}) {
             cacheAgeMs: 0,
             hashInputs: stageHashInputs,
             missReason: "cache_unavailable",
+            backend: "orchestrator",
+            layer: "runtime",
+            endpointStatus: Number(cacheErr?.status || 0) || 0,
+            reasonCode: clean(cacheErr?.reasonCode),
+            errorCode: clean(cacheErr?.code),
             error: clean(cacheErr?.message),
           };
         }

@@ -12,6 +12,12 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function resolveHttpStatusFromError(err) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (Number.isFinite(status) && status >= 400 && status <= 599) return status;
+  return 500;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -90,8 +96,18 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const detail = err?.message || "Unknown provider error";
-    return res.status(500).json({
+    const reasonCode = clean(err?.reasonCode);
+    const errorCode = clean(err?.code);
+    const retryAfterMs = Number(err?.retryAfterMs || 0);
+    const rateLimitInfo = err?.rateLimitInfo && typeof err.rateLimitInfo === "object"
+      ? err.rateLimitInfo
+      : undefined;
+    return res.status(resolveHttpStatusFromError(err)).json({
       error: `Pinned synthesizer provider route failed (${resolved.providerId}): ${detail}`,
+      ...(reasonCode ? { reasonCode } : {}),
+      ...(errorCode ? { code: errorCode } : {}),
+      ...(Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? { retryAfterMs } : {}),
+      ...(rateLimitInfo ? { rateLimitInfo } : {}),
     });
   }
 }

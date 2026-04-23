@@ -276,6 +276,16 @@ export function getStorageMode() {
   return KV_ENABLED ? "kv" : "memory";
 }
 
+export function getStorageDiagnostics() {
+  return {
+    mode: getStorageMode(),
+    kvConfigured: KV_ENABLED,
+    nodeEnv: String(process.env.NODE_ENV || "").trim().toLowerCase() || "unknown",
+    vercelEnv: String(process.env.VERCEL_ENV || "").trim().toLowerCase() || "unknown",
+    productionLike: isProductionEnv(),
+  };
+}
+
 export function getRawCallCacheStages() {
   if (rawCallCacheDisabled()) return new Set();
   return parseRawCallCacheStages(process.env.RESEARCHIT_RAW_CALL_CACHE_STAGES);
