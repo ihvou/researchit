@@ -308,6 +308,9 @@ export async function callActorJson({
       maxRetries,
       initialBackoffMs: 300,
       backoffFactor: 2,
+      rateLimitInitialBackoffMs: Number(runtime?.budgets?.[stageId]?.rateLimitInitialBackoffMs || 12000),
+      rateLimitMaxBackoffMs: Number(runtime?.budgets?.[stageId]?.rateLimitMaxBackoffMs || (20 * 60 * 1000)),
+      rateLimitRetrySkewMs: Number(runtime?.budgets?.[stageId]?.rateLimitRetrySkewMs || 1500),
       onRetry: async ({ failureType, error }) => {
         if (failureType !== "parse") return;
         const truncated = !!error?.outputTruncated;

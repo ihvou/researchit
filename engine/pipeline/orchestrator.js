@@ -111,9 +111,30 @@ const STAGE_BUDGETS = {
   [STAGE_07_ID]: { timeoutMs: 15000, retryMax: 0, tokenBudget: 0 },
   [STAGE_08_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 16000, chunkConcurrency: 3 },
   [STAGE_09_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 6000 },
-  [STAGE_10_ID]: { timeoutMs: 75000, retryMax: 2, tokenBudget: 8000 },
-  [STAGE_11_ID]: { timeoutMs: 75000, retryMax: 2, tokenBudget: 8000 },
-  [STAGE_12_ID]: { timeoutMs: 90000, retryMax: 2, tokenBudget: 8000 },
+  [STAGE_10_ID]: {
+    timeoutMs: 75000,
+    retryMax: 2,
+    tokenBudget: 8000,
+    rateLimitInitialBackoffMs: 15000,
+    rateLimitMaxBackoffMs: 12 * 60 * 1000,
+    rateLimitRetrySkewMs: 2000,
+  },
+  [STAGE_11_ID]: {
+    timeoutMs: 75000,
+    retryMax: 2,
+    tokenBudget: 8000,
+    rateLimitInitialBackoffMs: 15000,
+    rateLimitMaxBackoffMs: 12 * 60 * 1000,
+    rateLimitRetrySkewMs: 2000,
+  },
+  [STAGE_12_ID]: {
+    timeoutMs: 90000,
+    retryMax: 2,
+    tokenBudget: 8000,
+    rateLimitInitialBackoffMs: 15000,
+    rateLimitMaxBackoffMs: 12 * 60 * 1000,
+    rateLimitRetrySkewMs: 2000,
+  },
   [STAGE_13_ID]: { timeoutMs: 75000, retryMax: 1, tokenBudget: 8000 },
   [STAGE_14_ID]: {
     timeoutMs: 60000,
@@ -392,6 +413,17 @@ export function classifyStageFailureCause({ err = {}, reasonCodes = [], diagnost
     return {
       type: "network_timeout",
       detail: `${clean(stageId)} timeout source=${abortSource || "stage_timeout"}`.trim(),
+    };
+  }
+
+  if (
+    codes.includes(REASON_CODES.RATE_LIMIT_BACKOFF_EXHAUSTED)
+    || status === 429
+    || message.includes("rate limit")
+  ) {
+    return {
+      type: "rate_limit",
+      detail: `${clean(stageId)} provider status=${status || "429"}`.trim(),
     };
   }
 

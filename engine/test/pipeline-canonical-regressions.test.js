@@ -95,6 +95,15 @@ test("classifyStageFailureCause maps parse-truncation loops and timeout aborts",
   assert.equal(timeoutCause?.type, "network_timeout");
 });
 
+test("classifyStageFailureCause maps rate-limit failures", () => {
+  const rateLimitCause = classifyStageFailureCause({
+    stageId: "stage_10_coherence",
+    reasonCodes: ["rate_limit_backoff_exhausted"],
+    err: { status: 429, message: "rate limit exceeded" },
+  });
+  assert.equal(rateLimitCause?.type, "rate_limit");
+});
+
 test("toUseCaseState exposes safetyGuardrails in analysisMeta", () => {
   const uc = toUseCaseState({
     runId: "run-guardrail",

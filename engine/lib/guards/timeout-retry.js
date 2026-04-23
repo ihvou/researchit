@@ -36,7 +36,8 @@ export async function executeWithRetry(work, options = {}) {
   const initialBackoffMs = Math.max(20, Number(options?.initialBackoffMs) || 250);
   const backoffFactor = Math.max(1, Number(options?.backoffFactor) || 2);
   const rateLimitInitialBackoffMs = Math.max(1000, Number(options?.rateLimitInitialBackoffMs) || 12000);
-  const rateLimitMaxBackoffMs = Math.max(rateLimitInitialBackoffMs, Number(options?.rateLimitMaxBackoffMs) || 90000);
+  const rateLimitMaxBackoffMs = Math.max(rateLimitInitialBackoffMs, Number(options?.rateLimitMaxBackoffMs) || (20 * 60 * 1000));
+  const rateLimitRetrySkewMs = Math.max(0, Number(options?.rateLimitRetrySkewMs) || 1500);
   const onRetry = typeof options?.onRetry === "function" ? options.onRetry : null;
 
   let lastError = null;
@@ -113,7 +114,13 @@ export async function executeWithRetry(work, options = {}) {
       let backoff;
       if (failureType === "rate_limit") {
         const computed = Math.round(rateLimitInitialBackoffMs * (backoffFactor ** (attempt - 1)));
-        backoff = Math.min(rateLimitMaxBackoffMs, Math.max(1000, retryAfterMs || computed));
+        const providerHint = retryAfterMs > 0
+          ? (retryAfterMs + rateLimitRetrySkewMs)
+          : 0;
+        backoff = Math.min(
+          rateLimitMaxBackoffMs,
+          Math.max(1000, providerHint || computed),
+        );
       } else {
         backoff = Math.min(5000, Math.round(initialBackoffMs * (backoffFactor ** (attempt - 1))));
       }
