@@ -6,6 +6,8 @@ const GEMINI_DEEP_RESEARCH_AGENT = "deep-research-pro-preview-12-2025";
 const GEMINI_DEEP_RESEARCH_POLL_MS = 8000;
 const GEMINI_DEEP_RESEARCH_MAX_WAIT_MS = 20 * 60 * 1000;
 const GEMINI_EMPTY_SUCCESS_REASON_CODE = "gemini_empty_success_response";
+const ANTHROPIC_TIMEOUT_MS_DEFAULT = 70000;
+const ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH = 20 * 60 * 1000;
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -18,6 +20,38 @@ function toFinite(value, fallback = 0) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = "Request") {
+  const timeout = Math.max(0, Number(timeoutMs) || 0);
+  if (!timeout) return fetch(url, options);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      controller.abort({
+        source: "provider_timeout",
+        layer: "provider_http",
+        deadlineMs: timeout,
+      });
+    } catch (_) {
+      // no-op
+    }
+  }, timeout);
+  return fetch(url, { ...(options || {}), signal: controller.signal })
+    .catch((err) => {
+      const isAbort = String(err?.name || "").toLowerCase() === "aborterror";
+      if (!isAbort) throw err;
+      const timeoutErr = new Error(`${cleanText(label)} timed out after ${timeout}ms`);
+      timeoutErr.status = 504;
+      timeoutErr.code = "PROVIDER_TIMEOUT";
+      timeoutErr.abortReason = {
+        source: "provider_timeout",
+        layer: "provider_http",
+        deadlineMs: timeout,
+      };
+      throw timeoutErr;
+    })
+    .finally(() => clearTimeout(timer));
 }
 
 function normalizeUsage({ inputTokens = 0, outputTokens = 0, totalTokens = 0 } = {}) {
@@ -186,6 +220,7 @@ async function callAnthropic({
   searchMaxUses = 0,
   deepResearch = false,
   baseUrl = "",
+  stageId = "",
 }) {
   if (!apiKey) throw new Error("Anthropic API key is required");
   const resolvedModel = cleanText(model);
@@ -204,6 +239,12 @@ async function callAnthropic({
     ? Math.max(1, Math.min(20, Math.floor(Number(searchMaxUses))))
     : (deepResearch ? 20 : 6);
   const webSearchToolType = cleanText(process.env.ANTHROPIC_WEB_SEARCH_TOOL) || "web_search_20260209";
+  const envTimeout = Number(process.env.ANTHROPIC_REQUEST_TIMEOUT_MS || 0);
+  const stage = cleanText(stageId).toLowerCase();
+  const criticStage = stage.startsWith("stage_10") || stage.startsWith("stage_11") || stage.startsWith("stage_12");
+  const anthropicTimeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
+    ? envTimeout
+    : (deepResearch ? ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH : (criticStage ? ANTHROPIC_TIMEOUT_MS_DEFAULT : 120000));
 
   const makeRequest = async (withSearch) => {
     const body = {
@@ -221,7 +262,7 @@ async function callAnthropic({
         }
         : {}),
     };
-    const response = await fetch(endpoint, {
+    const response = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -229,7 +270,7 @@ async function callAnthropic({
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
-    });
+    }, anthropicTimeoutMs, "Anthropic request");
     return toJsonBody(response, "Anthropic request failed");
   };
 
@@ -905,6 +946,7 @@ export async function callProviderModel({
       searchMaxUses,
       deepResearch,
       baseUrl,
+      stageId,
     });
   }
   if (provider === "gemini") {

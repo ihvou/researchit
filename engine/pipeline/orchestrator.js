@@ -395,13 +395,6 @@ export function classifyStageFailureCause({ err = {}, reasonCodes = [], diagnost
     };
   }
 
-  if (status >= 500 || /\b5\d\d\b/.test(message) || message.includes("internal server error")) {
-    return {
-      type: "provider_error",
-      detail: `${clean(stageId)} provider status=${status || "unknown"}`.trim(),
-    };
-  }
-
   if (splitDepth > 0 || err?.chunkSplitExhausted === true) {
     return {
       type: "chunk_split_exhausted",
@@ -413,6 +406,13 @@ export function classifyStageFailureCause({ err = {}, reasonCodes = [], diagnost
     return {
       type: "network_timeout",
       detail: `${clean(stageId)} timeout source=${abortSource || "stage_timeout"}`.trim(),
+    };
+  }
+
+  if (status >= 500 || /\b5\d\d\b/.test(message) || message.includes("internal server error")) {
+    return {
+      type: "provider_error",
+      detail: `${clean(stageId)} provider status=${status || "unknown"}`.trim(),
     };
   }
 

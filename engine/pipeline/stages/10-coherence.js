@@ -2,6 +2,7 @@ import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js
 
 export const STAGE_ID = "stage_10_coherence";
 export const STAGE_TITLE = "Coherence";
+const CRITIC_COMPACT_RETRY_REASON = "critic_compact_retry_used";
 
 function normalizeSeverity(value = "") {
   const level = clean(value).toLowerCase();
@@ -49,25 +50,32 @@ function normalizeCoherenceFindings(parsed = {}) {
   };
 }
 
-function buildSummaryInput(state = {}) {
-  const compactSources = (sources = []) => ensureArray(sources).slice(0, 8).map((source) => ({
+function buildSummaryInput(state = {}, options = {}) {
+  const maxSources = Math.max(1, Number(options?.maxSourcesPerUnit || 8));
+  const maxClaims = Math.max(1, Number(options?.maxClaimsPerSide || 8));
+  const fullChars = Math.max(200, Number(options?.fullChars || 1200));
+  const quoteChars = Math.max(80, Number(options?.quoteChars || 180));
+  const valueChars = Math.max(120, Number(options?.valueChars || 500));
+  const detailChars = Math.max(120, Number(options?.claimDetailChars || 260));
+  const maxMatrixUnits = Math.max(8, Number(options?.maxMatrixUnits || 120));
+  const compactSources = (sources = []) => ensureArray(sources).slice(0, maxSources).map((source) => ({
     name: clean(source?.name),
     url: clean(source?.url),
-    quote: clean(source?.quote).slice(0, 180),
+    quote: clean(source?.quote).slice(0, quoteChars),
     sourceType: clean(source?.sourceType),
     displayStatus: clean(source?.displayStatus),
   })).filter((source) => source.name || source.url || source.quote);
-  const compactClaims = (items = []) => ensureArray(items).slice(0, 8).map((item) => ({
+  const compactClaims = (items = []) => ensureArray(items).slice(0, maxClaims).map((item) => ({
     claim: clean(item?.claim),
-    detail: clean(item?.detail).slice(0, 260),
+    detail: clean(item?.detail).slice(0, detailChars),
   })).filter((item) => item.claim);
 
   if (state?.outputType === "matrix") {
     const cells = ensureArray(state?.assessment?.matrix?.cells);
-    return cells.slice(0, 120).map((cell) => ({
+    return cells.slice(0, maxMatrixUnits).map((cell) => ({
       unitKey: `${cell.subjectId}::${cell.attributeId}`,
-      value: clean(cell?.value),
-      full: clean(cell?.full).slice(0, 1200),
+      value: clean(cell?.value).slice(0, valueChars),
+      full: clean(cell?.full).slice(0, fullChars),
       confidence: clean(cell?.confidence),
       confidenceReason: clean(cell?.confidenceReason),
       sources: compactSources(cell?.sources),
@@ -85,8 +93,8 @@ function buildSummaryInput(state = {}) {
   return Object.values(byId).map((unit) => ({
     unitKey: clean(unit?.id),
     score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
-    value: clean(unit?.brief || unit?.full).slice(0, 500),
-    full: clean(unit?.full).slice(0, 1200),
+    value: clean(unit?.brief || unit?.full).slice(0, valueChars),
+    full: clean(unit?.full).slice(0, fullChars),
     confidence: clean(unit?.confidence),
     confidenceReason: clean(unit?.confidenceReason),
     sources: compactSources(unit?.sources),
@@ -99,10 +107,8 @@ function buildSummaryInput(state = {}) {
   }));
 }
 
-export async function runStage(context = {}) {
-  const { state, runtime } = context;
-  const summary = buildSummaryInput(state);
-  const prompt = `Review cross-unit coherence and factual consistency for this assessment.
+function buildPromptFromSummary(summary = [], maxChars = 26000) {
+  return `Review cross-unit coherence and factual consistency for this assessment.
 Use web search only when needed to validate factual uncertainty or likely stale claims.
 Return JSON:
 {
@@ -122,28 +128,92 @@ Return JSON:
   "overallFeedback": ""
 }
 Assessment snapshot:
-${JSON.stringify(summary).slice(0, 26000)}`;
+${JSON.stringify(summary).slice(0, Math.max(2000, Number(maxChars) || 26000))}`;
+}
 
-  const result = await callActorJson({
-    state,
-    runtime,
-    stageId: STAGE_ID,
-    actor: "critic",
-    systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
-    userPrompt: prompt,
-    tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
-    timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
-    maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
-    liveSearch: true,
-    searchMaxUses: 3,
-    schemaHint: '{"findings":[{"id":"","unitKey":"","note":"","severity":"medium","flagType":"coherence","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[]}}],"overallFeedback":""}',
-  });
+function isCompactRetryCandidate(err = {}) {
+  const status = Number(err?.status || err?.statusCode || 0);
+  const message = clean(err?.message).toLowerCase();
+  return (
+    status === 504
+    || status === 408
+    || message.includes("timed out")
+    || message.includes("timeout")
+    || message.includes("stage timed out")
+    || message.includes("/api/critic (504)")
+  );
+}
+
+export async function runStage(context = {}) {
+  const { state, runtime } = context;
+  const stageBudget = runtime?.budgets?.[STAGE_ID] || {};
+  const tokenBudget = stageBudget?.tokenBudget || 8000;
+  const timeoutMs = stageBudget?.timeoutMs || 75000;
+  const maxRetries = Number.isFinite(Number(stageBudget?.retryMax))
+    ? Math.max(0, Number(stageBudget.retryMax))
+    : 1;
+  const schemaHint = '{"findings":[{"id":"","unitKey":"","note":"","severity":"medium","flagType":"coherence","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[]}}],"overallFeedback":""}';
+
+  const primarySummary = buildSummaryInput(state);
+  const primaryPrompt = buildPromptFromSummary(primarySummary, 26000);
+
+  let result;
+  let usedCompactRetry = false;
+  let prompt = primaryPrompt;
+  try {
+    result = await callActorJson({
+      state,
+      runtime,
+      stageId: STAGE_ID,
+      actor: "critic",
+      systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
+      userPrompt: primaryPrompt,
+      tokenBudget,
+      timeoutMs,
+      maxRetries,
+      liveSearch: true,
+      searchMaxUses: 3,
+      schemaHint,
+    });
+  } catch (err) {
+    if (!isCompactRetryCandidate(err)) throw err;
+    const compactSummary = buildSummaryInput(state, {
+      maxSourcesPerUnit: 4,
+      maxClaimsPerSide: 4,
+      fullChars: 600,
+      quoteChars: 120,
+      valueChars: 240,
+      claimDetailChars: 180,
+      maxMatrixUnits: 90,
+    });
+    const compactPrompt = buildPromptFromSummary(compactSummary, 14000);
+    prompt = compactPrompt;
+    result = await callActorJson({
+      state,
+      runtime,
+      stageId: STAGE_ID,
+      actor: "critic",
+      systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
+      userPrompt: compactPrompt,
+      tokenBudget,
+      timeoutMs,
+      maxRetries: Math.min(1, Math.max(0, Number(maxRetries) || 0)),
+      liveSearch: true,
+      searchMaxUses: 3,
+      schemaHint,
+    });
+    usedCompactRetry = true;
+  }
   const normalized = normalizeCoherenceFindings(result?.parsed || {});
   const factualFindings = normalized.findings.filter((finding) => finding.flagType === "factual").length;
+  const reasonCodes = [
+    ...ensureArray(result?.reasonCodes),
+    ...(usedCompactRetry ? [CRITIC_COMPACT_RETRY_REASON] : []),
+  ];
 
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: [...new Set(reasonCodes)],
     statePatch: {
       ui: { phase: STAGE_ID },
       critique: {
@@ -155,6 +225,7 @@ ${JSON.stringify(summary).slice(0, 26000)}`;
     diagnostics: {
       findings: normalized.findings.length,
       factualFindings,
+      compactRetryUsed: usedCompactRetry,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,
