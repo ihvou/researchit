@@ -1,8 +1,12 @@
-import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js";
+import { clean, ensureArray, normalizeSources } from "./common.js";
+import {
+  CRITIC_COMPACT_RETRY_REASON,
+  callCriticJsonWithFallback,
+  serializeBoundedJsonArray,
+} from "./critic-utils.js";
 
 export const STAGE_ID = "stage_10_coherence";
 export const STAGE_TITLE = "Coherence";
-const CRITIC_COMPACT_RETRY_REASON = "critic_compact_retry_used";
 
 function normalizeSeverity(value = "") {
   const level = clean(value).toLowerCase();
@@ -108,7 +112,9 @@ function buildSummaryInput(state = {}, options = {}) {
 }
 
 function buildPromptFromSummary(summary = [], maxChars = 26000) {
-  return `Review cross-unit coherence and factual consistency for this assessment.
+  const serialized = serializeBoundedJsonArray(summary, maxChars);
+  return {
+    prompt: `Review cross-unit coherence and factual consistency for this assessment.
 Use web search only when needed to validate factual uncertainty or likely stale claims.
 Return JSON:
 {
@@ -128,82 +134,46 @@ Return JSON:
   "overallFeedback": ""
 }
 Assessment snapshot:
-${JSON.stringify(summary).slice(0, Math.max(2000, Number(maxChars) || 26000))}`;
-}
-
-function isCompactRetryCandidate(err = {}) {
-  const status = Number(err?.status || err?.statusCode || 0);
-  const message = clean(err?.message).toLowerCase();
-  return (
-    status === 504
-    || status === 408
-    || message.includes("timed out")
-    || message.includes("timeout")
-    || message.includes("stage timed out")
-    || message.includes("/api/critic (504)")
-  );
+${serialized.json}`,
+    diagnostics: serialized.diagnostics,
+  };
 }
 
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const stageBudget = runtime?.budgets?.[STAGE_ID] || {};
   const tokenBudget = stageBudget?.tokenBudget || 8000;
-  const timeoutMs = stageBudget?.timeoutMs || 75000;
-  const maxRetries = Number.isFinite(Number(stageBudget?.retryMax))
-    ? Math.max(0, Number(stageBudget.retryMax))
-    : 1;
+  const timeoutMs = stageBudget?.timeoutMs || 240000;
   const schemaHint = '{"findings":[{"id":"","unitKey":"","note":"","severity":"medium","flagType":"coherence","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[]}}],"overallFeedback":""}';
 
   const primarySummary = buildSummaryInput(state);
-  const primaryPrompt = buildPromptFromSummary(primarySummary, 26000);
-
-  let result;
-  let usedCompactRetry = false;
-  let prompt = primaryPrompt;
-  try {
-    result = await callActorJson({
-      state,
-      runtime,
-      stageId: STAGE_ID,
-      actor: "critic",
-      systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
-      userPrompt: primaryPrompt,
-      tokenBudget,
-      timeoutMs,
-      maxRetries,
-      liveSearch: true,
-      searchMaxUses: 3,
-      schemaHint,
-    });
-  } catch (err) {
-    if (!isCompactRetryCandidate(err)) throw err;
-    const compactSummary = buildSummaryInput(state, {
-      maxSourcesPerUnit: 4,
-      maxClaimsPerSide: 4,
-      fullChars: 600,
-      quoteChars: 120,
-      valueChars: 240,
-      claimDetailChars: 180,
-      maxMatrixUnits: 90,
-    });
-    const compactPrompt = buildPromptFromSummary(compactSummary, 14000);
-    prompt = compactPrompt;
-    result = await callActorJson({
-      state,
-      runtime,
-      stageId: STAGE_ID,
-      actor: "critic",
-      systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
-      userPrompt: compactPrompt,
-      tokenBudget,
-      timeoutMs,
-      maxRetries: Math.min(1, Math.max(0, Number(maxRetries) || 0)),
-      liveSearch: true,
-      searchMaxUses: 3,
-      schemaHint,
-    });
-    usedCompactRetry = true;
-  }
+  const primary = buildPromptFromSummary(primarySummary, 26000);
+  const compactSummary = buildSummaryInput(state, {
+    maxSourcesPerUnit: 4,
+    maxClaimsPerSide: 4,
+    fullChars: 600,
+    quoteChars: 120,
+    valueChars: 240,
+    claimDetailChars: 180,
+    maxMatrixUnits: 90,
+  });
+  const compact = buildPromptFromSummary(compactSummary, 14000);
+  const criticCall = await callCriticJsonWithFallback({
+    state,
+    runtime,
+    stageId: STAGE_ID,
+    systemPrompt: runtime?.prompts?.critic || "You check coherence and contradictions.",
+    primaryPrompt: primary.prompt,
+    compactPrompt: compact.prompt,
+    tokenBudget,
+    timeoutMs,
+    liveSearch: true,
+    searchMaxUses: 3,
+    schemaHint,
+  });
+  const result = criticCall.result;
+  const usedCompactRetry = criticCall.usedCompactRetry;
+  const prompt = usedCompactRetry ? compact.prompt : primary.prompt;
   const normalized = normalizeCoherenceFindings(result?.parsed || {});
   const factualFindings = normalized.findings.filter((finding) => finding.flagType === "factual").length;
   const reasonCodes = [
@@ -226,6 +196,10 @@ export async function runStage(context = {}) {
       findings: normalized.findings.length,
       factualFindings,
       compactRetryUsed: usedCompactRetry,
+      criticRetryAttempts: criticCall.attempts,
+      promptSnapshot: usedCompactRetry ? compact.diagnostics : primary.diagnostics,
+      primaryPromptSnapshot: primary.diagnostics,
+      compactPromptSnapshot: compact.diagnostics,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

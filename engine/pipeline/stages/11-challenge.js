@@ -1,4 +1,9 @@
-import { callActorJson, clean, ensureArray, normalizeSources } from "./common.js";
+import { clean, ensureArray, normalizeSources } from "./common.js";
+import {
+  CRITIC_COMPACT_RETRY_REASON,
+  callCriticJsonWithFallback,
+  serializeBoundedJsonArray,
+} from "./critic-utils.js";
 
 export const STAGE_ID = "stage_11_challenge";
 export const STAGE_TITLE = "Challenge";
@@ -84,23 +89,28 @@ function normalizeFlags(parsed = {}, state = {}) {
   };
 }
 
-function buildAssessmentSnapshot(state = {}) {
-  const compactSources = (sources = []) => ensureArray(sources).slice(0, 8).map((source) => ({
+function buildAssessmentSnapshot(state = {}, options = {}) {
+  const maxSources = Math.max(1, Number(options?.maxSourcesPerUnit || 8));
+  const maxClaims = Math.max(1, Number(options?.maxClaimsPerSide || 8));
+  const fullChars = Math.max(200, Number(options?.fullChars || 1200));
+  const quoteChars = Math.max(80, Number(options?.quoteChars || 180));
+  const maxMatrixUnits = Math.max(8, Number(options?.maxMatrixUnits || 120));
+  const compactSources = (sources = []) => ensureArray(sources).slice(0, maxSources).map((source) => ({
     name: clean(source?.name),
     url: clean(source?.url),
-    quote: clean(source?.quote).slice(0, 180),
+    quote: clean(source?.quote).slice(0, quoteChars),
   })).filter((source) => source.name || source.url || source.quote);
 
-  const compactClaims = (items = []) => ensureArray(items).slice(0, 8).map((item) => ({
+  const compactClaims = (items = []) => ensureArray(items).slice(0, maxClaims).map((item) => ({
     claim: clean(item?.claim),
     detail: clean(item?.detail).slice(0, 220),
   })).filter((item) => item.claim);
 
   if (clean(state?.outputType).toLowerCase() === "matrix") {
-    return ensureArray(state?.assessment?.matrix?.cells).map((cell) => ({
+    return ensureArray(state?.assessment?.matrix?.cells).slice(0, maxMatrixUnits).map((cell) => ({
       unitKey: `${cell.subjectId}::${cell.attributeId}`,
       value: clean(cell?.value),
-      full: clean(cell?.full).slice(0, 1200),
+      full: clean(cell?.full).slice(0, fullChars),
       confidence: clean(cell?.confidence),
       confidenceReason: clean(cell?.confidenceReason),
       missingEvidence: clean(cell?.missingEvidence),
@@ -121,7 +131,7 @@ function buildAssessmentSnapshot(state = {}) {
     unitKey: clean(unit?.id),
     score: Number.isFinite(Number(unit?.score)) ? Number(unit.score) : null,
     brief: clean(unit?.brief).slice(0, 420),
-    full: clean(unit?.full).slice(0, 1200),
+    full: clean(unit?.full).slice(0, fullChars),
     confidence: clean(unit?.confidence),
     confidenceReason: clean(unit?.confidenceReason),
     missingEvidence: clean(unit?.missingEvidence),
@@ -134,10 +144,66 @@ function buildAssessmentSnapshot(state = {}) {
   }));
 }
 
+function buildPrompt({
+  assessmentSnapshot = [],
+  coherence = [],
+  flagSchema = "",
+  isMatrix = false,
+  assessmentMaxChars = 26000,
+  coherenceMaxChars = 12000,
+} = {}) {
+  const assessment = serializeBoundedJsonArray(assessmentSnapshot, assessmentMaxChars);
+  const coherenceSnapshot = serializeBoundedJsonArray(coherence, coherenceMaxChars);
+  return {
+    prompt: `Challenge overclaims and confidence calibration using the full assessment context.
+
+Include a factual accuracy pass:
+- Flag claims that appear imprecise, overstated, or inconsistent with known public information.
+- Use web search for factual uncertainty and stale-claim checks.
+- For factual challenges, state what appears more accurate and reference supporting sources.
+
+Severity definitions:
+- high: materially changes the decision, invalidates a central claim, or leaves a high-impact risk unaddressed.
+- medium: meaningfully weakens confidence or quality but may not flip the decision alone.
+- low: minor calibration issue with limited decision impact.
+
+Category definitions:
+- overclaim: claim strength exceeds evidence quality.
+- missing_evidence: key claim lacks sufficient evidence.
+- contradiction: claim conflicts with other units or within-unit evidence.
+- stale_source: claim relies on stale or outdated evidence.
+- missed_risk: material downside is absent from assessment.
+- other: issue outside the categories above.
+
+Flag type definitions:
+- factual: claim appears incorrect, overstated, or materially imprecise versus known public information.
+- coherence: internal inconsistency across units or within a unit.
+- coverage: insufficient evidence, stale evidence, or weak support depth.
+- structural: framing, decision-logic, or risk-structure weakness.
+
+Rules:
+- Evaluate each unit using its current score/value, confidence, sources, and arguments.
+- Flag only concrete issues and cite why.
+- ${isMatrix
+    ? "For matrix units, suggest text updates using suggestedValue and do not return suggestedScore."
+    : "For scorecard units, use suggestedScore only when proposing a score change."}
+
+Return JSON:
+${flagSchema}
+Assessment:
+${assessment.json}
+Coherence findings:
+${coherenceSnapshot.json}`,
+    diagnostics: {
+      assessment: assessment.diagnostics,
+      coherence: coherenceSnapshot.diagnostics,
+    },
+  };
+}
+
 export async function runStage(context = {}) {
   const { state, runtime } = context;
   const coherence = ensureArray(state?.critique?.coherenceFindings);
-  const assessmentSnapshot = buildAssessmentSnapshot(state);
   const isMatrix = clean(state?.outputType).toLowerCase() === "matrix";
   const flagSchema = isMatrix
     ? `{
@@ -181,62 +247,46 @@ export async function runStage(context = {}) {
   }]
 }`;
 
-  const prompt = `Challenge overclaims and confidence calibration using the full assessment context.
-
-Include a factual accuracy pass:
-- Flag claims that appear imprecise, overstated, or inconsistent with known public information.
-- Use web search for factual uncertainty and stale-claim checks.
-- For factual challenges, state what appears more accurate and reference supporting sources.
-
-Severity definitions:
-- high: materially changes the decision, invalidates a central claim, or leaves a high-impact risk unaddressed.
-- medium: meaningfully weakens confidence or quality but may not flip the decision alone.
-- low: minor calibration issue with limited decision impact.
-
-Category definitions:
-- overclaim: claim strength exceeds evidence quality.
-- missing_evidence: key claim lacks sufficient evidence.
-- contradiction: claim conflicts with other units or within-unit evidence.
-- stale_source: claim relies on stale or outdated evidence.
-- missed_risk: material downside is absent from assessment.
-- other: issue outside the categories above.
-
-Flag type definitions:
-- factual: claim appears incorrect, overstated, or materially imprecise versus known public information.
-- coherence: internal inconsistency across units or within a unit.
-- coverage: insufficient evidence, stale evidence, or weak support depth.
-- structural: framing, decision-logic, or risk-structure weakness.
-
-Rules:
-- Evaluate each unit using its current score/value, confidence, sources, and arguments.
-- Flag only concrete issues and cite why.
-- ${isMatrix
-    ? "For matrix units, suggest text updates using suggestedValue and do not return suggestedScore."
-    : "For scorecard units, use suggestedScore only when proposing a score change."}
-
-Return JSON:
-${flagSchema}
-Assessment:
-${JSON.stringify(assessmentSnapshot).slice(0, 26000)}
-Coherence findings:
-${JSON.stringify(coherence).slice(0, 12000)}`;
-
-  const result = await callActorJson({
+  const schemaHint = isMatrix
+    ? '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}'
+    : '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}';
+  const primary = buildPrompt({
+    assessmentSnapshot: buildAssessmentSnapshot(state),
+    coherence,
+    flagSchema,
+    isMatrix,
+    assessmentMaxChars: 18000,
+    coherenceMaxChars: 6000,
+  });
+  const compact = buildPrompt({
+    assessmentSnapshot: buildAssessmentSnapshot(state, {
+      maxSourcesPerUnit: 4,
+      maxClaimsPerSide: 4,
+      fullChars: 600,
+      quoteChars: 120,
+      maxMatrixUnits: 90,
+    }),
+    coherence,
+    flagSchema,
+    isMatrix,
+    assessmentMaxChars: 14000,
+    coherenceMaxChars: 6000,
+  });
+  const criticCall = await callCriticJsonWithFallback({
     state,
     runtime,
     stageId: STAGE_ID,
-    actor: "critic",
     systemPrompt: runtime?.prompts?.critic || "You challenge overclaims.",
-    userPrompt: prompt,
+    primaryPrompt: primary.prompt,
+    compactPrompt: compact.prompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
-    timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 75000,
-    maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 1,
+    timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 240000,
     liveSearch: true,
     searchMaxUses: 5,
-    schemaHint: isMatrix
-      ? '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedValue":"","suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}'
-      : '{"flags":[{"id":"","unitKey":"","flagType":"coverage","severity":"medium","category":"other","note":"","suggestedScore":3,"suggestedConfidence":"medium","sources":[],"evidence":{"citedClaim":"","correctingSource":{"name":"","url":"","quote":"","sourceType":""},"searchQueriesUsed":[],"sources":[]}}]}',
+    schemaHint,
   });
+  const result = criticCall.result;
+  const prompt = criticCall.usedCompactRetry ? compact.prompt : primary.prompt;
 
   const normalized = normalizeFlags(result?.parsed, state);
   const flagTypeCounts = normalized.flags.reduce((acc, flag) => {
@@ -248,10 +298,14 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
     clean(flag?.flagType).toLowerCase() === "factual"
       && (flag?.evidence?.correctingSource?.url || ensureArray(flag?.evidence?.searchQueriesUsed).length > 0)
   )).length;
+  const reasonCodes = [
+    ...ensureArray(result.reasonCodes),
+    ...(criticCall.usedCompactRetry ? [CRITIC_COMPACT_RETRY_REASON] : []),
+  ];
 
   return {
     stageStatus: "ok",
-    reasonCodes: result.reasonCodes,
+    reasonCodes: [...new Set(reasonCodes)],
     statePatch: {
       ui: { phase: STAGE_ID },
       critique: {
@@ -264,6 +318,11 @@ ${JSON.stringify(coherence).slice(0, 12000)}`;
       flags: normalized.flags.length,
       flagTypeCounts,
       factualFlagsWithEvidence,
+      compactRetryUsed: criticCall.usedCompactRetry,
+      criticRetryAttempts: criticCall.attempts,
+      promptSnapshot: criticCall.usedCompactRetry ? compact.diagnostics : primary.diagnostics,
+      primaryPromptSnapshot: primary.diagnostics,
+      compactPromptSnapshot: compact.diagnostics,
       retries: result.retries,
       modelRoute: result.route,
       tokenDiagnostics: result.tokenDiagnostics,

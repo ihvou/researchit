@@ -6,8 +6,10 @@ const GEMINI_DEEP_RESEARCH_AGENT = "deep-research-pro-preview-12-2025";
 const GEMINI_DEEP_RESEARCH_POLL_MS = 8000;
 const GEMINI_DEEP_RESEARCH_MAX_WAIT_MS = 20 * 60 * 1000;
 const GEMINI_EMPTY_SUCCESS_REASON_CODE = "gemini_empty_success_response";
-const ANTHROPIC_TIMEOUT_MS_DEFAULT = 70000;
+const ANTHROPIC_TIMEOUT_MS_DEFAULT = 120000;
+const ANTHROPIC_TIMEOUT_MS_CRITIC = 240000;
 const ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH = 20 * 60 * 1000;
+const ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 60000;
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -20,6 +22,40 @@ function toFinite(value, fallback = 0) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function isAbortLikeError(err = {}) {
+  const errName = String(err?.name || "").toLowerCase();
+  const errCode = String(err?.code || "").toLowerCase();
+  const errMessage = String(err?.message || "").toLowerCase();
+  const errSource = String(err?.source || err?.cause?.source || "").toLowerCase();
+  const causeName = String(err?.cause?.name || "").toLowerCase();
+  const causeCode = String(err?.cause?.code || "").toLowerCase();
+  return (
+    errName === "aborterror"
+    || errCode === "abort_err"
+    || errCode === "und_err_aborted"
+    || errSource === "provider_timeout"
+    || causeName === "aborterror"
+    || causeCode === "abort_err"
+    || causeCode === "und_err_aborted"
+    || errMessage.includes("aborted")
+    || errMessage.includes("terminated")
+  );
+}
+
+function providerTimeoutError(label = "Request", timeoutMs = 0, abortReason = {}) {
+  const timeout = Math.max(0, Number(timeoutMs) || 0);
+  const timeoutErr = new Error(`${cleanText(label)} timed out after ${timeout}ms`);
+  timeoutErr.status = 504;
+  timeoutErr.code = "PROVIDER_TIMEOUT";
+  timeoutErr.abortReason = {
+    source: "provider_timeout",
+    layer: cleanText(abortReason?.layer) || "provider_http",
+    deadlineMs: timeout,
+    ...(Number.isFinite(Number(abortReason?.elapsedMs)) ? { elapsedMs: Number(abortReason.elapsedMs) } : {}),
+  };
+  return timeoutErr;
 }
 
 function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = "Request") {
@@ -39,17 +75,10 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 0, label = "Request") {
   }, timeout);
   return fetch(url, { ...(options || {}), signal: controller.signal })
     .catch((err) => {
-      const isAbort = String(err?.name || "").toLowerCase() === "aborterror";
-      if (!isAbort) throw err;
-      const timeoutErr = new Error(`${cleanText(label)} timed out after ${timeout}ms`);
-      timeoutErr.status = 504;
-      timeoutErr.code = "PROVIDER_TIMEOUT";
-      timeoutErr.abortReason = {
-        source: "provider_timeout",
+      if (!isAbortLikeError(err)) throw err;
+      throw providerTimeoutError(label, timeout, {
         layer: "provider_http",
-        deadlineMs: timeout,
-      };
-      throw timeoutErr;
+      });
     })
     .finally(() => clearTimeout(timer));
 }
@@ -86,54 +115,59 @@ function normalizeMessages(messages = []) {
   return Array.isArray(messages) ? messages : [];
 }
 
+function parseResetValueMs(raw) {
+  const text = cleanText(raw);
+  if (!text) return 0;
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    return Math.max(0, Math.round(Number(text) * 1000));
+  }
+  const msMatch = text.match(/^(\d+)\s*ms$/i);
+  if (msMatch) {
+    return Math.max(0, Number(msMatch[1]));
+  }
+  const sMatch = text.match(/^(\d+)\s*s(ec(onds?)?)?$/i);
+  if (sMatch) {
+    return Math.max(0, Number(sMatch[1]) * 1000);
+  }
+  const parsedDate = Date.parse(text);
+  if (Number.isFinite(parsedDate)) {
+    return Math.max(0, parsedDate - Date.now());
+  }
+  return 0;
+}
+
+function extractRateLimitInfoFromHeaders(headers) {
+  const get = (key) => cleanText(headers?.get?.(key));
+  const retryAfter = get("retry-after");
+  const requestReset = get("anthropic-ratelimit-requests-reset");
+  const inputReset = get("anthropic-ratelimit-input-tokens-reset");
+  const outputReset = get("anthropic-ratelimit-output-tokens-reset");
+  const retryAfterMs = Math.max(
+    parseResetValueMs(retryAfter),
+    parseResetValueMs(requestReset),
+    parseResetValueMs(inputReset),
+    parseResetValueMs(outputReset),
+  );
+  return {
+    retryAfterMs,
+    retryAfter,
+    requestsLimit: get("anthropic-ratelimit-requests-limit"),
+    requestsRemaining: get("anthropic-ratelimit-requests-remaining"),
+    requestsReset: requestReset,
+    inputTokensLimit: get("anthropic-ratelimit-input-tokens-limit"),
+    inputTokensRemaining: get("anthropic-ratelimit-input-tokens-remaining"),
+    inputTokensReset: inputReset,
+    outputTokensLimit: get("anthropic-ratelimit-output-tokens-limit"),
+    outputTokensRemaining: get("anthropic-ratelimit-output-tokens-remaining"),
+    outputTokensReset: outputReset,
+  };
+}
+
+function hasAnyRateLimitInfo(info = {}) {
+  return Object.values(info).some((value) => !!cleanText(value));
+}
+
 function toJsonBody(response, fallbackMessage) {
-  const parseResetValueMs = (raw) => {
-    const text = cleanText(raw);
-    if (!text) return 0;
-    if (/^\d+(\.\d+)?$/.test(text)) {
-      return Math.max(0, Math.round(Number(text) * 1000));
-    }
-    const msMatch = text.match(/^(\d+)\s*ms$/i);
-    if (msMatch) {
-      return Math.max(0, Number(msMatch[1]));
-    }
-    const sMatch = text.match(/^(\d+)\s*s(ec(onds?)?)?$/i);
-    if (sMatch) {
-      return Math.max(0, Number(sMatch[1]) * 1000);
-    }
-    const parsedDate = Date.parse(text);
-    if (Number.isFinite(parsedDate)) {
-      return Math.max(0, parsedDate - Date.now());
-    }
-    return 0;
-  };
-
-  const extractRateLimitInfo = () => {
-    const retryAfter = cleanText(response?.headers?.get("retry-after"));
-    const requestReset = cleanText(response?.headers?.get("anthropic-ratelimit-requests-reset"));
-    const inputReset = cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-reset"));
-    const outputReset = cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-reset"));
-    const retryAfterMs = Math.max(
-      parseResetValueMs(retryAfter),
-      parseResetValueMs(requestReset),
-      parseResetValueMs(inputReset),
-      parseResetValueMs(outputReset),
-    );
-    return {
-      retryAfterMs,
-      retryAfter,
-      requestsLimit: cleanText(response?.headers?.get("anthropic-ratelimit-requests-limit")),
-      requestsRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-requests-remaining")),
-      requestsReset: requestReset,
-      inputTokensLimit: cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-limit")),
-      inputTokensRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-input-tokens-remaining")),
-      inputTokensReset: inputReset,
-      outputTokensLimit: cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-limit")),
-      outputTokensRemaining: cleanText(response?.headers?.get("anthropic-ratelimit-output-tokens-remaining")),
-      outputTokensReset: outputReset,
-    };
-  };
-
   return response.json()
     .catch(() => ({}))
     .then((data) => {
@@ -147,11 +181,11 @@ function toJsonBody(response, fallbackMessage) {
         const err = new Error(message || fallbackMessage);
         err.status = response.status;
         err.payload = data;
-        const rateLimitInfo = extractRateLimitInfo();
+        const rateLimitInfo = extractRateLimitInfoFromHeaders(response?.headers);
         if (Number(rateLimitInfo?.retryAfterMs || 0) > 0) {
           err.retryAfterMs = Number(rateLimitInfo.retryAfterMs);
         }
-        if (Object.values(rateLimitInfo).some((value) => !!cleanText(value))) {
+        if (hasAnyRateLimitInfo(rateLimitInfo)) {
           err.rateLimitInfo = rateLimitInfo;
         }
         throw err;
@@ -210,6 +244,265 @@ function extractHttpUrlsDeep(payload = {}) {
   return urls;
 }
 
+function anthropicStreamErrorStatus(type = "") {
+  const value = cleanText(type).toLowerCase();
+  if (value.includes("rate_limit")) return 429;
+  if (value.includes("overload")) return 529;
+  if (value.includes("timeout")) return 504;
+  if (value.includes("authentication") || value.includes("permission")) return 401;
+  if (value.includes("invalid_request")) return 400;
+  return 500;
+}
+
+function mergeAnthropicUsage(base = {}, next = {}) {
+  const merged = { ...(base || {}) };
+  Object.entries(next || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    if (typeof value === "number") {
+      merged[key] = Math.max(Number(merged[key] || 0), value);
+      return;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      merged[key] = {
+        ...(merged[key] && typeof merged[key] === "object" ? merged[key] : {}),
+        ...value,
+      };
+      return;
+    }
+    merged[key] = value;
+  });
+  return merged;
+}
+
+function finalizeAnthropicBlock(block = {}) {
+  if (!block || typeof block !== "object") return block;
+  const out = { ...block };
+  if (typeof out.input_json === "string") {
+    try {
+      out.input = JSON.parse(out.input_json || "{}");
+      delete out.input_json;
+    } catch (_) {
+      out.input = out.input_json;
+      delete out.input_json;
+    }
+  }
+  return out;
+}
+
+function applyAnthropicStreamEvent(acc, eventName = "", payload = {}, response = null) {
+  const event = cleanText(eventName) || cleanText(payload?.type);
+  if (!event || event === "ping") return;
+  if (event === "error") {
+    const errorPayload = payload?.error && typeof payload.error === "object" ? payload.error : payload;
+    const type = cleanText(errorPayload?.type || payload?.type || "stream_error");
+    const err = new Error(cleanText(errorPayload?.message) || `Anthropic stream error: ${type}`);
+    err.status = Number(errorPayload?.status || payload?.status || 0) || anthropicStreamErrorStatus(type);
+    err.payload = payload;
+    err.streamEvent = "error";
+    err.providerEventType = type;
+    const rateLimitInfo = extractRateLimitInfoFromHeaders(response?.headers);
+    if (Number(rateLimitInfo?.retryAfterMs || 0) > 0) err.retryAfterMs = Number(rateLimitInfo.retryAfterMs);
+    if (hasAnyRateLimitInfo(rateLimitInfo)) err.rateLimitInfo = rateLimitInfo;
+    throw err;
+  }
+
+  if (event === "message_start") {
+    const message = payload?.message && typeof payload.message === "object" ? payload.message : {};
+    acc.id = cleanText(message?.id) || acc.id;
+    acc.type = cleanText(message?.type) || acc.type || "message";
+    acc.role = cleanText(message?.role) || acc.role || "assistant";
+    acc.model = cleanText(message?.model) || acc.model;
+    acc.stop_reason = message?.stop_reason ?? acc.stop_reason;
+    acc.stop_sequence = message?.stop_sequence ?? acc.stop_sequence;
+    acc.usage = mergeAnthropicUsage(acc.usage, message?.usage || {});
+    (Array.isArray(message?.content) ? message.content : []).forEach((block, idx) => {
+      acc.blocks.set(idx, { ...(block || {}) });
+    });
+    return;
+  }
+
+  if (event === "content_block_start") {
+    const idx = Number(payload?.index ?? acc.blocks.size);
+    const block = payload?.content_block && typeof payload.content_block === "object"
+      ? payload.content_block
+      : {};
+    acc.blocks.set(idx, { ...(block || {}) });
+    return;
+  }
+
+  if (event === "content_block_delta") {
+    const idx = Number(payload?.index ?? 0);
+    const existing = acc.blocks.get(idx) || {};
+    const delta = payload?.delta && typeof payload.delta === "object" ? payload.delta : {};
+    const deltaType = cleanText(delta?.type);
+    if (deltaType === "text_delta") {
+      existing.type = existing.type || "text";
+      existing.text = `${existing.text || ""}${delta.text || ""}`;
+    } else if (deltaType === "input_json_delta") {
+      existing.input_json = `${existing.input_json || ""}${delta.partial_json || ""}`;
+    } else if (typeof delta?.text === "string") {
+      existing.type = existing.type || "text";
+      existing.text = `${existing.text || ""}${delta.text}`;
+    } else {
+      existing.deltas = [...(Array.isArray(existing.deltas) ? existing.deltas : []), delta];
+    }
+    acc.blocks.set(idx, existing);
+    return;
+  }
+
+  if (event === "content_block_stop") {
+    return;
+  }
+
+  if (event === "message_delta") {
+    const delta = payload?.delta && typeof payload.delta === "object" ? payload.delta : {};
+    if (delta?.stop_reason != null) acc.stop_reason = delta.stop_reason;
+    if (delta?.stop_sequence != null) acc.stop_sequence = delta.stop_sequence;
+    acc.usage = mergeAnthropicUsage(acc.usage, payload?.usage || {});
+    return;
+  }
+
+  if (event === "message_stop") {
+    acc.stopped = true;
+    return;
+  }
+
+  if (payload && typeof payload === "object") {
+    acc.rawEvents.push({ event, payload });
+  }
+}
+
+function parseSseFrame(frame = "") {
+  const out = { event: "", data: "" };
+  const dataLines = [];
+  String(frame || "").split("\n").forEach((line) => {
+    if (!line || line.startsWith(":")) return;
+    if (line.startsWith("event:")) {
+      out.event = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+  out.data = dataLines.join("\n").trim();
+  return out;
+}
+
+export async function readAnthropicStream(response, {
+  idleTimeoutMs = ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+  totalTimeoutMs = ANTHROPIC_TIMEOUT_MS_CRITIC,
+} = {}) {
+  if (!response?.body?.getReader) {
+    throw new Error("Anthropic stream response body is not readable.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const startedAt = Date.now();
+  let buffer = "";
+  const acc = {
+    id: "",
+    type: "message",
+    role: "assistant",
+    model: "",
+    stop_reason: null,
+    stop_sequence: null,
+    usage: {},
+    blocks: new Map(),
+    rawEvents: [],
+    stopped: false,
+  };
+
+  const readWithIdleTimeout = async () => {
+    const idle = Math.max(1000, Number(idleTimeoutMs) || ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
+    let timer;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            reject(providerTimeoutError("Anthropic stream", idle, {
+              layer: "provider_stream_idle",
+              elapsedMs: Date.now() - startedAt,
+            }));
+          }, idle);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const flushFrame = (frame) => {
+    const parsed = parseSseFrame(frame);
+    if (!parsed.data || parsed.data === "[DONE]") return;
+    let payload = {};
+    try {
+      payload = JSON.parse(parsed.data);
+    } catch (err) {
+      const parseErr = new Error(`Anthropic stream emitted invalid JSON: ${err?.message || "parse failed"}`);
+      parseErr.status = 502;
+      parseErr.payload = { event: parsed.event, data: parsed.data };
+      throw parseErr;
+    }
+    applyAnthropicStreamEvent(acc, parsed.event, payload, response);
+  };
+
+  try {
+    while (true) {
+      const totalTimeout = Math.max(1000, Number(totalTimeoutMs) || ANTHROPIC_TIMEOUT_MS_CRITIC);
+      if (Date.now() - startedAt > totalTimeout) {
+        throw providerTimeoutError("Anthropic stream", totalTimeout, {
+          layer: "provider_stream_total",
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+      const { value, done } = await readWithIdleTimeout();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let sep = buffer.indexOf("\n\n");
+      while (sep >= 0) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        flushFrame(frame);
+        sep = buffer.indexOf("\n\n");
+      }
+    }
+    const tail = `${buffer}${decoder.decode()}`.trim();
+    if (tail) flushFrame(tail);
+  } catch (err) {
+    try {
+      await reader.cancel();
+    } catch (_) {
+      // no-op
+    }
+    if (isAbortLikeError(err)) {
+      throw providerTimeoutError("Anthropic stream", Number(totalTimeoutMs) || ANTHROPIC_TIMEOUT_MS_CRITIC, {
+        layer: "provider_stream",
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+    throw err;
+  }
+
+  const content = [...acc.blocks.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, block]) => finalizeAnthropicBlock(block))
+    .filter((block) => block && typeof block === "object" && cleanText(block.type));
+
+  return {
+    id: acc.id,
+    type: acc.type || "message",
+    role: acc.role || "assistant",
+    content,
+    model: acc.model,
+    stop_reason: acc.stop_reason,
+    stop_sequence: acc.stop_sequence,
+    usage: acc.usage || {},
+    ...(acc.rawEvents.length ? { stream_events: acc.rawEvents } : {}),
+  };
+}
+
 async function callAnthropic({
   apiKey,
   model,
@@ -242,9 +535,13 @@ async function callAnthropic({
   const envTimeout = Number(process.env.ANTHROPIC_REQUEST_TIMEOUT_MS || 0);
   const stage = cleanText(stageId).toLowerCase();
   const criticStage = stage.startsWith("stage_10") || stage.startsWith("stage_11") || stage.startsWith("stage_12");
+  const deepAssistStage = stage.startsWith("stage_03c");
+  const shouldStream = !!liveSearch || !!deepResearch || criticStage || deepAssistStage;
   const anthropicTimeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
     ? envTimeout
-    : (deepResearch ? ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH : (criticStage ? ANTHROPIC_TIMEOUT_MS_DEFAULT : 120000));
+    : (deepResearch || deepAssistStage
+      ? ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH
+      : (criticStage ? ANTHROPIC_TIMEOUT_MS_CRITIC : ANTHROPIC_TIMEOUT_MS_DEFAULT));
 
   const makeRequest = async (withSearch) => {
     const body = {
@@ -252,6 +549,7 @@ async function callAnthropic({
       max_tokens: Math.max(256, Number(maxTokens) || 4000),
       system: cleanText(systemPrompt),
       messages: anthropicMessages,
+      ...(shouldStream ? { stream: true } : {}),
       ...(withSearch
         ? {
           tools: [{
@@ -266,11 +564,18 @@ async function callAnthropic({
       method: "POST",
       headers: {
         "content-type": "application/json",
+        ...(shouldStream ? { accept: "text/event-stream" } : {}),
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
     }, anthropicTimeoutMs, "Anthropic request");
+    if (shouldStream && response.ok) {
+      return readAnthropicStream(response, {
+        idleTimeoutMs: Number(process.env.ANTHROPIC_STREAM_IDLE_TIMEOUT_MS || 0) || ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+        totalTimeoutMs: anthropicTimeoutMs,
+      });
+    }
     return toJsonBody(response, "Anthropic request failed");
   };
 
