@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-04-26T14:26:09.248Z",
+  "sourceBundle": "analysis-debug-bundle-2026-04-23T18-45-58-292Z.json",
+  "sourceBundleSize": 1946890,
+  "run": {
+    "runId": "1776919341833-aaw1qh",
+    "mode": "native",
+    "outputType": "matrix",
+    "configId": "competitors-comparison-matrix",
+    "configName": "Competitors Comparison",
+    "startedAt": "2026-04-23T17:42:22.865Z",
+    "finishedAt": "2026-04-23T18:45:49.710Z",
+    "status": "error",
+    "reasonCodes": [
+      "stage_03b_no_search_performed",
+      "source_quality_capped",
+      "retry_exhausted",
+      "run_aborted_strict_quality"
+    ]
+  },
+  "stages": [
+    {
+      "stageId": "stage_02_plan",
+      "callCount": 1,
+      "totalBytes": 21890
+    },
+    {
+      "stageId": "stage_03a_evidence_memory",
+      "callCount": 12,
+      "totalBytes": 386574
+    },
+    {
+      "stageId": "stage_03b_evidence_web",
+      "callCount": 17,
+      "totalBytes": 328725
+    },
+    {
+      "stageId": "stage_08_recover",
+      "callCount": 56,
+      "totalBytes": 525166
+    },
+    {
+      "stageId": "stage_10_coherence",
+      "callCount": 3,
+      "totalBytes": 89063
+    }
+  ],
+  "notes": [
+    "Each fixture is one (stageId, chunkId, callIndex) — request + response (or failure).",
+    "response.text is the model's full output text. response.meta is the providerMeta.",
+    "Use this with a stub transport that returns response.text/meta keyed by stageId/chunkId/callIndex.",
+    "Failure fixtures (.failed.json) preserve transport-error shape for testing the failure path."
+  ]
+}

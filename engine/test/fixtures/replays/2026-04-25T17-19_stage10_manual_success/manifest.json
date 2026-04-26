@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-04-26T14:27:36.858Z",
+  "sourceBundle": "analysis-debug-bundle-2026-04-25T17-19-17-666Z.json",
+  "sourceTranscript": "transcript.sse",
+  "notes": [
+    "Stage 10 critic SUCCESS path. Prompt from bundle T17-19 (which failed at stage 10);",
+    "response captured by manually re-issuing the same prompt directly to Anthropic with stream:true.",
+    "Useful for: (a) testing the success path of critic stages without API spend,",
+    "(b) testing readAnthropicStream against real SSE wire data (raw-sse.txt is the timestamped feed)."
+  ],
+  "request": {
+    "stageId": "stage_10_coherence",
+    "model": "claude-sonnet-4-6",
+    "promptChars": 26448,
+    "systemChars": 1060
+  },
+  "response": {
+    "stopReason": "end_turn",
+    "outputTokens": 10277,
+    "inputTokens": 365589,
+    "webSearchCalls": 3,
+    "textChars": 3890,
+    "contentBlocks": 57
+  },
+  "timing": {
+    "firstEventTs": 1777139402.644578,
+    "lastEventTs": 1777139715.177784,
+    "wallSeconds": 312.533,
+    "httpStatus": 200,
+    "ttfbSeconds": 1.215881,
+    "totalSeconds": 313.7439,
+    "downloadedBytes": 602819
+  }
+}
