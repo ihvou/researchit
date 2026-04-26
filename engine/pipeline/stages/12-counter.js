@@ -196,8 +196,9 @@ export async function runStage(context = {}) {
     compactPrompt: compact.prompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 240000,
-    liveSearch: true,
-    searchMaxUses: 3,
+    // web_search disabled — see stage_10 for rationale.
+    liveSearch: false,
+    searchMaxUses: 0,
     schemaHint: '{"counterEvidence":[{"flagId":"","unitKey":"","note":"","severityIfWrong":"medium","sources":[]}],"summary":""}',
   });
   const result = criticCall.result;

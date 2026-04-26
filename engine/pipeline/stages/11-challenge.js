@@ -281,8 +281,11 @@ export async function runStage(context = {}) {
     compactPrompt: compact.prompt,
     tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 8000,
     timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 240000,
-    liveSearch: true,
-    searchMaxUses: 5,
+    // web_search disabled — see stage_10 for rationale. Stage 11 (challenge
+    // overclaims) was the highest-value web_search target; re-enabling here
+    // should go via a deterministic fact-check stage, not by toggling this.
+    liveSearch: false,
+    searchMaxUses: 0,
     schemaHint,
   });
   const result = criticCall.result;

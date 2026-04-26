@@ -167,8 +167,15 @@ export async function runStage(context = {}) {
     compactPrompt: compact.prompt,
     tokenBudget,
     timeoutMs,
-    liveSearch: true,
-    searchMaxUses: 3,
+    // web_search disabled: Anthropic's web_search_20260209 auto-injects the full
+    // computer-use tool stack (code_execution / bash / text_editor) — confirmed by
+    // 2026-04-25 manual SSE replay: 3 web_searches expanded into 25 server-side
+    // tool invocations, 365k input tokens, 313s wall-clock per call, ~$1.25/call.
+    // Reverting to pre-CR-01 baseline (no critic web_search) to restore stable runs.
+    // Re-enabling will go via a separate deterministic fact-check stage (per FR-02
+    // architecture conversation), not by toggling this back to true.
+    liveSearch: false,
+    searchMaxUses: 0,
     schemaHint,
   });
   const result = criticCall.result;
