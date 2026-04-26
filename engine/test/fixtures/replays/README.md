@@ -113,6 +113,36 @@ manually re-issuing the same prompt directly to Anthropic Messages API with
   edge cases: ping events, multi-line data frames, `input_json_delta` chunks,
   growing context across 25 tool turns, mid-stream `message_delta` usage updates)
 
+### `2026-04-26T15-56_through_stage15/` — First end-to-end run reaching stage 15
+
+Source: `analysis-debug-bundle-2026-04-26T15-56-14-951Z.json` (916 KB). The
+first Native-mode run after disabling `web_search` on critic stages. Pipeline
+ran stages 01-14 successfully; stage 15 failed only at the decision-gate
+abort (`failureCauses: data_gap` due to a stale stage_03b cache hit with
+`stage_03b_no_search_performed` — not a critic or transport problem).
+
+6 fixtures across 5 stages, all critic + analyst defend/synthesize success paths:
+
+| Stage | Calls | Provider/Model | Notes |
+|---|---|---|---|
+| `stage_10_coherence` | 1 | Anthropic claude-sonnet-4-6 (no web_search) | 74.6s wall, 4158 output tokens, `\`\`\`json` markdown-wrapped output |
+| `stage_11_challenge` | 1 | Anthropic claude-sonnet-4-6 (no web_search) | 96.3s wall, 5865 output tokens, `\`\`\`json` markdown-wrapped output |
+| `stage_12_counter_case` | 1 | Anthropic claude-sonnet-4-6 (no web_search) | 44.1s wall, 2029 output tokens, clean JSON (no fences) |
+| `stage_13_defend` | 2 | OpenAI gpt-5.4 | 52.2s wall total |
+| `stage_14_synthesize` | 1 | Gemini 2.5-pro | 52.9s wall, 146 KB response |
+
+**Use cases**:
+- Replay stages 10/11/12/13/14 with deterministic real responses
+- Test `extractJson` / `safeParseJSON` against real markdown-fenced critic output
+  (stages 10 + 11 here are the realistic adversarial case for parser robustness)
+- Test stage 13 (defend) and 14 (synthesize) normalization paths against real
+  outputs — first time these have fixture coverage
+- Test the decision-gate abort path on stage 15 with realistic state (the run's
+  full final-state JSON is in the source bundle if reproduction needs it)
+
+Stage 15 itself has no LLM-call fixture (engine-only stage today, no fresh
+analyst call to capture; will gain a fixture once ENG-10 lands).
+
 ## How to capture more fixtures
 
 ### From a debug bundle
