@@ -456,7 +456,7 @@ test("stage 03c resumes from prior provider success and runs only missing provid
         providers: {
           chatgpt: { analyst: { provider: "openai", model: "o3-deep-research" } },
           claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-6" } },
-          gemini: { analyst: { provider: "gemini", model: "deep-research-pro-preview-12-2025" } },
+          gemini: { analyst: { provider: "gemini", model: "deep-research-max-preview-04-2026" } },
         },
       },
     },
@@ -480,7 +480,7 @@ test("stage 03c resumes from prior provider success and runs only missing provid
           }),
           meta: {
             providerId: provider,
-            model: provider === "anthropic" ? "claude-sonnet-4-6" : "deep-research-pro-preview-12-2025",
+            model: provider === "anthropic" ? "claude-sonnet-4-6" : "deep-research-max-preview-04-2026",
           },
         };
       },

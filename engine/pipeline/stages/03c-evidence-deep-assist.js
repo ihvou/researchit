@@ -78,6 +78,17 @@ function providerToLabel(providerId = "") {
   return key;
 }
 
+function pruneEmptyObject(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out = {};
+  Object.entries(value).forEach(([key, item]) => {
+    if (item == null) return;
+    if (typeof item === "object" && !Array.isArray(item) && !Object.keys(item).length) return;
+    out[key] = item;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
 function buildPlanContext(plan = {}, unitIds = []) {
   const units = ensureArray(plan?.units).filter((u) => !unitIds.length || unitIds.includes(clean(u?.unitId)));
   if (!units.length) return "";
@@ -117,6 +128,9 @@ function normalizeProviderSuccess(item = {}, state = {}) {
     retries: Number(item?.retries || 0),
     tokenDiagnostics: item?.tokenDiagnostics && typeof item.tokenDiagnostics === "object"
       ? item.tokenDiagnostics
+      : null,
+    providerDiagnostics: item?.providerDiagnostics && typeof item.providerDiagnostics === "object"
+      ? item.providerDiagnostics
       : null,
     reasonCodes: ensureArray(item?.reasonCodes),
     success: true,
@@ -225,6 +239,12 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       response: result.text,
       retries: result.retries,
       tokenDiagnostics: result.tokenDiagnostics,
+      providerDiagnostics: pruneEmptyObject({
+        openaiDeepResearch: result?.meta?.openaiDeepResearch,
+        geminiDeepResearch: result?.meta?.geminiDeepResearch,
+        deepResearchParity: result?.meta?.deepResearchParity,
+        rawResponseKey: result?.meta?.rawResponseKey,
+      }),
       reasonCodes: result.reasonCodes,
       success: true,
     };
@@ -292,6 +312,23 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     aggregatedTokens.breakdown = tokenBreakdown;
   }
   const totalRetries = successes.reduce((sum, item) => sum + Number(item?.retries || 0), 0);
+  const providerDiagnostics = {};
+  successes.forEach((item) => {
+    if (item?.providerDiagnostics && typeof item.providerDiagnostics === "object") {
+      providerDiagnostics[item.providerId] = item.providerDiagnostics;
+    }
+  });
+  const openaiDiagnostics = providerDiagnostics.chatgpt?.openaiDeepResearch
+    || providerDiagnostics.openai?.openaiDeepResearch
+    || null;
+  const geminiDiagnostics = providerDiagnostics.gemini?.geminiDeepResearch || null;
+  const geminiParity = providerDiagnostics.gemini?.deepResearchParity || null;
+  const deepResearchParity = pruneEmptyObject({
+    openaiBackgroundUsed: !!openaiDiagnostics?.requestBackground,
+    openaiFinalStatus: openaiDiagnostics?.finalStatus,
+    geminiAgent: geminiDiagnostics?.agent,
+    geminiCapabilities: geminiParity?.geminiCapabilities || geminiDiagnostics?.capabilitiesEnabled,
+  });
 
   return {
     stageStatus: "ok",
@@ -306,6 +343,9 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       evidence: {
         providerContributions,
       },
+      analysisMeta: {
+        deepResearchParity,
+      },
     },
     diagnostics: {
       providersRequested: providers,
@@ -314,6 +354,8 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       retries: totalRetries,
       tokenDiagnostics: aggregatedTokens,
       providerTokenBreakdown: tokenBreakdown,
+      providerDiagnostics,
+      deepResearchParity,
     },
     io: {
       prompt,

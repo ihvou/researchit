@@ -29,7 +29,7 @@ const SHARED_DEEP_ASSIST = {
   defaults: {
     providers: ["chatgpt", "claude", "gemini"],
     minProviders: 2,
-    maxWaitMs: 300000,
+    maxWaitMs: 60 * 60 * 1000,
     maxRetries: 1,
   },
   providers: {
@@ -52,8 +52,8 @@ const SHARED_DEEP_ASSIST = {
     gemini: {
       analyst: {
         provider: "gemini",
-        model: "deep-research-pro-preview-12-2025",
-        webSearchModel: "deep-research-pro-preview-12-2025",
+        model: "deep-research-max-preview-04-2026",
+        webSearchModel: "deep-research-max-preview-04-2026",
       },
     },
   },

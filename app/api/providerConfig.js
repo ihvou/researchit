@@ -37,7 +37,7 @@ function detectModelFamily(model) {
   const raw = pickNonEmptyString(model).toLowerCase();
   if (!raw) return "";
   if (raw.includes("claude")) return "anthropic";
-  if (raw.includes("deep-research-pro-preview")) return "gemini";
+  if (raw.includes("deep-research-pro-preview") || raw.includes("deep-research-max-preview") || /^deep-research.*preview/.test(raw)) return "gemini";
   if (raw.includes("gemini") || raw.startsWith("models/")) return "gemini";
   if (raw.includes("gpt") || /^o[1-9]/.test(raw) || raw.includes("chatgpt")) return "openai";
   return "";

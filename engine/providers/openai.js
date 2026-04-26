@@ -7,6 +7,19 @@ function toFinite(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+const OPENAI_DEEP_RESEARCH_POLL_MS = Math.max(
+  1000,
+  Number(process.env.RESEARCHIT_OPENAI_DEEP_RESEARCH_POLL_MS || 8000) || 8000
+);
+const OPENAI_DEEP_RESEARCH_MAX_WAIT_MS = Math.max(
+  OPENAI_DEEP_RESEARCH_POLL_MS,
+  Number(process.env.RESEARCHIT_OPENAI_DEEP_RESEARCH_MAX_WAIT_MS || (20 * 60 * 1000)) || (20 * 60 * 1000)
+);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
 function normalizeUsage(raw = {}) {
   if (!raw || typeof raw !== "object") return null;
   const inputTokens = toFinite(
@@ -69,6 +82,7 @@ async function ensureOkResponse(response, fallbackMessage = "OpenAI request fail
   ).trim() || fallbackMessage;
   const err = new Error(message);
   err.status = response.status;
+  err.payload = data;
   throw err;
 }
 
@@ -219,6 +233,199 @@ function sourcesFromUrls(urls = []) {
     .filter(Boolean);
 }
 
+function parseSseFrame(frame = "") {
+  const out = { event: "", data: "" };
+  const dataLines = [];
+  String(frame || "").split("\n").forEach((line) => {
+    if (!line || line.startsWith(":")) return;
+    if (line.startsWith("event:")) {
+      out.event = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+  out.data = dataLines.join("\n").trim();
+  return out;
+}
+
+function openAIStreamError(payload = {}) {
+  const errorPayload = payload?.error && typeof payload.error === "object" ? payload.error : payload;
+  const message = String(errorPayload?.message || payload?.message || "OpenAI stream error").trim();
+  const err = new Error(message);
+  err.status = Number(errorPayload?.status || payload?.status || 0) || 502;
+  err.payload = payload;
+  err.providerEventType = String(errorPayload?.type || payload?.type || "stream_error").trim();
+  err.streamEvent = "error";
+  return err;
+}
+
+export async function readOpenAIResponsesStream(response) {
+  if (!response?.body?.getReader) {
+    throw new Error("OpenAI stream response body is not readable.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResponse = null;
+  let accumulatedText = "";
+  const output = [];
+  const rawEvents = [];
+
+  const applyEvent = (eventName = "", payload = {}) => {
+    const event = String(eventName || payload?.type || "").trim();
+    if (!event) return;
+    rawEvents.push({ event, payload });
+    if (event === "error" || event === "response.error" || event === "response.failed") {
+      throw openAIStreamError(payload);
+    }
+    if (event === "response.output_text.delta" && typeof payload?.delta === "string") {
+      accumulatedText += payload.delta;
+      return;
+    }
+    if (event === "response.output_item.added" && payload?.item && typeof payload.item === "object") {
+      output.push(payload.item);
+      return;
+    }
+    if (event === "response.completed") {
+      finalResponse = payload?.response && typeof payload.response === "object" ? payload.response : payload;
+      return;
+    }
+    if (payload?.response && typeof payload.response === "object") {
+      finalResponse = payload.response;
+    }
+  };
+
+  const flushFrame = (frame) => {
+    const parsed = parseSseFrame(frame);
+    if (!parsed.data || parsed.data === "[DONE]") return;
+    let payload = {};
+    try {
+      payload = JSON.parse(parsed.data);
+    } catch (err) {
+      const parseErr = new Error(`OpenAI stream emitted invalid JSON: ${err?.message || "parse failed"}`);
+      parseErr.status = 502;
+      parseErr.payload = { event: parsed.event, data: parsed.data };
+      throw parseErr;
+    }
+    applyEvent(parsed.event, payload);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      flushFrame(frame);
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+  const tail = `${buffer}${decoder.decode()}`.trim();
+  if (tail) flushFrame(tail);
+
+  if (finalResponse) return finalResponse;
+  if (accumulatedText) {
+    return {
+      status: "completed",
+      output_text: accumulatedText,
+      output,
+      stream_events: rawEvents,
+    };
+  }
+  return {
+    status: "completed",
+    output,
+    stream_events: rawEvents,
+  };
+}
+
+function buildResponsesWebSearchTools(toolType, { deepResearch = false } = {}) {
+  const tools = [{ type: toolType }];
+  // STREAM-02 is transport-only: keep Deep Research grounded by web search, but
+  // leave code_interpreter/clarification parity to STREAM-03-A.
+  if (deepResearch) return tools;
+  return tools;
+}
+
+async function fetchOpenAIResponse({ endpoint, apiKey, method = "POST", body = null, fallbackMessage = "OpenAI request failed" }) {
+  const response = await fetch(endpoint, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: body?.stream ? "text/event-stream" : "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (body?.stream && response.ok) {
+    return readOpenAIResponsesStream(response);
+  }
+  return ensureOkResponse(response, fallbackMessage);
+}
+
+async function pollOpenAIBackgroundResponse({ apiKey, baseUrl, responseId }) {
+  const startedAt = Date.now();
+  let pollCount = 0;
+  let latest = null;
+  const terminal = new Set(["completed", "failed", "cancelled", "canceled", "expired", "incomplete"]);
+
+  while (Date.now() - startedAt < OPENAI_DEEP_RESEARCH_MAX_WAIT_MS) {
+    await sleep(OPENAI_DEEP_RESEARCH_POLL_MS);
+    pollCount += 1;
+    latest = await fetchOpenAIResponse({
+      endpoint: `${baseUrl}/v1/responses/${encodeURIComponent(responseId)}`,
+      apiKey,
+      method: "GET",
+      fallbackMessage: "OpenAI background response poll failed",
+    });
+    const status = String(latest?.status || "").trim().toLowerCase();
+    if (terminal.has(status)) {
+      return {
+        response: latest,
+        diagnostics: {
+          pollCount,
+          finalStatus: status,
+          totalWaitMs: Date.now() - startedAt,
+        },
+      };
+    }
+  }
+
+  const err = new Error("OpenAI Deep Research polling timed out.");
+  err.status = 504;
+  err.reasonCode = "openai_deep_research_poll_timeout";
+  err.payload = latest;
+  err.nonFallbackFatal = true;
+  err.diagnostics = {
+    pollCount,
+    finalStatus: String(latest?.status || "timeout").trim().toLowerCase(),
+    totalWaitMs: Date.now() - startedAt,
+  };
+  throw err;
+}
+
+function openAIBackgroundTerminalError(data = {}, diagnostics = {}) {
+  const status = String(data?.status || diagnostics?.finalStatus || "unknown").trim().toLowerCase();
+  const message = String(
+    data?.error?.message
+    || data?.incomplete_details?.reason
+    || `OpenAI Deep Research ended with terminal status: ${status || "unknown"}`
+  ).trim();
+  const err = new Error(message);
+  err.status = 502;
+  err.reasonCode = `openai_deep_research_${status || "terminal"}`
+    .replace(/[^a-z0-9_]+/gi, "_")
+    .toLowerCase();
+  err.payload = data;
+  err.nonFallbackFatal = true;
+  err.diagnostics = diagnostics;
+  return err;
+}
+
 async function callResponsesTextOnly({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl, extraMeta = {} }) {
   const response = await fetch(`${baseUrl}/v1/responses`, {
     method: "POST",
@@ -302,24 +509,59 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
   let lastErr;
 
   for (const toolType of toolTypes) {
-    const response = await fetch(`${baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        max_output_tokens: maxTokens,
-        input: buildResponsesInput(messages, systemPrompt),
-        tools: [{ type: toolType }],
-      }),
-    });
+    const requestBody = {
+      model,
+      max_output_tokens: maxTokens,
+      input: buildResponsesInput(messages, systemPrompt),
+      tools: buildResponsesWebSearchTools(toolType, { deepResearch }),
+      ...(deepResearch ? { background: true, store: true } : { stream: true }),
+    };
 
     let data;
+    let openaiDeepResearchDiagnostics = null;
     try {
-      data = await ensureOkResponse(response, "OpenAI web-search responses request failed");
+      data = await fetchOpenAIResponse({
+        endpoint: `${baseUrl}/v1/responses`,
+        apiKey,
+        body: requestBody,
+        fallbackMessage: "OpenAI web-search responses request failed",
+      });
+      if (deepResearch) {
+        let final = data;
+        let pollDiagnostics = {
+          pollCount: 0,
+          finalStatus: String(data?.status || "").trim().toLowerCase(),
+          totalWaitMs: 0,
+        };
+        const status = String(data?.status || "").trim().toLowerCase();
+        if (["queued", "in_progress"].includes(status)) {
+          if (!data?.id) {
+            const err = new Error("OpenAI background response did not return an id.");
+            err.status = 502;
+            err.payload = data;
+            throw err;
+          }
+          const polled = await pollOpenAIBackgroundResponse({
+            apiKey,
+            baseUrl,
+            responseId: data.id,
+          });
+          final = polled.response;
+          pollDiagnostics = polled.diagnostics;
+        }
+        data = final;
+        openaiDeepResearchDiagnostics = {
+          ...pollDiagnostics,
+          requestBackground: true,
+          requestStore: true,
+          toolType,
+        };
+        if (["failed", "cancelled", "canceled", "expired", "incomplete"].includes(String(data?.status || "").trim().toLowerCase())) {
+          throw openAIBackgroundTerminalError(data, openaiDeepResearchDiagnostics);
+        }
+      }
     } catch (err) {
+      if (err?.nonFallbackFatal) throw err;
       lastErr = err;
       continue;
     }
@@ -346,6 +588,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
         finishReason: normalizeFinishReason(data?.incomplete_details?.reason || data?.status),
         outputTokens: Number(data?.usage?.output_tokens || 0),
         outputTokensCap: Math.max(256, Number(maxTokens) || 5000),
+        ...(openaiDeepResearchDiagnostics ? { openaiDeepResearch: openaiDeepResearchDiagnostics } : {}),
       },
     };
   }

@@ -627,7 +627,7 @@ export default function App({
         ? deepAssistDefaults.providers
         : ["chatgpt", "claude", "gemini"],
       minProviders: Number(deepAssistDefaults?.minProviders) || 2,
-      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || 300000,
+      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || (60 * 60 * 1000),
       maxRetries: Number(deepAssistDefaults?.maxRetries) || 1,
     };
     const selectedDims = selectedMode === "scorecard"
@@ -762,7 +762,7 @@ export default function App({
         ? deepAssistDefaults.providers
         : ["chatgpt", "claude", "gemini"],
       minProviders: Number(deepAssistDefaults?.minProviders) || 2,
-      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || 300000,
+      maxWaitMs: Number(deepAssistDefaults?.maxWaitMs) || (60 * 60 * 1000),
       maxRetries: Number(deepAssistDefaults?.maxRetries) || 1,
     };
     const selectedDims = selectedMode === "scorecard"

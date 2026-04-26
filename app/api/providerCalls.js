@@ -2,14 +2,26 @@ import { callOpenAI } from "@researchit/engine";
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-const GEMINI_DEEP_RESEARCH_AGENT = "deep-research-pro-preview-12-2025";
-const GEMINI_DEEP_RESEARCH_POLL_MS = 8000;
-const GEMINI_DEEP_RESEARCH_MAX_WAIT_MS = 20 * 60 * 1000;
+const GEMINI_DEEP_RESEARCH_AGENT = cleanEnv("RESEARCHIT_GEMINI_DEEP_RESEARCH_AGENT")
+  || cleanEnv("GEMINI_DEEP_RESEARCH_AGENT")
+  || "deep-research-max-preview-04-2026";
+const GEMINI_DEEP_RESEARCH_POLL_MS = Math.max(
+  1000,
+  Number(cleanEnv("RESEARCHIT_GEMINI_DEEP_RESEARCH_POLL_MS") || cleanEnv("GEMINI_DEEP_RESEARCH_POLL_MS") || 10000) || 10000
+);
+const GEMINI_DEEP_RESEARCH_MAX_WAIT_MS = Math.max(
+  GEMINI_DEEP_RESEARCH_POLL_MS,
+  Number(cleanEnv("RESEARCHIT_GEMINI_DEEP_RESEARCH_MAX_WAIT_MS") || cleanEnv("GEMINI_DEEP_RESEARCH_MAX_WAIT_MS") || (60 * 60 * 1000)) || (60 * 60 * 1000)
+);
 const GEMINI_EMPTY_SUCCESS_REASON_CODE = "gemini_empty_success_response";
 const ANTHROPIC_TIMEOUT_MS_DEFAULT = 120000;
 const ANTHROPIC_TIMEOUT_MS_CRITIC = 240000;
 const ANTHROPIC_TIMEOUT_MS_DEEP_RESEARCH = 20 * 60 * 1000;
 const ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 60000;
+
+function cleanEnv(name) {
+  return String(process.env?.[name] || "").trim();
+}
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -994,21 +1006,53 @@ async function callGeminiDeepResearch({
     : GEMINI_API_BASE_URL;
   const createEndpoint = `${root}/interactions`;
   const prompt = buildGeminiDeepResearchPrompt(messages, systemPrompt);
+  const agentConfig = {
+    type: "deep-research",
+    thinking_summaries: "auto",
+    visualization: "auto",
+    // Keep execution autonomous. Per Gemini docs, true returns a plan for human
+    // approval instead of the final report, so the pipeline explicitly opts out.
+    collaborative_planning: false,
+  };
   const createBody = {
     agent: GEMINI_DEEP_RESEARCH_AGENT,
     input: prompt,
     background: true,
     store: true,
+    agent_config: agentConfig,
   };
-  const createResponse = await fetch(createEndpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-goog-api-key": apiKey,
-    },
-    body: JSON.stringify(createBody),
-  });
-  const createData = await toJsonBody(createResponse, "Gemini Deep Research create interaction failed");
+  const createInteraction = async (body) => {
+    const response = await fetch(createEndpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+    return toJsonBody(response, "Gemini Deep Research create interaction failed");
+  };
+  let createData;
+  let agentConfigFallbackUsed = false;
+  try {
+    createData = await createInteraction(createBody);
+  } catch (err) {
+    const message = cleanText(err?.message).toLowerCase();
+    const maybeAgentConfigMismatch = Number(err?.status || 0) === 400
+      && (message.includes("agent_config") || message.includes("collaborative_planning") || message.includes("visualization") || message.includes("thinking_summaries"));
+    if (!maybeAgentConfigMismatch) throw err;
+    agentConfigFallbackUsed = true;
+    createData = await createInteraction({
+      agent: GEMINI_DEEP_RESEARCH_AGENT,
+      input: prompt,
+      background: true,
+      store: true,
+      agent_config: {
+        type: "deep-research",
+        thinking_summaries: "auto",
+      },
+    });
+  }
   const interactionId = cleanText(createData?.name || createData?.id || createData?.interaction?.name);
   if (!interactionId) {
     const err = new Error("Gemini Deep Research did not return an interaction ID.");
@@ -1023,6 +1067,8 @@ async function callGeminiDeepResearch({
   const pollEndpoint = `${root}/${pollPath}`;
   const deadlineAt = Date.now() + GEMINI_DEEP_RESEARCH_MAX_WAIT_MS;
   let latest = createData;
+  let pollCount = 0;
+  const startedAt = Date.now();
   while (Date.now() < deadlineAt) {
     const state = cleanText(latest?.state || latest?.status || latest?.interaction?.state).toLowerCase();
     if (["succeeded", "complete", "completed", "done"].includes(state)) break;
@@ -1033,6 +1079,7 @@ async function callGeminiDeepResearch({
       throw err;
     }
     await sleep(GEMINI_DEEP_RESEARCH_POLL_MS);
+    pollCount += 1;
     const pollResponse = await fetch(pollEndpoint, {
       method: "GET",
       headers: {
@@ -1064,6 +1111,20 @@ async function callGeminiDeepResearch({
       outputTokens: Number(usage?.outputTokens || 0),
       outputTokensCap,
       usage,
+      geminiDeepResearch: {
+        agent: GEMINI_DEEP_RESEARCH_AGENT,
+        pollIntervalMs: GEMINI_DEEP_RESEARCH_POLL_MS,
+        maxWaitMs: GEMINI_DEEP_RESEARCH_MAX_WAIT_MS,
+        pollCount,
+        finalStatus: finalState,
+        totalWaitMs: Date.now() - startedAt,
+        capabilitiesEnabled: {
+          thinking_summaries: "auto",
+          visualization: agentConfigFallbackUsed ? undefined : "auto",
+          collaborative_planning: agentConfigFallbackUsed ? undefined : false,
+        },
+        agentConfigFallbackUsed,
+      },
     };
     throw err;
   }
@@ -1101,8 +1162,32 @@ async function callGeminiDeepResearch({
       groundedSourcesResolved: grounded.diagnostics,
       noSearchPerformed: webSearchCalls === 0,
       callFailedGrounding: webSearchCalls > 0 && grounded.sources.length === 0,
-      reasonCodes: [],
+      reasonCodes: [
+        ...(agentConfigFallbackUsed ? ["gemini_deep_research_agent_config_fallback"] : []),
+      ],
       usage,
+      geminiDeepResearch: {
+        agent: GEMINI_DEEP_RESEARCH_AGENT,
+        pollIntervalMs: GEMINI_DEEP_RESEARCH_POLL_MS,
+        maxWaitMs: GEMINI_DEEP_RESEARCH_MAX_WAIT_MS,
+        pollCount,
+        finalStatus: finalState,
+        totalWaitMs: Date.now() - startedAt,
+        capabilitiesEnabled: {
+          thinking_summaries: "auto",
+          visualization: agentConfigFallbackUsed ? undefined : "auto",
+          collaborative_planning: agentConfigFallbackUsed ? undefined : false,
+        },
+        agentConfigFallbackUsed,
+      },
+      deepResearchParity: {
+        geminiAgent: GEMINI_DEEP_RESEARCH_AGENT,
+        geminiCapabilities: {
+          thinking_summaries: "auto",
+          visualization: agentConfigFallbackUsed ? undefined : "auto",
+          collaborative_planning: agentConfigFallbackUsed ? undefined : false,
+        },
+      },
     },
   };
 }

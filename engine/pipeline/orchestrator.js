@@ -104,7 +104,7 @@ const STAGE_BUDGETS = {
   [STAGE_02_ID]: { timeoutMs: 90000, retryMax: 1, tokenBudget: 3000 },
   [STAGE_03A_ID]: { timeoutMs: 180000, retryMax: 2, tokenBudget: 24000, chunkConcurrency: 4 },
   [STAGE_03B_ID]: { timeoutMs: 150000, retryMax: 2, tokenBudget: 28000, chunkConcurrency: 3 },
-  [STAGE_03C_ID]: { timeoutMs: 20 * 60 * 1000, retryMax: 0, tokenBudget: 12000 },
+  [STAGE_03C_ID]: { timeoutMs: 60 * 60 * 1000, retryMax: 0, tokenBudget: 12000 },
   [STAGE_04_ID]: { timeoutMs: 45000, retryMax: 1, tokenBudget: 6000 },
   [STAGE_05_ID]: { timeoutMs: 60000, retryMax: 1, tokenBudget: 8000 },
   [STAGE_06_ID]: { timeoutMs: 60000, retryMax: 0, tokenBudget: 0, sourceTimeoutMs: 12000, resolveTimeoutMs: 9000 },
