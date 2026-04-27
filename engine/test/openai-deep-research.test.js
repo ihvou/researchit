@@ -68,12 +68,16 @@ test("OpenAI Deep Research uses background mode and polls to completion", async 
     assert.equal(calls[0].url, "https://mock.openai.test/v1/responses");
     assert.equal(calls[0].body.background, true);
     assert.equal(calls[0].body.store, true);
-    assert.deepEqual(calls[0].body.tools, [{ type: "web_search" }]);
+    assert.deepEqual(calls[0].body.tools, [
+      { type: "web_search_preview" },
+      { type: "code_interpreter", container: { type: "auto" } },
+    ]);
     assert.equal(calls[1].url, "https://mock.openai.test/v1/responses/resp_123");
     assert.equal(result.text, "{\"ok\":true}");
     assert.equal(result.meta.openaiDeepResearch.requestBackground, true);
     assert.equal(result.meta.openaiDeepResearch.finalStatus, "completed");
     assert.equal(result.meta.openaiDeepResearch.pollCount, 1);
+    assert.deepEqual(result.meta.openaiDeepResearch.toolsEnabled, ["web_search_preview", "code_interpreter"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

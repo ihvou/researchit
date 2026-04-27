@@ -38,6 +38,13 @@ const MODEL_PRICING_USD_PER_1M = [
   },
   {
     provider: "openai",
+    pattern: /gpt-4\.1/i,
+    input: 2.0,
+    output: 8.0,
+    key: "openai:gpt-4.1",
+  },
+  {
+    provider: "openai",
     pattern: /gpt-5(?:\.4)?/i,
     input: 3.0,
     output: 12.0,

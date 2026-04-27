@@ -48,7 +48,7 @@ Expected default routing:
 - Critic stages: Anthropic
 
 Deep Research ×3 carve-out:
-- Stage `03c` requires all configured Deep Research providers (OpenAI o3-deep-research + Anthropic claude-sonnet-4-6 web-research lane + Gemini deep-research-max-preview-04-2026) and fails preflight if any required lane is missing.
+- Stage `03c` requires all configured Deep Research providers (OpenAI o3-deep-research + autonomous clarification/rewrite prep, Anthropic claude-sonnet-4-6 web-research lane, and Gemini deep-research-max-preview-04-2026) and fails preflight if any required lane is missing.
 
 ## 3. Canonical Stage Sequence
 

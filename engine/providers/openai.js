@@ -345,9 +345,9 @@ export async function readOpenAIResponsesStream(response) {
 
 function buildResponsesWebSearchTools(toolType, { deepResearch = false } = {}) {
   const tools = [{ type: toolType }];
-  // STREAM-02 is transport-only: keep Deep Research grounded by web search, but
-  // leave code_interpreter/clarification parity to STREAM-03-A.
-  if (deepResearch) return tools;
+  if (deepResearch) {
+    tools.push({ type: "code_interpreter", container: { type: "auto" } });
+  }
   return tools;
 }
 
@@ -500,20 +500,21 @@ async function callChatCompletions({ apiKey, model, messages, systemPrompt, maxT
 }
 
 async function callResponsesWithWebSearch({ apiKey, model, messages, systemPrompt, maxTokens, baseUrl, deepResearch = false }) {
-  // Use documented web search tool first. Keep preview as compatibility fallback.
-  // Deep research models (o3-deep-research / o4-mini-deep-research) still require
-  // at least one data source tool, and web search is the default source here.
+  // Deep research parity prefers ChatGPT-style web_search_preview plus
+  // code_interpreter, while retaining web_search as an explicit compatibility
+  // fallback with a diagnostic reason code.
   const toolTypes = deepResearch
-    ? ["web_search", "web_search_preview"]
+    ? ["web_search_preview", "web_search"]
     : ["web_search", "web_search_preview"];
   let lastErr;
 
-  for (const toolType of toolTypes) {
+  for (const [toolIndex, toolType] of toolTypes.entries()) {
+    const tools = buildResponsesWebSearchTools(toolType, { deepResearch });
     const requestBody = {
       model,
       max_output_tokens: maxTokens,
       input: buildResponsesInput(messages, systemPrompt),
-      tools: buildResponsesWebSearchTools(toolType, { deepResearch }),
+      tools,
       ...(deepResearch ? { background: true, store: true } : { stream: true }),
     };
 
@@ -555,6 +556,8 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
           requestBackground: true,
           requestStore: true,
           toolType,
+          toolsEnabled: tools.map((tool) => tool.type),
+          toolFallbackUsed: toolIndex > 0,
         };
         if (["failed", "cancelled", "canceled", "expired", "incomplete"].includes(String(data?.status || "").trim().toLowerCase())) {
           throw openAIBackgroundTerminalError(data, openaiDeepResearchDiagnostics);
@@ -588,6 +591,7 @@ async function callResponsesWithWebSearch({ apiKey, model, messages, systemPromp
         finishReason: normalizeFinishReason(data?.incomplete_details?.reason || data?.status),
         outputTokens: Number(data?.usage?.output_tokens || 0),
         outputTokensCap: Math.max(256, Number(maxTokens) || 5000),
+        reasonCodes: deepResearch && toolIndex > 0 ? ["openai_deep_research_tool_fallback"] : [],
         ...(openaiDeepResearchDiagnostics ? { openaiDeepResearch: openaiDeepResearchDiagnostics } : {}),
       },
     };

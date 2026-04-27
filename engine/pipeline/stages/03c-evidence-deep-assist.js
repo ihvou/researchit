@@ -8,6 +8,10 @@ import {
   normalizeSources,
 } from "./common.js";
 import { normalizeReasonCodes } from "../contracts/reason-codes.js";
+import {
+  isOpenAIDeepResearchProvider,
+  prepareOpenAIDeepResearchPrompt,
+} from "./03c-prep-openai.js";
 
 export const STAGE_ID = "stage_03c_evidence_deep_assist";
 export const STAGE_TITLE = "Evidence Deep Research x3";
@@ -205,24 +209,34 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
 
   const tasks = providersToRun.map(async (providerId) => {
     const override = providerOverride(runtime?.config || state?.config || {}, providerId);
+    const routeOverride = {
+      provider: clean(override?.provider) || providerToLabel(providerId),
+      model: clean(override?.model),
+      webSearchModel: clean(override?.webSearchModel),
+    };
+    const openaiPrep = isOpenAIDeepResearchProvider(providerId, routeOverride)
+      ? await prepareOpenAIDeepResearchPrompt({
+        state,
+        runtime,
+        providerId,
+        basePrompt: prompt,
+        routeOverride,
+      })
+      : null;
     const result = await callActorJson({
       state,
       runtime,
       stageId: STAGE_ID,
       actor: "analyst",
       systemPrompt: runtime?.prompts?.analystDeepResearch || runtime?.prompts?.analyst || "You are a senior research analyst conducting independent deep research. Use your web search capability to find comprehensive, current, authoritative evidence.",
-      userPrompt: prompt,
+      userPrompt: openaiPrep?.prompt || prompt,
       // Deep research responses are comprehensive — 32k gives adequate room.
       tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 32000,
       timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || (20 * 60 * 1000),
       maxRetries: runtime?.budgets?.[STAGE_ID]?.retryMax || 0,
       liveSearch: true,
       deepResearch: true,
-      routeOverride: {
-        provider: clean(override?.provider) || providerToLabel(providerId),
-        model: clean(override?.model),
-        webSearchModel: clean(override?.webSearchModel),
-      },
+      routeOverride,
       schemaHint: state?.outputType === "matrix"
         ? '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}'
         : '{"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","confidenceReason":"","sources":[],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
@@ -231,6 +245,26 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
         promptVersion: "v1",
       },
     });
+    const tokenDiagnosticsParts = [
+      ...(openaiPrep?.tokenDiagnosticsBreakdown || []),
+      result.tokenDiagnostics
+        ? {
+          phase: "openai_deep_research_final",
+          ...result.tokenDiagnostics,
+        }
+        : null,
+    ].filter(Boolean);
+    const tokenDiagnostics = combineTokenDiagnostics(tokenDiagnosticsParts) || result.tokenDiagnostics;
+    if (tokenDiagnostics && tokenDiagnosticsParts.length > 1) {
+      tokenDiagnostics.breakdown = tokenDiagnosticsParts;
+    }
+    const openaiDeepResearch = result?.meta?.openaiDeepResearch;
+    const openaiDeepResearchPrep = openaiPrep?.diagnostics
+      ? {
+        ...openaiPrep.diagnostics,
+        toolsEnabled: openaiDeepResearch?.toolsEnabled || openaiPrep.diagnostics.toolsEnabled,
+      }
+      : null;
 
     return {
       providerId,
@@ -238,14 +272,18 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
       draft: normalizeDraftFromParsed(result?.parsed, state),
       response: result.text,
       retries: result.retries,
-      tokenDiagnostics: result.tokenDiagnostics,
+      tokenDiagnostics,
       providerDiagnostics: pruneEmptyObject({
-        openaiDeepResearch: result?.meta?.openaiDeepResearch,
+        openaiDeepResearch,
+        openaiDeepResearchPrep,
         geminiDeepResearch: result?.meta?.geminiDeepResearch,
         deepResearchParity: result?.meta?.deepResearchParity,
         rawResponseKey: result?.meta?.rawResponseKey,
       }),
-      reasonCodes: result.reasonCodes,
+      reasonCodes: normalizeReasonCodes([
+        ...(openaiPrep?.reasonCodes || []),
+        ...(result.reasonCodes || []),
+      ]),
       success: true,
     };
   });
@@ -301,12 +339,25 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
     success: successes.some((item) => clean(item?.providerId) === clean(providerId)),
     durationMs: 0,
   }));
-  const tokenBreakdown = successes.map((item) => ({
-    provider: clean(item?.route?.provider) || providerToLabel(item?.providerId),
-    model: clean(item?.route?.model),
-    retries: Number(item?.retries || 0),
-    ...item.tokenDiagnostics,
-  }));
+  const tokenBreakdown = successes.flatMap((item) => {
+    const routeProvider = clean(item?.route?.provider) || providerToLabel(item?.providerId);
+    const routeModel = clean(item?.route?.model);
+    const parts = ensureArray(item?.tokenDiagnostics?.breakdown);
+    if (parts.length) {
+      return parts.map((part) => ({
+        provider: clean(part?.provider) || routeProvider,
+        model: clean(part?.model) || routeModel,
+        retries: Number(item?.retries || 0),
+        ...part,
+      }));
+    }
+    return [{
+      provider: routeProvider,
+      model: routeModel,
+      retries: Number(item?.retries || 0),
+      ...item.tokenDiagnostics,
+    }];
+  });
   const aggregatedTokens = combineTokenDiagnostics(tokenBreakdown);
   if (aggregatedTokens) {
     aggregatedTokens.breakdown = tokenBreakdown;
@@ -321,18 +372,24 @@ Return JSON {"dimensions":[{"unitId":"","brief":"","full":"","confidence":"","co
   const openaiDiagnostics = providerDiagnostics.chatgpt?.openaiDeepResearch
     || providerDiagnostics.openai?.openaiDeepResearch
     || null;
+  const openaiPrepDiagnostics = providerDiagnostics.chatgpt?.openaiDeepResearchPrep
+    || providerDiagnostics.openai?.openaiDeepResearchPrep
+    || null;
   const geminiDiagnostics = providerDiagnostics.gemini?.geminiDeepResearch || null;
   const geminiParity = providerDiagnostics.gemini?.deepResearchParity || null;
   const deepResearchParity = pruneEmptyObject({
+    openaiPrepUsed: !!openaiPrepDiagnostics?.prepUsed,
     openaiBackgroundUsed: !!openaiDiagnostics?.requestBackground,
     openaiFinalStatus: openaiDiagnostics?.finalStatus,
+    openaiToolsEnabled: openaiDiagnostics?.toolsEnabled || openaiPrepDiagnostics?.toolsEnabled,
     geminiAgent: geminiDiagnostics?.agent,
     geminiCapabilities: geminiParity?.geminiCapabilities || geminiDiagnostics?.capabilitiesEnabled,
   });
+  const providerReasonCodes = normalizeReasonCodes(successes.flatMap((item) => item?.reasonCodes || []));
 
   return {
     stageStatus: "ok",
-    reasonCodes: [],
+    reasonCodes: providerReasonCodes,
     statePatch: {
       ui: { phase: STAGE_ID },
       evidenceDrafts: {

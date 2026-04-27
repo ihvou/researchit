@@ -413,6 +413,7 @@ test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias
       models: baseModels(),
       deepAssist: {
         defaults: { providers: ["chatgpt", "claude", "gemini"] },
+        openaiPrep: { enabled: false },
         providers: {
           chatgpt: { analyst: { provider: "openai", model: "gpt-5.4" } },
           claude: { analyst: { provider: "anthropic", model: "claude-sonnet-4-6" } },
