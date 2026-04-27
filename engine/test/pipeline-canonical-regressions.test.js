@@ -308,6 +308,11 @@ test("stage 03b marks grounded sources from provider metadata", async () => {
 });
 
 test("stage 03b matrix retrieve falls back to OpenAI only for Gemini empty-success responses", async () => {
+  // This test exercises the SPLIT mode (retrieve+read) fallback.
+  // Single-call mode is default; opt into split mode for this scenario.
+  const prevSingleCall = process.env.RESEARCHIT_STAGE_03B_SINGLE_CALL;
+  process.env.RESEARCHIT_STAGE_03B_SINGLE_CALL = "0";
+  try {
   const attrs = [{ id: "a1", label: "Attr 1" }];
   const subjects = [{ id: "s1", label: "Subject 1" }];
   const calls = [];
@@ -396,6 +401,10 @@ test("stage 03b matrix retrieve falls back to OpenAI only for Gemini empty-succe
   assert.equal(Number(diagnostics?.retrieveFallbackUsedCount || 0), 1);
   assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve") && call.provider === "gemini"), true);
   assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve-openai-fallback") && call.provider === "openai"), true);
+  } finally {
+    if (prevSingleCall === undefined) delete process.env.RESEARCHIT_STAGE_03B_SINGLE_CALL;
+    else process.env.RESEARCHIT_STAGE_03B_SINGLE_CALL = prevSingleCall;
+  }
 });
 
 test("stage 03c fails run when any Deep Research x3 provider fails (legacy alias mode, non-strict included)", async () => {
@@ -587,6 +596,11 @@ test("stage 08 reserves per-attribute recovery floor before pressure fill", asyn
 });
 
 test("stage 08 matrix recovery falls back to OpenAI retrieval when Gemini returns no-search", async () => {
+  // This test exercises the SPLIT mode (retrieve+read) fallback.
+  // Single-call mode is default; opt into split mode for this scenario.
+  const prevSingleCall = process.env.RESEARCHIT_STAGE_08_SINGLE_CALL;
+  process.env.RESEARCHIT_STAGE_08_SINGLE_CALL = "0";
+  try {
   const calls = [];
   const runtime = {
     config: {
@@ -673,6 +687,10 @@ test("stage 08 matrix recovery falls back to OpenAI retrieval when Gemini return
   assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve") && call.provider === "gemini"), true);
   assert.equal(calls.some((call) => call.chunkId.endsWith("-retrieve-openai-fallback") && call.provider === "openai"), true);
   assert.equal(Number(result?.diagnostics?.unresolvedGroupCount || 0), 0);
+  } finally {
+    if (prevSingleCall === undefined) delete process.env.RESEARCHIT_STAGE_08_SINGLE_CALL;
+    else process.env.RESEARCHIT_STAGE_08_SINGLE_CALL = prevSingleCall;
+  }
 });
 
 test("stage 06 applies verification tiers and isolates infrastructure noise", async () => {

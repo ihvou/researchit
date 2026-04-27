@@ -477,6 +477,110 @@ Rules:
 Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"corpusId":"","name":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
 }
 
+// Single-call mode (Option 2 — pre-RETR-01 architecture).
+// One Gemini call per chunk with `liveSearch: true`. Model uses google_search
+// to gather evidence and emits cells + sources directly. No retrieve/read split,
+// no corpusId requirement.
+//
+// Justification (2026-04-26): Gemini's `groundingChunks` field is missing/empty
+// across multiple model versions since ~2026-04-08 (per Google AI Developers
+// Forum thread). The retrieve/read split depended on extracting groundingChunks
+// to populate `retrievedCorpus`; with the regression, retrievedCorpus is empty
+// and read sub-stage emits "no evidence" cells. Reverting to the model-agentic
+// pattern bypasses the regression by letting Gemini synthesize directly from
+// search results in a single call.
+//
+// FAB-01 source verification (HEAD checks + three-criteria fabrication tier)
+// remains the safety net against hallucinated URLs.
+//
+// Toggle via `RESEARCHIT_STAGE_03B_SINGLE_CALL`. Default ON.
+function isStage03bSingleCallMode() {
+  const raw = String(globalThis?.process?.env?.RESEARCHIT_STAGE_03B_SINGLE_CALL ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
+function buildMatrixSingleCallPrompt(state = {}, chunk = {}, subjectsById = new Map(), attributesById = new Map()) {
+  const {
+    uniqueSubjectLines,
+    uniqueAttributeLines,
+    cellLines,
+  } = buildMatrixContextBlock(chunk, subjectsById, attributesById);
+
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Stage 03b. Use google_search to gather web-cited evidence for each listed cell.
+Subjects in this chunk:
+${uniqueSubjectLines || "- none"}
+Attributes in this chunk:
+${uniqueAttributeLines || "- none"}
+Cells to cover:
+${cellLines || "- none"}
+
+Rules:
+- Cover every listed cell exactly once.
+- Use google_search aggressively — multiple targeted queries per cell when needed.
+- Cite real, verifiable sources with full https URLs. Prefer independent third-party sources; flag vendor claims as sourceType: "vendor".
+- Each source MUST include: name, url (https), short quote/snippet, sourceType.
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
+- If reliable evidence is unavailable, keep "sources" empty, set confidence: "low", and explain in missingEvidence.
+- Confidence must be exactly one of: "high", "medium", "low" (string, not number).
+- Do NOT invent URLs. Only cite sources you actually retrieved via google_search.
+
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"name":"","url":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+}
+
+function normalizeMatrixSingleCallChunk(parsed = {}, chunk = {}, groundedSources = [], confidenceStats = { coerced: 0 }) {
+  const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
+  // Build a lookup of provider-grounded URLs for the groundedByProvider flag.
+  // Even with the Gemini regression dropping groundingChunks, searchEntryPoint
+  // URLs and any URLs that DID surface get marked as provider-grounded.
+  const groundedUrlSet = new Set(
+    ensureArray(groundedSources)
+      .map((source) => normalizeUrlKey(clean(source?.url)))
+      .filter(Boolean)
+  );
+  return ensureArray(chunk?.cells).map((cell) => {
+    const patch = byKey.get(`${cell.subjectId}::${cell.attributeId}`) || {};
+    const rawSources = ensureArray(patch?.sources);
+    const sources = rawSources.map((source) => {
+      const url = clean(source?.url);
+      const urlKey = normalizeUrlKey(url);
+      const isGrounded = urlKey ? groundedUrlSet.has(urlKey) : false;
+      return {
+        name: clean(source?.name) || "Web source",
+        url,
+        quote: clean(source?.quote),
+        sourceType: clean(source?.sourceType).toLowerCase() || "independent",
+        groundedByProvider: isGrounded,
+        groundedSetAvailable: groundedUrlSet.size > 0,
+        groundingConfidence: isGrounded ? "provider" : "model-emitted",
+      };
+    }).filter((source) => source.url || source.name);
+    const fabricationAssessment = computeFabricationSignalForMergedSources(sources);
+    const sourcesWithSignal = sources.map((source) => ({
+      ...source,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason || undefined,
+    }));
+    return {
+      subjectId: cell.subjectId,
+      attributeId: cell.attributeId,
+      value: clean(patch?.value),
+      full: clean(patch?.full),
+      confidence: normalizeConfidence(patch?.confidence, confidenceStats),
+      confidenceReason: clean(patch?.confidenceReason),
+      sources: sourcesWithSignal,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason,
+      arguments: normalizeArguments(patch?.arguments || {}, `${cell.subjectId}-${cell.attributeId}-web`),
+      risks: clean(patch?.risks),
+      missingEvidence: clean(patch?.missingEvidence),
+    };
+  });
+}
+
 function buildRetrievedCorpus(groundedSources = [], chunkId = "") {
   const dedup = new Map();
   ensureArray(groundedSources).forEach((source, idx) => {
@@ -612,7 +716,6 @@ async function gatherMatrixWeb({
     initialChunks: queue,
     concurrency: chunkConcurrency,
     processChunk: async (current) => {
-      const retrievePrompt = buildMatrixRetrievePrompt(state, current, subjectsById, attributesById);
       chunkTrace.push({
         chunkId: current.chunkId,
         event: "started",
@@ -620,6 +723,119 @@ async function gatherMatrixWeb({
         depth: Number(current?.depth || 0),
         cellCount: ensureArray(current?.cells).length,
       });
+      // Single-call mode (Option 2 — Gemini groundingChunks regression workaround).
+      // Default ON via env. Skip retrieve/read split, do one call with liveSearch:true.
+      if (isStage03bSingleCallMode()) {
+        try {
+          const singleCallPrompt = buildMatrixSingleCallPrompt(state, current, subjectsById, attributesById);
+          const singleCall = await callActorJson({
+            state,
+            runtime,
+            stageId: STAGE_ID,
+            // Use STAGE_ID (not STAGE_ROUTE_READ_ID) so the route resolves to
+            // retrieval (Gemini), not analyst (OpenAI). Single call gathers
+            // evidence directly via google_search; needs the retrieval lane.
+            routeStageId: STAGE_ID,
+            actor: "analyst",
+            systemPrompt: runtime?.prompts?.analyst || "You produce web-cited matrix evidence using google_search.",
+            userPrompt: singleCallPrompt,
+            tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 28000,
+            timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 150000,
+            maxRetries: 1,
+            liveSearch: true,
+            callContext: {
+              chunkId: `${current.chunkId}-single`,
+              promptVersion: PROMPT_VERSION,
+            },
+            schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"name":"","url":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+          });
+          const groundedSources = ensureArray(singleCall?.meta?.groundedSources);
+          const confidenceStats = { coerced: 0 };
+          const normalizedChunk = normalizeMatrixSingleCallChunk(
+            singleCall?.parsed,
+            current,
+            groundedSources,
+            confidenceStats,
+          );
+          normalizedChunk.forEach((cell) => {
+            cellsByKey.set(`${cell.subjectId}::${cell.attributeId}`, cell);
+          });
+          const noSearchPerformed = singleCall?.meta?.noSearchPerformed === true
+            || Number(singleCall?.meta?.webSearchCalls || 0) === 0;
+          const chunkReasonCodes = [
+            ...ensureArray(singleCall?.reasonCodes),
+            ...(noSearchPerformed ? [REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED] : []),
+            ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+          ];
+          reasonCodes.push(...chunkReasonCodes);
+          const tokenDiagnostics = singleCall?.tokenDiagnostics
+            ? { ...singleCall.tokenDiagnostics, confidenceScaleCoerced: Number(confidenceStats.coerced || 0) }
+            : { confidenceScaleCoerced: Number(confidenceStats.coerced || 0) };
+          chunkTrace.push({
+            chunkId: current.chunkId,
+            event: "completed",
+            timestamp: nowIso(),
+            depth: Number(current?.depth || 0),
+            outputSize: normalizedChunk.length,
+            outputTokens: Number(tokenDiagnostics?.outputTokens || singleCall?.tokenDiagnostics?.outputTokens || 0),
+            finishReason: clean(tokenDiagnostics?.finishReason) || "unknown",
+          });
+          diagnostics.push({
+            chunkId: current.chunkId,
+            parentId: current.parentId || null,
+            depth: Number(current?.depth || 0),
+            cellCount: ensureArray(current?.cells).length,
+            retries: Number(singleCall?.retries || 0),
+            tokenDiagnostics,
+            singleCallMode: true,
+            modelRoute: singleCall?.route || null,
+            citations: computeGroundingCoverage(normalizedChunk),
+            groundedSourcesResolved: singleCall?.meta?.groundedSourcesResolved || null,
+            webSearchCalls: Number(singleCall?.meta?.webSearchCalls || 0),
+            noSearchPerformed,
+          });
+          return {};
+        } catch (err) {
+          chunkTrace.push({
+            chunkId: current.chunkId,
+            event: "failed",
+            timestamp: nowIso(),
+            depth: Number(current?.depth || 0),
+            error: clean(err?.message || "chunk_failure"),
+            abortReason: err?.abortReason || null,
+            finishReason: clean(err?.finishReason) || "unknown",
+          });
+          if (isLikelyRequestBug(err)) {
+            err.chunkId = clean(current?.chunkId) || null;
+            throw err;
+          }
+          reasonCodes.push(clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED));
+          const unresolvedMessage = clean(err?.message || "chunk_failure");
+          chunkTrace.push({
+            chunkId: current.chunkId,
+            event: "unresolved",
+            timestamp: nowIso(),
+            depth: Number(current?.depth || 0),
+            reasonCode: clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED),
+            reason: unresolvedMessage,
+          });
+          diagnostics.push({
+            chunkId: current.chunkId,
+            parentId: current.parentId || null,
+            depth: Number(current?.depth || 0),
+            cellCount: ensureArray(current?.cells).length,
+            error: unresolvedMessage,
+            unresolved: true,
+            singleCallMode: true,
+            unresolvedReasonCode: clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED),
+            unresolvedReason: unresolvedMessage,
+            abortReason: err?.abortReason || null,
+          });
+          return {};
+        }
+      }
+      // Split mode (RETR-01 retrieve+read, kept for when Gemini groundingChunks is restored).
+      const retrievePrompt = buildMatrixRetrievePrompt(state, current, subjectsById, attributesById);
       try {
         const retrieveCall = await callRetrieveWithGeminiEmptyFallback({
           state,

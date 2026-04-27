@@ -556,6 +556,85 @@ function itemBriefForAttribute(cells = [], attributeId = "") {
   return clean(match?.attributeBrief);
 }
 
+// Single-call mode (Option 2 — pre-RETR-01 architecture).
+// Mirrors stage 03b's single-call mode. See justification there.
+// Toggle via `RESEARCHIT_STAGE_08_SINGLE_CALL`. Default ON.
+function isStage08SingleCallMode() {
+  const raw = String(globalThis?.process?.env?.RESEARCHIT_STAGE_08_SINGLE_CALL ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
+function buildMatrixRecoverySingleCallPrompt(state = {}, group = {}) {
+  const context = buildMatrixGroupContext(group);
+  return `Objective: ${clean(state?.request?.objective)}
+Decision question: ${clean(state?.request?.decisionQuestion) || "not provided"}
+Scope context: ${clean(state?.request?.scopeContext) || "not provided"}
+Role context: ${clean(state?.request?.roleContext) || "not provided"}
+Stage 08 targeted recovery. Use google_search to find evidence that strengthens these weak matrix cells.
+Subjects in this group:
+${context.uniqueSubjectLines || "- none"}
+Attributes in this group:
+${context.uniqueAttributeLines || "- none"}
+Cells to recover:
+${context.cellLines || "- none"}
+
+Rules:
+- For each weak cell, search aggressively for additional evidence that addresses the identified weakness.
+- Cite real, verifiable sources with full https URLs. Prefer independent third-party sources.
+- Each source MUST include: name, url (https), short quote/snippet, sourceType.
+- sourceType must be one of: independent, research, news, analyst, government, registry, vendor, press_release, marketing.
+- If recovery search yields nothing useful, return the cell with empty sources and explain in missingEvidence.
+- Confidence must be exactly one of: "high", "medium", "low" (string, not number).
+- Do NOT invent URLs. Only cite sources you actually retrieved via google_search.
+
+Return JSON {"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"name":"","url":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"risks":"","missingEvidence":""}]}`;
+}
+
+function normalizeMatrixRecoverySingleCallPatch(parsed = {}, group = {}, groundedSources = [], confidenceStats = { coerced: 0 }) {
+  const byKey = new Map(ensureArray(parsed?.cells).map((item) => [`${clean(item?.subjectId)}::${clean(item?.attributeId)}`, item]));
+  const groundedUrlSet = new Set(
+    ensureArray(groundedSources)
+      .map((source) => normalizeUrlKey(clean(source?.url)))
+      .filter(Boolean)
+  );
+  return ensureArray(group?.cells).map((item) => {
+    const subjectId = clean(item?.unit?.subjectId);
+    const attributeId = clean(item?.unit?.attributeId);
+    const patch = byKey.get(`${subjectId}::${attributeId}`) || {};
+    const rawSources = ensureArray(patch?.sources);
+    const sources = rawSources.map((source) => {
+      const url = clean(source?.url);
+      const urlKey = normalizeUrlKey(url);
+      const isGrounded = urlKey ? groundedUrlSet.has(urlKey) : false;
+      return {
+        name: clean(source?.name) || "Recovery source",
+        url,
+        quote: clean(source?.quote),
+        sourceType: clean(source?.sourceType).toLowerCase() || "independent",
+        groundedByProvider: isGrounded,
+        groundedSetAvailable: groundedUrlSet.size > 0,
+        groundingConfidence: isGrounded ? "provider" : "model-emitted",
+      };
+    }).filter((source) => source.url || source.name);
+    const fabricationAssessment = fabricationAssessmentFromSources(sources);
+    const sourcesWithSignal = annotateSourcesWithGrounding(sources, fabricationAssessment);
+    return {
+      subjectId,
+      attributeId,
+      value: clean(patch?.value),
+      full: clean(patch?.full),
+      confidence: normalizeConfidence(patch?.confidence, confidenceStats),
+      confidenceReason: clean(patch?.confidenceReason),
+      sources: sourcesWithSignal,
+      fabricationSignal: fabricationAssessment.signal,
+      fabricationSignalReason: fabricationAssessment.reason,
+      arguments: normalizeArguments(patch?.arguments || {}, `${subjectId}-${attributeId}-recover`),
+      risks: clean(patch?.risks),
+      missingEvidence: clean(patch?.missingEvidence),
+    };
+  });
+}
+
 function buildMatrixRecoveryRetrievePrompt(state = {}, group = {}) {
   const context = buildMatrixGroupContext(group);
   return `Objective: ${clean(state?.request?.objective)}
@@ -768,6 +847,105 @@ export async function runStage(context = {}) {
           depth: Number(group?.depth || 0),
           cellCount: ensureArray(group?.cells).length,
         });
+        // Single-call mode (Option 2 — Gemini groundingChunks regression workaround).
+        // Default ON via env. Skip retrieve/read split, do one call with liveSearch:true.
+        if (isStage08SingleCallMode()) {
+          try {
+            const singleCallPrompt = buildMatrixRecoverySingleCallPrompt(state, group);
+            const singleCall = await callActorJson({
+              state,
+              runtime,
+              stageId: STAGE_ID,
+              // Use STAGE_ID so the route resolves to retrieval (Gemini), not analyst (OpenAI).
+              routeStageId: STAGE_ID,
+              actor: "analyst",
+              systemPrompt: runtime?.prompts?.analyst || "You recover targeted matrix evidence using google_search.",
+              userPrompt: singleCallPrompt,
+              tokenBudget: runtime?.budgets?.[STAGE_ID]?.tokenBudget || 16000,
+              timeoutMs: runtime?.budgets?.[STAGE_ID]?.timeoutMs || 90000,
+              maxRetries: 1,
+              liveSearch: true,
+              searchMaxUses: 4,
+              callContext: {
+                chunkId: `${group.chunkId}-single`,
+                promptVersion: PROMPT_VERSION,
+              },
+              schemaHint: '{"cells":[{"subjectId":"","attributeId":"","value":"","full":"","confidence":"","confidenceReason":"","sources":[{"name":"","url":"","quote":"","sourceType":""}],"arguments":{"supporting":[],"limiting":[]},"missingEvidence":""}]}',
+            });
+            const groundedSources = ensureArray(singleCall?.meta?.groundedSources);
+            const confidenceStats = { coerced: 0 };
+            const patches = normalizeMatrixRecoverySingleCallPatch(
+              singleCall?.parsed,
+              group,
+              groundedSources,
+              confidenceStats,
+            );
+            const noSearchPerformed = singleCall?.meta?.noSearchPerformed === true
+              || Number(singleCall?.meta?.webSearchCalls || 0) === 0;
+            const chunkReasonCodes = [
+              ...ensureArray(singleCall?.reasonCodes),
+              ...(noSearchPerformed ? [REASON_CODES.STAGE_03B_NO_SEARCH_PERFORMED] : []),
+              ...(confidenceStats.coerced > 0 ? [REASON_CODES.CONFIDENCE_SCALE_COERCED] : []),
+            ];
+            chunkTrace.push({
+              chunkId: group.chunkId,
+              event: "completed",
+              timestamp: nowIso(),
+              depth: Number(group?.depth || 0),
+              outputSize: patches.length,
+              outputTokens: Number(singleCall?.tokenDiagnostics?.outputTokens || 0),
+              finishReason: clean(singleCall?.tokenDiagnostics?.finishReason) || "unknown",
+            });
+            return {
+              result: {
+                chunkId: group.chunkId,
+                depth: Number(group?.depth || 0),
+                cellCount: ensureArray(group?.cells).length,
+                patches,
+                reasonCodes: chunkReasonCodes,
+                tokenDiagnostics: singleCall?.tokenDiagnostics || null,
+                singleCallMode: true,
+                modelRoute: singleCall?.route || null,
+                route: singleCall?.route || null,
+                citations: computeGroundingCoverage(patches),
+                webSearchCalls: Number(singleCall?.meta?.webSearchCalls || 0),
+                noSearchPerformed,
+                retries: Number(singleCall?.retries || 0),
+              },
+            };
+          } catch (err) {
+            chunkTrace.push({
+              chunkId: group.chunkId,
+              event: "failed",
+              timestamp: nowIso(),
+              depth: Number(group?.depth || 0),
+              error: clean(err?.message || "chunk_failure"),
+              abortReason: err?.abortReason || null,
+              finishReason: clean(err?.finishReason) || "unknown",
+            });
+            if (isLikelyRequestBug(err)) {
+              err.chunkId = clean(group?.chunkId) || null;
+              throw err;
+            }
+            return {
+              result: {
+                chunkId: group.chunkId,
+                depth: Number(group?.depth || 0),
+                cellCount: ensureArray(group?.cells).length,
+                patches: [],
+                reasonCodes: [clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED)],
+                tokenDiagnostics: null,
+                singleCallMode: true,
+                error: clean(err?.message || "chunk_failure"),
+                unresolved: true,
+                unresolvedReasonCode: clean(err?.reasonCode || REASON_CODES.RETRY_EXHAUSTED),
+                unresolvedReason: clean(err?.message || "chunk_failure"),
+                abortReason: err?.abortReason || null,
+              },
+            };
+          }
+        }
+        // Split mode (RETR-01 retrieve+read, kept for when Gemini groundingChunks is restored).
         try {
           const retrievePrompt = buildMatrixRecoveryRetrievePrompt(state, group);
           const retrieveCall = await callRetrieveWithGeminiEmptyFallback({
